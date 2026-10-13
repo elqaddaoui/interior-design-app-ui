@@ -14,7 +14,10 @@ const dialog = create<{ pending: (() => void) | null }>(() => ({ pending: null }
 let bypass = false;
 /** All app navigation goes through the same guard, including non-route actions (logout). */
 export function requestLeave(action: () => void) {
-  if (bypass || !guards.size) action();
+  if (bypass || !guards.size) {
+    if (Platform.OS === 'web') window.dispatchEvent(new Event('dwira:before-navigation'));
+    action();
+  }
   else if (!dialog.getState().pending) dialog.setState({ pending: action });
 }
 export const router = {

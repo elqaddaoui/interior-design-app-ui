@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Animated, Platform, ScrollView, View, type ScrollViewProps } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRoute, useIsFocused } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -32,9 +32,18 @@ export function RememberScroll({ stateKey = 'page', children, onScroll, onConten
     restoring.current = true;
     const frame = requestAnimationFrame(restore);
     const timer = setTimeout(() => { restore(); restoring.current = false; }, 150);
-    return () => { cancelAnimationFrame(frame); clearTimeout(timer); };
+    return () => { restoring.current = true; cancelAnimationFrame(frame); clearTimeout(timer); };
   }, [restore]));
-  return <ScrollContext.Provider value={ref}><ScrollView {...props} ref={ref} scrollEventThrottle={16}
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const capture = () => {
+      const node = ref.current?.getScrollableNode() as HTMLElement | undefined;
+      if (node && !restoring.current) positions.set(key, { x: node.scrollLeft, y: node.scrollTop });
+    };
+    window.addEventListener('dwira:before-navigation', capture);
+    return () => window.removeEventListener('dwira:before-navigation', capture);
+  }, [key]);
+  return <ScrollContext.Provider value={ref}><ScrollView {...props} testID={props.testID ?? `scroll-${key}`} ref={ref} scrollEventThrottle={16}
     contentOffset={positions.get(key)} onContentSizeChange={(w, h) => { if (restoring.current) restore(); onContentSizeChange?.(w, h); }}
     onScroll={(e) => { if (!restoring.current) positions.set(key, e.nativeEvent.contentOffset); onScroll?.(e); }}>{children}</ScrollView></ScrollContext.Provider>;
 }
