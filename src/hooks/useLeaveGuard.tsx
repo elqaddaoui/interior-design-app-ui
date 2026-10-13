@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { BackHandler, Platform, View } from 'react-native';
 import { router as expoRouter, useRouter as useExpoRouter, useIsFocused } from 'expo-router';
 import { usePreventRemove, useNavigation } from 'expo-router/react-navigation';
 import { create } from 'zustand';
@@ -56,21 +56,27 @@ export function useLeaveGuard(dirty: boolean, save: Guard['save'], discard: Guar
 /** A history checkpoint prevents browser Back from unmounting a dirty screen.
  * It is also used by sheets, so browser/mobile-web Back closes the top overlay first.
  */
-const checkpoints = new Map<symbol, () => void>();
+const checkpoints = new Map<symbol, { action: () => void; priority: number }>();
+const topCheckpoint = () => [...checkpoints.values()].sort((a, b) => a.priority - b.priority).at(-1);
+let hardwareBack: ReturnType<typeof BackHandler.addEventListener> | null = null;
 let checkpointMarker: string | null = null;
 function handleCheckpointPop(event: PopStateEvent) {
   if (!checkpoints.size || !checkpointMarker) return;
   event.stopImmediatePropagation();
   window.history.pushState({ ...window.history.state, dwiraCheckpoint: checkpointMarker }, '', window.location.href);
-  [...checkpoints.values()].at(-1)?.();
+  topCheckpoint()?.action();
 }
-export function useBackCheckpoint(active: boolean, onBack: () => void) {
+export function useBackCheckpoint(active: boolean, onBack: () => void, priority = 0) {
   const latest = useRef(onBack); latest.current = onBack;
   const focused = useIsFocused();
   useEffect(() => {
-    if (!active || !focused || Platform.OS !== 'web') return;
+    if (!active || !focused) return;
     const id = Symbol('checkpoint');
-    checkpoints.set(id, () => latest.current());
+    checkpoints.set(id, { action: () => latest.current(), priority });
+    if (Platform.OS !== 'web') {
+      if (!hardwareBack) hardwareBack = BackHandler.addEventListener('hardwareBackPress', () => { topCheckpoint()?.action(); return true; });
+      return () => { checkpoints.delete(id); if (!checkpoints.size) { hardwareBack?.remove(); hardwareBack = null; } };
+    }
     if (!checkpointMarker) {
       checkpointMarker = `checkpoint-${Date.now()}`;
       window.history.pushState({ ...window.history.state, dwiraCheckpoint: checkpointMarker }, '', window.location.href);
@@ -87,10 +93,16 @@ export function useBackCheckpoint(active: boolean, onBack: () => void) {
         window.history.back();
       }
     };
-  }, [active, focused]);
+  }, [active, focused, priority]);
 }
 
 export function UnsavedChangesHost() {
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const capture = () => window.dispatchEvent(new Event('dwira:before-navigation'));
+    window.addEventListener('popstate', capture, true);
+    return () => window.removeEventListener('popstate', capture, true);
+  }, []);
   const pending = dialog((s) => s.pending);
   const [busy, setBusy] = useState(false);
   const resolve = async (save: boolean) => {

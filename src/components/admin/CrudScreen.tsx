@@ -10,12 +10,14 @@ import { nextOrder, sorted, uid, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
 import { useLocalSearchParams } from 'expo-router';
 import type { CollName } from '@/data/types';
+import { useCollectionDraft } from '@/hooks/useDraftDoc';
 import { useViewState } from '@/hooks/useViewState';
 import { toast } from '@/store/useToast';
 
 /** The one generic CRUD screen: every admin entity is described by a config in `admin/entities.tsx`. */
 export function CrudScreen({ entity }: { entity: string }) {
   const cfg = ENTITIES[entity];
+  const staged = useCollectionDraft(cfg?.name ?? 'tools');
   const { t } = useT();
   const L = useL();
   const s = useStore();
@@ -40,6 +42,7 @@ export function CrudScreen({ entity }: { entity: string }) {
 
   const open = (r?: any) => { setPreview(null); setIsNew(!r); setEditing(r ?? { ...cfg.blank(ctx) }); };
   const submit = async (v: any) => {
+    if (!await staged.save()) throw new Error('Could not save draft');
     if (cfg.name === 'models' && v.isDefault) {
       await Promise.all(s.models.filter((m) => m.isDefault && m.id !== v.id).map((m) => s.update('models', m.id, { isDefault: false })));
     }
@@ -89,7 +92,7 @@ export function CrudScreen({ entity }: { entity: string }) {
           <Button size="sm" icon="select-all" variant="ghost" title={t('common.all')} disabled={busy} onPress={() => setSelected(rows.map((r) => r.id))} />
           <Button testID="crud-batch-edit" size="sm" icon="pencil-outline" variant="ghost" title={t('common.edit')} disabled={busy} onPress={() => { setQuickKeys([]); setBatch('edit'); }} />
           <Button testID="crud-batch-visibility" size="sm" icon="eye-outline" variant="ghost" title={t('improve.visibilityShort')} disabled={busy} onPress={() => { setQuickKeys(['visible']); setBatch('edit'); }} />
-          {cfg.ordered ? ([-1, 1] as const).map((d) => <Button key={d} testID={`crud-batch-move-${d}`} size="sm" icon={d === -1 ? 'arrow-up' : 'arrow-down'} variant="ghost" title={t(d === -1 ? 'improve.upShort' : 'improve.downShort')} disabled={busy} onPress={() => run(() => s.moveMany(cfg.name, selected, d))} />) : null}
+          {cfg.ordered ? ([-1, 1] as const).map((d) => <Button key={d} testID={`crud-batch-move-${d}`} size="sm" icon={d === -1 ? 'arrow-up' : 'arrow-down'} variant="ghost" title={t(d === -1 ? 'improve.upShort' : 'improve.downShort')} disabled={busy} onPress={() => run(() => Promise.resolve(staged.move(selected, d)))} />) : null}
           <Button testID="crud-batch-delete" size="sm" icon="trash-can-outline" variant="ghost" title={t('common.delete')} disabled={busy} onPress={() => setBulkDelete(true)} />
         </ScrollView>
       </Card> : undefined}>
@@ -97,9 +100,10 @@ export function CrudScreen({ entity }: { entity: string }) {
       {entity === 'tabs' ? <HomeTabsOption /> : null}
       <CrudTable visual={['categories', 'inspirations', 'styles'].includes(entity)} onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={editing && preview ? isNew ? [...filtered, preview] : filtered.map((r) => r.id === preview.id ? preview : r) : filtered} cols={cfg.cols(ctx)} rowTestID="row"
         onEdit={open} onDelete={setDel}
-        onMove={cfg.ordered && bulkEnabled ? (r, d) => s.move(cfg.name, r.id, d) : undefined}
-        onToggle={(r) => s.update(cfg.name, r.id, { visible: r.visible === false } as any)} />
-      <View className="h-6" />
+        onMove={cfg.ordered && bulkEnabled ? (r, d) => staged.move([r.id], d) : undefined}
+        onToggle={(r) => staged.update(r.id, { visible: r.visible === false } as any)} />
+      {staged.dirty ? <Card className="p-2 mt-3 flex-row items-center gap-2"><Txt className="flex-1 text-[12px]">Unsaved changes · Live preview</Txt><Button testID="crud-discard" size="sm" variant="soft" title="Discard" onPress={staged.discard} /><Button testID="crud-submit" size="sm" title="Submit" onPress={staged.save} /></Card> : null}
+      <View className="h-3" />
       <FormModal visible={!!editing} title={`${isNew ? t('admin.crud.addNew') : t('admin.crud.editItem')} · ${t(`admin.nav.${cfg.navKey}`)}`}
         fields={cfg.fields(ctx)} initial={editing} onDraftChange={previewDraft} onClose={() => setEditing(null)} onSubmit={submit} />
       <BatchFormModal initialKeys={quickKeys} mode={batch} title={batch === 'edit' ? t('improve.editCount', { count: selected.length }) : t('improve.addMultiple')} fields={cfg.fields(ctx)} initial={rows.find((r) => selected.includes(r.id))} blank={() => ({ ...cfg.blank({ ...ctx, s: useStore.getState() }), id: uid(cfg.name) })} onClose={() => setBatch(null)} onSubmit={submitBatch} />

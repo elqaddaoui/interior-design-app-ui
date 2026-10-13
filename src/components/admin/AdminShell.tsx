@@ -73,7 +73,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useViewState('drawer-open', false); // mobile drawer overlay
   const [collapsed, setCollapsed] = useViewState('drawer-collapsed', false); // desktop drawer
   useEffect(() => setOpen(false), [pathname, setOpen]);
-  useBackCheckpoint(open, () => setOpen(false));
+  useBackCheckpoint(open, () => setOpen(false), 1);
   const settingsDraft = useDraftDoc('settings');
 
   const go = (href: string) => router.push(href as Href);

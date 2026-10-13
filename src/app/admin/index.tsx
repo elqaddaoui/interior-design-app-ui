@@ -9,6 +9,7 @@ import { BarChart, RankBars } from '@/components/admin/dashboard/Charts';
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
+import { useAppFont } from '@/components/ui/Txt';
 import { useTheme } from '@/theme/ThemeProvider';
 import { ago, kpis, recentEvents, series, topUsage, type EventKind, type Metric, type Range } from '@/lib/stats';
 
@@ -57,6 +58,7 @@ export default function Dashboard() {
   const { desktop, tablet } = useBp();
   const router = useRouter();
   const { colors } = useTheme();
+  const fontFamily = useAppFont();
   const s = useStore();
   const [range, setRange] = useViewState<Range>('range', 30);
   const [metric, setMetric] = useViewState<Metric>('metric', 'designs');
@@ -124,7 +126,7 @@ export default function Dashboard() {
         <View className="flex-row items-center bg-surface border border-line rounded-2xl px-4 h-12 gap-2">
           <Icon name="magnify" size={20} tone="muted" />
           <TextInput testID="dash-search" value={q} onChangeText={setQ} placeholder={t('admin.dash.searchPh')} placeholderTextColor={colors.muted}
-            style={{ flex: 1, color: colors.fg, fontSize: 15, outlineStyle: 'none' } as any} />
+            style={{ flex: 1, fontFamily, color: colors.fg, fontSize: 15, outlineStyle: 'none' } as any} />
           {q ? <Pressable onPress={() => setQ('')} accessibilityLabel={t('common.close')}><Icon name="close-circle" size={18} tone="muted" /></Pressable> : null}
         </View>
         {results ? (

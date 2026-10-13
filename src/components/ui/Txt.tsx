@@ -10,7 +10,7 @@ export function useAppFont(language?: string) {
   const lang = useLang((s) => s.lang);
   const settings = useStore((s) => s.doc?.settings);
   const font = (language ?? lang) === 'fr' ? settings?.frenchFont : settings?.arabicFont;
-  return font && font !== 'system' ? font : undefined;
+  return font && font !== 'system' ? font : (language ?? lang) === 'fr' ? FRENCH_FONTS[0] : ARABIC_FONTS[0];
 }
 const HAS_COLOR = /\btext-(fg|muted|primary|onprimary|onink|ink|danger|success|white|black|soft)\b/;
 /** Text that defaults to the theme foreground colour. */

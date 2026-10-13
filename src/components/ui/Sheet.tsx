@@ -10,7 +10,7 @@ import { Icon } from './Icon';
 
 /** Bottom sheet on phones, centred dialog on larger screens. Re-applies theme vars (needed for web portals). */
 export function Sheet({ visible, onClose, title, children, wide, footer, history = true }: { visible: boolean; onClose: () => void; title?: string; children: React.ReactNode; wide?: boolean; footer?: React.ReactNode; history?: boolean }) {
-  useBackCheckpoint(visible && history, onClose);
+  useBackCheckpoint(visible && history, onClose, 1);
   const insets = useSafeAreaInsets();
   const { style } = useTheme();
   const { tablet, height } = useBp();
