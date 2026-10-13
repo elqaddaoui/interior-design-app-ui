@@ -1,5 +1,6 @@
 import React from 'react';
-import { ScrollView, View } from 'react-native';
+import { RememberScroll } from '@/hooks/useViewState';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBp } from '@/hooks/useBp';
 
@@ -17,7 +18,7 @@ export function Screen({ children, header, footer, scroll = true, max = 1100, pa
     <View className="flex-1 bg-bg" style={{ paddingTop: insets.top }}>
       {header ? <View style={{ width: '100%', maxWidth: max, paddingHorizontal: px, alignSelf: 'center' }}>{header}</View> : null}
       {scroll ? (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: bottomInset + 24 }} showsVerticalScrollIndicator={desktop}>{body}</ScrollView>
+        <RememberScroll style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: bottomInset + 24 }} showsVerticalScrollIndicator={desktop}>{body}</RememberScroll>
       ) : body}
       {footer ? (
         <View style={{ paddingBottom: Math.max(insets.bottom, 12), paddingTop: 10 }} className="bg-bg">

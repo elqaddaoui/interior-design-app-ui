@@ -1,12 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
-import { Href, usePathname, useRouter } from 'expo-router';
+import React, { useEffect } from 'react';
+import { Pressable, View } from 'react-native';
+import { Href, usePathname } from 'expo-router';
+import { useRouter } from '@/hooks/useLeaveGuard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, Txt } from '@/components/ui';
 import { useBp } from '@/hooks/useBp';
 import { useT } from '@/i18n';
 import { useLocal } from '@/store/useLocal';
 import { useStore } from '@/store/useStore';
+import { RememberScroll, useViewState } from '@/hooks/useViewState';
+import { requestLeave, useBackCheckpoint } from '@/hooks/useLeaveGuard';
+import { useDraftDoc } from '@/hooks/useDraftDoc';
 import type { AdminNavMode } from '@/data/types';
 
 type NavItem = { key: string; icon: string; href: string };
@@ -67,13 +71,15 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const name = useStore((s) => s.doc.branding.appName);
   const mode = (useStore((s) => s.doc.settings.adminNavMode) ?? 'drawer') as AdminNavMode;
   const pending = useStore((s) => s.requests.filter((r) => r.status === 'pending').length);
-  const [open, setOpen] = useState(false); // mobile drawer overlay
-  const [collapsed, setCollapsed] = useState(false); // desktop drawer
+  const [open, setOpen] = useViewState('drawer-open', false); // mobile drawer overlay
+  const [collapsed, setCollapsed] = useViewState('drawer-collapsed', false); // desktop drawer
   useEffect(() => setOpen(false), [pathname]);
+  useBackCheckpoint(open, () => setOpen(false));
+  const settingsDraft = useDraftDoc('settings');
 
   const go = (href: string) => router.push(href as Href);
-  const logout = () => { useLocal.getState().set({ adminSession: false }); };
-  const nextMode = () => useStore.getState().patchDoc('settings', { adminNavMode: MODES[(MODES.indexOf(mode) + 1) % MODES.length] });
+  const logout = () => requestLeave(() => { useLocal.getState().set({ adminSession: false }); });
+  const nextMode = () => settingsDraft.patch( { adminNavMode: MODES[(MODES.indexOf(mode) + 1) % MODES.length] });
   const label = (k: string) => t(`admin.nav.${k}`);
 
   /* ---------- building blocks ---------- */
@@ -97,19 +103,19 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   };
 
   const GroupedList = ({ onItem }: { onItem?: () => void }) => (
-    <ScrollView contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12 }} showsVerticalScrollIndicator={desktop}>
+    <RememberScroll stateKey="shared:admin-menu" contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12 }} showsVerticalScrollIndicator={desktop}>
       {ADMIN_GROUPS.map((g) => (
         <View key={g.key} className="mb-3">
           <Txt className="text-muted text-[11px] font-bold uppercase tracking-wide px-3 mb-1">{t(`admin.group.${g.key}`)}</Txt>
           <View style={{ gap: 2 }}>{g.items.map((n) => <View key={n.key} onTouchEnd={onItem}><Row n={n} /></View>)}</View>
         </View>
       ))}
-    </ScrollView>
+    </RememberScroll>
   );
 
   const Footer = ({ compact }: { compact?: boolean }) => (
     <View className={`p-3 border-t border-line gap-1 ${compact ? 'items-center' : ''}`}>
-      <Pressable testID="open-app" accessibilityLabel={t('admin.openApp')} onPress={() => router.replace('/')} className="flex-row items-center gap-3 px-3 h-10"><Icon name="open-in-new" size={19} />{compact ? null : <Txt className="font-semibold text-[14px]">{t('admin.openApp')}</Txt>}</Pressable>
+      <Pressable testID="open-app" accessibilityLabel={t('admin.openApp')} onPress={() => router.push('/')} className="flex-row items-center gap-3 px-3 h-10"><Icon name="open-in-new" size={19} />{compact ? null : <Txt className="font-semibold text-[14px]">{t('admin.openApp')}</Txt>}</Pressable>
       <Pressable testID="logout" accessibilityLabel={t('admin.logout')} onPress={logout} className="flex-row items-center gap-3 px-3 h-10"><Icon name="logout" size={19} tone="danger" />{compact ? null : <Txt className="font-semibold text-[14px] text-danger">{t('admin.logout')}</Txt>}</Pressable>
     </View>
   );
@@ -124,7 +130,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const Rail = () => (
     <View className="w-[64px] bg-surface border-e border-line items-center" style={{ paddingTop: insets.top + 8 }}>
       <Brand compact />
-      <ScrollView showsVerticalScrollIndicator={desktop} style={{ flex: 1, alignSelf: 'stretch' }} contentContainerStyle={{ alignItems: 'center', paddingVertical: 10 }}>
+      <RememberScroll stateKey="shared:admin-rail" showsVerticalScrollIndicator={desktop} style={{ flex: 1, alignSelf: 'stretch' }} contentContainerStyle={{ alignItems: 'center', paddingVertical: 10 }}>
         {ADMIN_GROUPS.map((g, gi) => (
           <View key={g.key} className="items-center" style={{ gap: 4 }}>
             {gi > 0 ? <View className="h-px w-8 bg-line my-2" /> : null}
@@ -140,7 +146,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             })}
           </View>
         ))}
-      </ScrollView>
+      </RememberScroll>
       <Footer compact />
     </View>
   );
@@ -148,7 +154,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   /** Horizontal menu grouped by topic. */
   const TopMenu = () => (
     <View className="bg-surface border-b border-line">
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, alignItems: 'flex-end' }}>
+      <RememberScroll stateKey="shared:admin-top" horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, alignItems: 'flex-end' }}>
         {ADMIN_GROUPS.map((g, gi) => (
           <View key={g.key} className={`${gi > 0 ? 'ms-3 ps-3 border-s border-line' : ''}`}>
             <Txt className="text-muted text-[10px] font-bold uppercase tracking-wide mb-1 px-1">{t(`admin.group.${g.key}`)}</Txt>
@@ -167,7 +173,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             </View>
           </View>
         ))}
-      </ScrollView>
+      </RememberScroll>
     </View>
   );
 
@@ -178,7 +184,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <LayoutBtn />
       {mode === 'top' ? (
         <>
-          <Pressable onPress={() => router.replace('/')} accessibilityLabel={t('admin.openApp')} className="w-10 h-10 items-center justify-center"><Icon name="open-in-new" size={21} /></Pressable>
+          <Pressable onPress={() => router.push('/')} accessibilityLabel={t('admin.openApp')} className="w-10 h-10 items-center justify-center"><Icon name="open-in-new" size={21} /></Pressable>
           <Pressable testID="logout" onPress={logout} accessibilityLabel={t('admin.logout')} className="w-10 h-10 items-center justify-center"><Icon name="logout" size={21} tone="danger" /></Pressable>
         </>
       ) : null}
@@ -255,14 +261,15 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 export function AdminPage({ title, right, children, max = 1100, floating }: { title: string; right?: React.ReactNode; children: React.ReactNode; max?: number; floating?: React.ReactNode }) {
   const { tablet } = useBp();
   return (
-    <View style={{ flex: 1, minHeight: 0 }}><ScrollView contentContainerStyle={{ padding: tablet ? 28 : 16, paddingBottom: floating ? 200 : 60 }}>
+    <View style={{ flex: 1, minHeight: 0 }}><RememberScroll contentContainerStyle={{ padding: tablet ? 16 : 12, paddingBottom: floating ? 160 : 32 }}>
       <View style={{ width: '100%', maxWidth: max, alignSelf: 'center' }}>
-        <View className="flex-row items-center justify-between mb-5 gap-3">
-          <Txt className="text-[24px] font-extrabold flex-1" accessibilityRole="header">{title}</Txt>
+        <View className="flex-row items-center justify-between mb-3 gap-3">
+          <Pressable testID="admin-back" accessibilityLabel="Back" onPress={() => router.back()} className="w-10 h-10 items-center justify-center"><Icon name="chevron-left" size={24} flip /></Pressable>
+          <Txt className="text-[21px] font-extrabold flex-1" accessibilityRole="header">{title}</Txt>
           {right}
         </View>
         {children}
       </View>
-    </ScrollView>{floating ? <View style={{ position: 'absolute', bottom: 20, left: 12, right: 12, maxWidth: 700, alignSelf: 'center', marginHorizontal: 'auto', zIndex: 10 } as any}>{floating}</View> : null}</View>
+    </RememberScroll>{floating ? <View style={{ position: 'absolute', bottom: 20, left: 12, right: 12, maxWidth: 700, alignSelf: 'center', marginHorizontal: 'auto', zIndex: 10 } as any}>{floating}</View> : null}</View>
   );
 }

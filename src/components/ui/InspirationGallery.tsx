@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { router } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import type { GalleryLayout, InspirationItem } from '@/data/types';
 import { useBp } from '@/hooks/useBp';
 import { MediaView } from './MediaView';

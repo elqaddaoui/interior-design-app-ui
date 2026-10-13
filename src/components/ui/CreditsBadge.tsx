@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
-import { router } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { Txt } from './Txt';
 import { Icon } from './Icon';
 import { useMe } from '@/store/useStore';

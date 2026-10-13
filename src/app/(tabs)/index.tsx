@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
-import { router } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { useStore, sorted } from '@/store/useStore';
 import { useWizard } from '@/store/useWizard';
 import { useL, useT } from '@/i18n';

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChatView } from '@/components/ChatView';
 import { PageHeader } from '@/components/ui';

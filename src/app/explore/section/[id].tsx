@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { sorted, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
 import { Carousel } from '@/components/ui/Carousel';

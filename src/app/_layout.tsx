@@ -11,6 +11,7 @@ import { useStore } from '@/store/useStore';
 import { useLocal } from '@/store/useLocal';
 import { initLang, useLang, isRtl } from '@/i18n';
 import { ThemeProvider } from '@/theme/ThemeProvider';
+import { UnsavedChangesHost } from '@/hooks/useLeaveGuard';
 import { ToastHost } from '@/components/ui';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -49,6 +50,7 @@ export default function RootLayout() {
               <View className="flex-1 items-center justify-center bg-bg"><ActivityIndicator /></View>
             )}
             <ToastHost />
+            <UnsavedChangesHost />
           </View>
         </ThemeProvider>
       </SafeAreaProvider>

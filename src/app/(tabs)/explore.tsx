@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
-import { router } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { sorted, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';

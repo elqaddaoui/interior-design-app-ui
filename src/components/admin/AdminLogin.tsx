@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter } from '@/hooks/useLeaveGuard';
 import { Button, Card, Icon, Input, Txt } from '@/components/ui';
 import { services } from '@/data/repositories';
 import { useT } from '@/i18n';

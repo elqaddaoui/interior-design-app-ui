@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
-import { Href, useRouter } from 'expo-router';
+import { Href } from 'expo-router';
+import { useRouter } from '@/hooks/useLeaveGuard';
 import { Card, Icon, Txt } from '@/components/ui';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { BarChart, RankBars } from '@/components/admin/dashboard/Charts';

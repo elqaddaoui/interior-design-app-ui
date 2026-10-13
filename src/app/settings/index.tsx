@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { router } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import Constants from 'expo-constants';
 import { useLang, LANGS } from '@/i18n';
 import { useLocal } from '@/store/useLocal';

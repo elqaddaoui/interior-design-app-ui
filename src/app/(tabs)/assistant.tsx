@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Linking, Pressable, View } from 'react-native';
-import { router } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useStore } from '@/store/useStore';

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BackHandler, Platform } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { Redirect } from 'expo-router';
 import { useStore, useMe } from '@/store/useStore';
 import { useWizard } from '@/store/useWizard';

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import { Redirect, useLocalSearchParams } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useMe, useStore } from '@/store/useStore';
 import { useWizard } from '@/store/useWizard';

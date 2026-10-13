@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { BackHandler, View } from 'react-native';
-import { Redirect, router } from 'expo-router';
+import { Redirect } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { useStore, useMe } from '@/store/useStore';
 import { useWizard } from '@/store/useWizard';
 import { services, ME } from '@/data/repositories';

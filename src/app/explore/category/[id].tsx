@@ -1,5 +1,6 @@
 import React from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { router } from '@/hooks/useLeaveGuard';
 import { sorted, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
 import { EmptyState, PageHeader, Screen } from '@/components/ui';
