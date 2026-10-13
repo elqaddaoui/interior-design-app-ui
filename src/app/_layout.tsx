@@ -22,6 +22,14 @@ export default function RootLayout() {
     NotoNaskhArabic: require('../../assets/fonts/NotoNaskhArabic.ttf'),
     Inter: require('../../assets/fonts/Inter.ttf'),
     Lora: require('../../assets/fonts/Lora.ttf'),
+    Roboto: require('../../assets/fonts/Roboto.ttf'),
+    Poppins: require('../../assets/fonts/Poppins.ttf'),
+    Montserrat: require('../../assets/fonts/Montserrat.ttf'),
+    Lato: require('../../assets/fonts/Lato.ttf'),
+    Cairo: require('../../assets/fonts/Cairo.ttf'),
+    'IBM Plex Sans Arabic': require('../../assets/fonts/IBMPlexSansArabic.ttf'),
+    'Noto Sans Arabic': require('../../assets/fonts/NotoSansArabic.ttf'),
+    Alexandria: require('../../assets/fonts/Alexandria.ttf'),
   });
   const ready = useStore((s) => s.ready);
   const loaded = useLocal((s) => s.loaded);

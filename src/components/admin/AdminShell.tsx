@@ -3,7 +3,7 @@ import { Pressable, View } from 'react-native';
 import { Href, usePathname } from 'expo-router';
 import { useRouter } from '@/hooks/useLeaveGuard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon, Txt } from '@/components/ui';
+import { Button, Icon, Txt } from '@/components/ui';
 import { useBp } from '@/hooks/useBp';
 import { useT } from '@/i18n';
 import { useLocal } from '@/store/useLocal';
@@ -79,6 +79,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   const go = (href: string) => router.push(href as Href);
   const logout = () => requestLeave(() => { useLocal.getState().set({ adminSession: false }); });
+  const draftBar = settingsDraft.dirty ? <View testID="admin-draft-bar" className="bg-soft border-t border-line p-2 flex-row items-center gap-2"><Txt className="flex-1 text-[12px] font-semibold">Unsaved preview</Txt><Button size="sm" variant="soft" title="Discard" onPress={settingsDraft.discard} /><Button testID="admin-draft-submit" size="sm" title="Submit" onPress={settingsDraft.save} /></View> : null;
   const nextMode = () => settingsDraft.patch( { adminNavMode: MODES[(MODES.indexOf(mode) + 1) % MODES.length] });
   const label = (k: string) => t(`admin.nav.${k}`);
 
@@ -198,7 +199,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <Rail />
         <View className="flex-1">
           {!desktop ? <View style={{ paddingTop: insets.top }}><TopBar /></View> : null}
-          {children}
+          {children}{draftBar}
         </View>
       </View>
     );
@@ -209,7 +210,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <View className="flex-1 bg-bg" style={{ paddingTop: insets.top }}>
         <TopBar />
         <TopMenu />
-        <View className="flex-1">{children}</View>
+        <View className="flex-1">{children}{draftBar}</View>
       </View>
     );
   }
@@ -231,7 +232,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <View className="flex-1" />
             <LayoutBtn />
           </View>
-          {children}
+          {children}{draftBar}
         </View>
       </View>
     );
@@ -239,7 +240,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   return (
     <View className="flex-1 bg-bg" style={{ paddingTop: insets.top }}>
       <TopBar menuBtn />
-      <View className="flex-1">{children}</View>
+      <View className="flex-1">{children}{draftBar}</View>
       {open ? (
         <View testID="admin-drawer" className="absolute inset-0 flex-row" style={{ zIndex: 50 }}>
           <View className="w-[280px] max-w-[85%] bg-surface border-e border-line" style={{ paddingTop: insets.top }}>

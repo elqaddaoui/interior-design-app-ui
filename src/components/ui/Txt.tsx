@@ -4,8 +4,8 @@ import { Text, type TextProps } from 'react-native';
 import { useStore } from '@/store/useStore';
 import { useLang } from '@/i18n';
 
-export const ARABIC_FONTS = ['system', 'Tajawal', 'NotoNaskhArabic'];
-export const FRENCH_FONTS = ['system', 'Inter', 'Lora'];
+export const ARABIC_FONTS = ['Tajawal', 'Cairo', 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'Alexandria'];
+export const FRENCH_FONTS = ['Inter', 'Roboto', 'Poppins', 'Montserrat', 'Lato'];
 export function useAppFont(language?: string) {
   const lang = useLang((s) => s.lang);
   const settings = useStore((s) => s.doc?.settings);
