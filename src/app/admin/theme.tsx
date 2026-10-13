@@ -77,7 +77,7 @@ export default function ThemeAdmin() {
   const { draft: cfg, set: setCfg, save: submitDraft, dirty } = useDraftDoc('theme');
   const [cat, setCat] = useViewState<PresetCategory | 'all'>('theme-category', 'all');
   const groups = useMemo(() => PRESET_CATEGORIES.filter((c) => cat === 'all' || c === cat).map((c) => ({ c, items: PRESETS.filter((p) => p.category === c) })), [cat]);
-  const save = async () => { await submitDraft(); toast(t('admin.crud.saved')); };
+  const save = async () => { if (await submitDraft()) toast(t('admin.crud.saved')); };
   const pill = (on: boolean) => `px-3.5 h-9 rounded-full items-center justify-center ${on ? 'bg-ink' : 'bg-surface2'}`;
 
   return (

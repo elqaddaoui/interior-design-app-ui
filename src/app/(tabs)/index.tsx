@@ -1,6 +1,6 @@
-import { useViewState } from '@/hooks/useViewState';
+import { RememberScroll, useViewState } from '@/hooks/useViewState';
 import React, { useMemo } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { router } from '@/hooks/useLeaveGuard';
 import { useStore, sorted } from '@/store/useStore';
 import { useWizard } from '@/store/useWizard';
@@ -36,7 +36,7 @@ export default function Home() {
       {!desktop ? (
         <BrandHeader branding={branding} actions={<CreditsBadge />} />
       ) : null}
-      {tabsVisible ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+      {tabsVisible ? <RememberScroll stateKey="home-filter-menu" horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
         {pills.map((x) => {
           const on = x.id === tabId;
           return (
@@ -45,7 +45,7 @@ export default function Home() {
             </Pressable>
           );
         })}
-      </ScrollView> : null}
+      </RememberScroll> : null}
     </View>
   );
 

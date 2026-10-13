@@ -70,5 +70,9 @@ export function useCollectionDraft<K extends CollName>(name: K) {
   };
   useLeaveGuard(dirty, save, discard);
   useBackCheckpoint(dirty, () => router.back());
-  return { update, move, save, discard, dirty };
+  const forget = (ids: string[]) => {
+    const saved = collectionBaselines.get(name);
+    if (saved) collectionBaselines.set(name, saved.filter((row) => !ids.includes(row.id)));
+  };
+  return { update, move, save, discard, dirty, forget };
 }

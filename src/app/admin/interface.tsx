@@ -34,7 +34,7 @@ export default function InterfaceAdmin() {
   const { draft: settings, patch: set, save, discard, dirty } = useDraftDoc('settings');
   const wrap = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 12 };
   return (
-    <AdminPage title={t('admin.iface.title')} right={<Button testID="interface-submit" size="sm" title="Submit" disabled={!dirty} onPress={async () => { await save(); toast(t('admin.crud.saved')); }} />}>
+    <AdminPage title={t('admin.iface.title')} right={<Button testID="interface-submit" size="sm" title="Submit" disabled={!dirty} onPress={async () => { if (await save()) toast(t('admin.crud.saved')); }} />}>
       <Txt className="text-muted text-[12px] mb-3">Live preview · Changes are only saved when you submit.</Txt>
       <Card className="p-3 mb-3">
         <Txt className="font-extrabold text-[17px]">{t('admin.iface.userNav')}</Txt>

@@ -15,7 +15,7 @@ export default function AssistantAdmin() {
   const s = useStore();
   const { draft: c, set: setC, save: submitDraft } = useDraftDoc('assistant');
   const ctx: Ctx = { s, L, t };
-  const save = async () => { await submitDraft(); toast(t('admin.crud.saved')); };
+  const save = async () => { if (await submitDraft()) toast(t('admin.crud.saved')); };
   const types: AssistantConfig['type'][] = ['ai', 'whatsapp'];
   return (
     <AdminPage title={t('admin.nav.assistant')} max={760}>

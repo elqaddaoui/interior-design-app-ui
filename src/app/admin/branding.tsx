@@ -21,7 +21,7 @@ export default function Branding() {
   const choice = (key: string, values: string[], fallback: string) => <Field f={{ kind: 'select', key, label: t(`improve.${key}`), options: () => values.map((value) => ({ value, label: t(`improve.${value}`, { defaultValue: value }) })) }} value={(draft as any)[key] ?? fallback} onChange={(v) => set(key, v)} ctx={ctx} />;
   const save = async () => {
     setBusy(true);
-    try { setDraft({ ...draft, appName: draft.appName.trim() || 'Dwira', logoSize: Math.min(40, Math.max(18, draft.logoSize ?? 28)), logoSpacing: Math.min(6, Math.max(-2, draft.logoSpacing ?? -0.5)) }); await submitDraft(); toast(t('admin.crud.saved')); }
+    try { setDraft({ ...draft, appName: draft.appName.trim() || 'Dwira', logoSize: Math.min(40, Math.max(18, draft.logoSize ?? 28)), logoSpacing: Math.min(6, Math.max(-2, draft.logoSpacing ?? -0.5)) }); if (await submitDraft()) toast(t('admin.crud.saved')); }
     catch { toast(t('improve.saveError')); } finally { setBusy(false); }
   };
   return (

@@ -112,6 +112,7 @@ export default function TabsLayout() {
   const { desktop } = useBp();
   return (
     <Tabs
+      backBehavior="fullHistory"
       tabBar={(p) => <TabBar {...p} />}
       screenOptions={{ headerShown: false, tabBarPosition: desktop ? 'top' : 'bottom', sceneStyle: { backgroundColor: 'transparent' } } as any}
     >

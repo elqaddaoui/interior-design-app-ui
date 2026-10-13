@@ -56,6 +56,7 @@ export function CrudScreen({ entity }: { entity: string }) {
       if (childIds.length) await removeRows(child, childIds);
     }
     await s.removeMany(name, ids);
+    if (name === cfg.name) staged.forget(ids);
   };
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -63,6 +64,7 @@ export function CrudScreen({ entity }: { entity: string }) {
   };
   const submitBatch = async (values: any[], keys: string[]) => {
     if (!bulkEnabled) return;
+    if (!await staged.save()) throw new Error('Could not save draft');
     if (batch === 'add') {
       if (cfg.name === 'models' && values.filter((v) => v.isDefault).length > 1) throw new Error('Only one default model is allowed');
       for (const v of values) {

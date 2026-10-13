@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Animated, Platform, ScrollView, View, type ScrollViewProps } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRoute, useIsFocused } from 'expo-router';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -23,10 +23,14 @@ export function useViewState<T>(name: string, initial: T | (() => T)): [T, React
   }), [key]);
   return [value, set];
 }
-const ScrollContext = createContext<React.RefObject<ScrollView | null> | null>(null);
-export function RememberScroll({ stateKey = 'page', children, onScroll, onContentSizeChange, ...props }: ScrollViewProps & { stateKey?: string }) {
+type ScrollAncestor = { ref: React.RefObject<ScrollView | null>; horizontal?: boolean | null };
+const ScrollContext = createContext<ScrollAncestor[]>([]);
+export const RememberScroll = React.forwardRef<ScrollView, ScrollViewProps & { stateKey?: string }>(function RememberScroll({ stateKey = 'page', children, onScroll, onContentSizeChange, ...props }, forwardedRef) {
   const page = usePageKey(); const key = stateKey.startsWith('shared:') ? stateKey : `${page}:${stateKey}`;
-  const ref = useRef<ScrollView>(null); const restoring = useRef(true);
+  const ancestors = useContext(ScrollContext);
+  const ref = useRef<ScrollView>(null);
+  useImperativeHandle(forwardedRef, () => ref.current!, []);
+  const restoring = useRef(true);
   const restore = useCallback(() => { const p = positions.get(key); if (p) ref.current?.scrollTo({ ...p, animated: false }); }, [key]);
   useFocusEffect(useCallback(() => {
     restoring.current = true;
@@ -43,10 +47,10 @@ export function RememberScroll({ stateKey = 'page', children, onScroll, onConten
     window.addEventListener('dwira:before-navigation', capture);
     return () => window.removeEventListener('dwira:before-navigation', capture);
   }, [key]);
-  return <ScrollContext.Provider value={ref}><ScrollView {...props} testID={props.testID ?? `scroll-${key}`} ref={ref} scrollEventThrottle={16}
+  return <ScrollContext.Provider value={[...ancestors, { ref, horizontal: props.horizontal }]}><ScrollView {...props} testID={props.testID ?? `scroll-${key}`} ref={ref} scrollEventThrottle={16}
     contentOffset={positions.get(key)} onContentSizeChange={(w, h) => { if (restoring.current) restore(); onContentSizeChange?.(w, h); }}
     onScroll={(e) => { if (!restoring.current) positions.set(key, e.nativeEvent.contentOffset); onScroll?.(e); }}>{children}</ScrollView></ScrollContext.Provider>;
-}
+});
 /** Search targets reveal themselves after layout, including nested scrolling panes. */
 export function SearchTarget({ id, children }: { id: string; children: React.ReactNode }) {
   const { target, focus } = useLocalSearchParams<{ target?: string; focus?: string }>();
@@ -62,9 +66,11 @@ export function SearchTarget({ id, children }: { id: string; children: React.Rea
     if (Platform.OS === 'web') {
       const node = ref.current as unknown as HTMLElement;
       node?.scrollIntoView?.({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
-    } else if (scroll?.current) {
-      const parent = scroll.current.getInnerViewNode();
-      if (parent) ref.current?.measureLayout(parent, (_x, y) => scroll.current?.scrollTo({ y: Math.max(0, y - 16), animated: true }), () => {});
+    } else {
+      for (const ancestor of scroll) {
+        const parent = ancestor.ref.current?.getInnerViewNode();
+        if (parent) ref.current?.measureLayout(parent, (x, y) => ancestor.ref.current?.scrollTo(ancestor.horizontal ? { x: Math.max(0, x - 16), animated: true } : { y: Math.max(0, y - 16), animated: true }), () => {});
+      }
     }
     opacity.setValue(0.35);
     Animated.timing(opacity, { toValue: 0, duration: 1800, useNativeDriver: true }).start();
