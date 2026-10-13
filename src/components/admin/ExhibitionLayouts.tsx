@@ -16,7 +16,7 @@ export function ExhibitionLayouts({ value, onChange }: { value: GalleryLayout; o
   const photo = (i: number, height: number) => <MediaView uri={images[i % images.length]} style={{ height, borderRadius: 5 }} />;
   return <View testID="exhibition-layouts" style={{ flexDirection: 'row', flexWrap: 'wrap', margin: -4 }}>
     {layouts.map(({ id, title, description }) => <View key={id} style={{ width: '50%', padding: 4 }}>
-      <Pressable testID={`layout-${id}`} accessibilityRole="radio" accessibilityState={{ selected: value === id }} onPress={() => onChange(id)} className={`rounded-xl border-2 p-2 ${value === id ? 'border-primary bg-soft' : 'border-line bg-surface'}`}>
+      <Pressable testID={`layout-${id}`} accessibilityRole="radio" aria-checked={value === id} accessibilityState={{ selected: value === id }} onPress={() => onChange(id)} className={`rounded-xl border-2 p-2 ${value === id ? 'border-primary bg-soft' : 'border-line bg-surface'}`}>
         <View className="rounded-lg bg-surface2 overflow-hidden p-1.5 mb-2" style={{ height: 132 }}>
           {id === 'grid' ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>{[0, 1, 2, 3].map((i) => <View key={i} style={{ width: '48%', flexGrow: 1 }}>{photo(i, 56)}</View>)}</View> : null}
           {id === 'masonry' ? <View className="flex-row gap-1"><View className="flex-1 gap-1">{photo(0, 73)}{photo(1, 40)}</View><View className="flex-1 gap-1">{photo(2, 44)}{photo(3, 69)}</View><View className="flex-1 gap-1">{photo(4, 64)}{photo(5, 49)}</View></View> : null}

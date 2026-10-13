@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { Button, Icon, Input, MediaView, Sheet, Toggle, Txt } from '@/components/ui';
 import { ICON_CHOICES } from '@/components/ui/Icon';
@@ -210,8 +210,8 @@ function BatchFormDialog({ mode, title, fields, initial, initialKeys = [], blank
     catch { toast(t('improve.saveError')); return false; } finally { setBusy(false); }
   };
   const snapshot = JSON.stringify({ text, shared, drafts, keys });
-  const original = useRef(snapshot);
-  useLeaveGuard(!!mode && snapshot !== original.current, submit, onClose);
+  const [original] = useState(snapshot);
+  useLeaveGuard(!!mode && snapshot !== original, submit, onClose);
   const close = () => { if (!busy) requestLeave(onClose); };
   return <Sheet visible={!!mode} title={title} wide={mode === 'add'} onClose={close} footer={<View className="flex-row gap-3"><Button title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" /><Button testID="batch-save" title={pasted ? t('improve.createCount', { count: lines.length }) : t('common.save')} onPress={submit} loading={busy} disabled={mode === 'edit' && !keys.length || pasted && (!lines.length || lines.length > 50)} className="flex-1" /></View>}>
     {mode === 'edit' ? <>

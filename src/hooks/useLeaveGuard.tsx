@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BackHandler, Platform, View } from 'react-native';
 import { router as expoRouter, useRouter as useExpoRouter, useIsFocused } from 'expo-router';
 import { usePreventRemove, useNavigation } from 'expo-router/react-navigation';
@@ -35,7 +35,7 @@ export function useLeaveGuard(dirty: boolean, save: Guard['save'], discard: Guar
   const focused = useIsFocused();
   const navigation = useNavigation();
   const ref = useRef({ save, discard });
-  ref.current = { save, discard };
+  useLayoutEffect(() => { ref.current = { save, discard }; });
   useEffect(() => {
     if (!dirty || !focused) return;
     const id = Symbol('draft');
@@ -67,7 +67,8 @@ function handleCheckpointPop(event: PopStateEvent) {
   topCheckpoint()?.action();
 }
 export function useBackCheckpoint(active: boolean, onBack: () => void, priority = 0) {
-  const latest = useRef(onBack); latest.current = onBack;
+  const latest = useRef(onBack);
+  useLayoutEffect(() => { latest.current = onBack; });
   const focused = useIsFocused();
   useEffect(() => {
     if (!active || !focused) return;

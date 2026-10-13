@@ -56,7 +56,7 @@ export function SearchTarget({ id, children }: { id: string; children: React.Rea
   const { target, focus } = useLocalSearchParams<{ target?: string; focus?: string }>();
   const focused = useIsFocused();
   const ref = useRef<View>(null); const scroll = useContext(ScrollContext);
-  const opacity = useRef(new Animated.Value(0)).current;
+  const [opacity] = useState(() => new Animated.Value(0));
   const revealed = useRef('');
   const token = `${id}:${focus ?? target ?? ''}`;
   const { colors } = useTheme();
@@ -75,7 +75,7 @@ export function SearchTarget({ id, children }: { id: string; children: React.Rea
     opacity.setValue(0.35);
     Animated.timing(opacity, { toValue: 0, duration: 1800, useNativeDriver: true }).start();
   }, [target, id, focused, scroll, opacity, token]);
-  useFocusEffect(useCallback(() => { const timer = setTimeout(reveal, 200); return () => clearTimeout(timer); }, [reveal, focus]));
+  useFocusEffect(useCallback(() => { const timer = setTimeout(reveal, 200); return () => clearTimeout(timer); }, [reveal]));
   return <View ref={ref} collapsable={false} onLayout={reveal} testID={`target-${id}`} style={{ minWidth: 0 }}>
     {children}
     <Animated.View pointerEvents="none" style={{ position: 'absolute', inset: 0, borderRadius: 12, backgroundColor: colors.primary, opacity }} />
