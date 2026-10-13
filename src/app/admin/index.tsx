@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import { useViewState } from '@/hooks/useViewState';
+import React, { useMemo } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { Href } from 'expo-router';
 import { useRouter } from '@/hooks/useLeaveGuard';
@@ -50,9 +51,9 @@ export default function Dashboard() {
   const router = useRouter();
   const { colors } = useTheme();
   const s = useStore();
-  const [range, setRange] = useState<Range>(30);
-  const [metric, setMetric] = useState<Metric>('designs');
-  const [q, setQ] = useState('');
+  const [range, setRange] = useViewState<Range>('range', 30);
+  const [metric, setMetric] = useViewState<Metric>('metric', 'designs');
+  const [q, setQ] = useViewState('q', '');
   const go = (h: string) => router.push(h as Href);
 
   const inp = useMemo(() => ({ requests: s.requests, history: s.history, users: s.users }), [s.requests, s.history, s.users]);
@@ -69,7 +70,7 @@ export default function Dashboard() {
     models: topUsage(inp, range, (d) => d.modelId).map((r) => ({ id: r.id, count: r.count, label: s.models.find((m) => m.id === r.id)?.name ?? r.id })),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [inp, range, s.tools, s.styles, s.roomTypes, s.models, lang]);
-  const [topTab, setTopTab] = useState<'tools' | 'styles' | 'rooms' | 'models'>('tools');
+  const [topTab, setTopTab] = useViewState<'tools' | 'styles' | 'rooms' | 'models'>('topTab', 'tools');
   const best = tops.tools[0];
 
   const needle = q.trim().toLowerCase();

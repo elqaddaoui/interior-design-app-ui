@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { useViewState } from '@/hooks/useViewState';
+import React from 'react';
 import { Linking, Pressable, View } from 'react-native';
 import { Button, Card, EmptyState, Icon, MediaView, Sheet, Toggle, Txt } from '@/components/ui';
 import { AdminPage } from '@/components/admin/AdminShell';
@@ -37,7 +38,7 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const s = useStore();
   const { t } = useT();
   const r = s.requests.find((x) => x.id === id);
-  const [final, setFinal] = useState('');
+  const [final, setFinal] = useViewState('final', '');
   React.useEffect(() => { setFinal(r?.finalResult ?? ''); }, [id]);
   if (!r) return <Sheet visible={false} onClose={onClose}><View /></Sheet>;
   const set = async (status: RequestStatus, extra: Partial<RenderRequest> = {}) => {
@@ -73,8 +74,8 @@ export default function Requests() {
   const { t } = useT();
   const { desktop } = useBp();
   const s = useStore();
-  const [open, setOpen] = useState<string | null>(null);
-  const [filter, setFilter] = useState<RequestStatus | 'all'>('all');
+  const [open, setOpen] = useViewState<string | null>('open', null);
+  const [filter, setFilter] = useViewState<RequestStatus | 'all'>('filter', 'all');
   const rows = [...s.requests].sort((a, b) => b.createdAt - a.createdAt).filter((r) => filter === 'all' || r.status === filter);
   const auto = s.doc.settings.autoSendWhatsApp;
   return (

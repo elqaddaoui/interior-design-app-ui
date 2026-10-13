@@ -1,15 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
 import { Button, Card, Icon, Txt } from '@/components/ui';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { ColorPicker } from '@/components/admin/ColorPicker';
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
-import { useStore } from '@/store/useStore';
 import { ThemeScope } from '@/theme/ThemeProvider';
 import { CUSTOM_KEYS, PRESETS, PRESET_BY_ID, PRESET_CATEGORIES, type PresetCategory } from '@/theme/tokens';
 import { toast } from '@/store/useToast';
-import type { ThemeConfig } from '@/data/types';
+import { useDraftDoc } from '@/hooks/useDraftDoc';
+import { useViewState } from '@/hooks/useViewState';
 
 const CKEY: Record<string, string> = { primary: 'colorPrimary', bg: 'colorBg', surface: 'colorSurface', fg: 'colorFg', ink: 'colorInk' };
 
@@ -74,17 +74,14 @@ function Swatch({ id, active, onPress }: { id: string; active: boolean; onPress:
 export default function ThemeAdmin() {
   const { t } = useT();
   const { desktop } = useBp();
-  const saved = useStore((s) => s.doc.theme);
-  const base = PRESET_BY_ID.light.tokens;
-  const [cfg, setCfg] = useState<ThemeConfig>({ active: saved.active, custom: { primary: base.primary, bg: base.bg, surface: base.surface, fg: base.fg, ink: base.ink, ...saved.custom } });
-  const [cat, setCat] = useState<PresetCategory | 'all'>('all');
-  const dirty = cfg.active !== saved.active || JSON.stringify(cfg.custom) !== JSON.stringify({ primary: base.primary, bg: base.bg, surface: base.surface, fg: base.fg, ink: base.ink, ...saved.custom });
+  const { draft: cfg, set: setCfg, save: submitDraft, dirty } = useDraftDoc('theme');
+  const [cat, setCat] = useViewState<PresetCategory | 'all'>('theme-category', 'all');
   const groups = useMemo(() => PRESET_CATEGORIES.filter((c) => cat === 'all' || c === cat).map((c) => ({ c, items: PRESETS.filter((p) => p.category === c) })), [cat]);
-  const save = async () => { await useStore.getState().patchDoc('theme', cfg); toast(t('admin.crud.saved')); };
+  const save = async () => { await submitDraft(); toast(t('admin.crud.saved')); };
   const pill = (on: boolean) => `px-3.5 h-9 rounded-full items-center justify-center ${on ? 'bg-ink' : 'bg-surface2'}`;
 
   return (
-    <AdminPage title={t('admin.theme.title')} right={<Button testID="theme-save" size="sm" icon="check" title={t('common.save')} disabled={!dirty} onPress={save} />}>
+    <AdminPage title={t('admin.theme.title')} right={<Button testID="theme-save" size="sm" icon="check" title="Submit" disabled={!dirty} onPress={save} />}>
       <View className={desktop ? 'flex-row gap-6 items-start' : 'gap-5'}>
         <View className="flex-1" style={{ minWidth: 0 }}>
           <Card className="p-4 mb-4">

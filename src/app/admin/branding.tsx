@@ -9,18 +9,19 @@ import { BrandHeader } from '@/components/BrandHeader';
 import { ARABIC_FONTS, FRENCH_FONTS } from '@/components/ui/Txt';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
+import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { toast } from '@/store/useToast';
 
 export default function Branding() {
   const { t } = useT(); const L = useL(); const s = useStore();
-  const [draft, setDraft] = useState(s.doc.branding);
+  const { draft, set: setDraft, save: submitDraft } = useDraftDoc('branding');
   const [busy, setBusy] = useState(false);
   const ctx = { s, L, t };
   const set = (key: string, value: any) => setDraft((b) => ({ ...b, [key]: value }));
   const choice = (key: string, values: string[], fallback: string) => <Field f={{ kind: 'select', key, label: t(`improve.${key}`), options: () => values.map((value) => ({ value, label: t(`improve.${value}`, { defaultValue: value }) })) }} value={(draft as any)[key] ?? fallback} onChange={(v) => set(key, v)} ctx={ctx} />;
   const save = async () => {
     setBusy(true);
-    try { await s.patchDoc('branding', { ...draft, appName: draft.appName.trim() || 'Dwira', logoSize: Math.min(40, Math.max(18, draft.logoSize ?? 28)), logoSpacing: Math.min(6, Math.max(-2, draft.logoSpacing ?? -0.5)) }); toast(t('admin.crud.saved')); }
+    try { setDraft({ ...draft, appName: draft.appName.trim() || 'Dwira', logoSize: Math.min(40, Math.max(18, draft.logoSize ?? 28)), logoSpacing: Math.min(6, Math.max(-2, draft.logoSpacing ?? -0.5)) }); await submitDraft(); toast(t('admin.crud.saved')); }
     catch { toast(t('improve.saveError')); } finally { setBusy(false); }
   };
   return (
@@ -43,7 +44,7 @@ export default function Branding() {
         </>}
         {choice('logoPosition', ['left', 'center', 'right'], 'left')}
         {choice('logoStyle', ['minimal', 'signature', 'badge'], 'signature')}
-        <Button testID="brand-save" title={t('common.save')} onPress={save} loading={busy} />
+        <Button testID="brand-save" title="Submit" onPress={save} loading={busy} />
       </Card>
     </AdminPage>
   );

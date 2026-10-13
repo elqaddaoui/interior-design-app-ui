@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import { useViewState } from '@/hooks/useViewState';
+import React from 'react';
 import { Pressable, View } from 'react-native';
 import { router } from '@/hooks/useLeaveGuard';
 import Animated, { FadeInDown } from 'react-native-reanimated';
@@ -18,10 +19,10 @@ export default function History() {
   const chats = useStore((s) => s.conversations).filter((c) => c.userId === ME).sort((a, b) => b.updatedAt - a.updatedAt);
   const tools = useStore((s) => s.tools);
   const { notifications, bannerDismissed, set } = useLocal();
-  const [tab, setTab] = useState<'designs' | 'chats'>('designs');
-  const [selecting, setSelecting] = useState(false);
-  const [sel, setSel] = useState<string[]>([]);
-  const [confirm, setConfirm] = useState(false);
+  const [tab, setTab] = useViewState<'designs' | 'chats'>('tab', 'designs');
+  const [selecting, setSelecting] = useViewState('selecting', false);
+  const [sel, setSel] = useViewState<string[]>('sel', []);
+  const [confirm, setConfirm] = useViewState('confirm', false);
   void me;
 
   const toggle = (id: string) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));

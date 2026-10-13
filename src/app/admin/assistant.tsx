@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Pressable, View } from 'react-native';
 import { Button, Card, Icon, Input, Txt } from '@/components/ui';
 import { AdminPage } from '@/components/admin/AdminShell';
@@ -6,15 +6,16 @@ import { Field, type Ctx } from '@/components/admin/FormModal';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/useToast';
+import { useDraftDoc } from '@/hooks/useDraftDoc';
 import type { AssistantConfig } from '@/data/types';
 
 export default function AssistantAdmin() {
   const { t } = useT();
   const L = useL();
   const s = useStore();
-  const [c, setC] = useState<AssistantConfig>(s.doc.assistant);
+  const { draft: c, set: setC, save: submitDraft } = useDraftDoc('assistant');
   const ctx: Ctx = { s, L, t };
-  const save = async () => { await s.patchDoc('assistant', c); toast(t('admin.crud.saved')); };
+  const save = async () => { await submitDraft(); toast(t('admin.crud.saved')); };
   const types: AssistantConfig['type'][] = ['ai', 'whatsapp'];
   return (
     <AdminPage title={t('admin.nav.assistant')} max={760}>
@@ -35,7 +36,7 @@ export default function AssistantAdmin() {
           <Input testID="asst-number" label={t('admin.assistant.number')} value={c.whatsappNumber} onChangeText={(v) => setC({ ...c, whatsappNumber: v })} keyboardType="phone-pad" placeholder="+212…" />
         )}
         <Field ctx={ctx} f={{ kind: 'ltext', key: 'welcome', label: t('admin.assistant.welcome'), multiline: true }} value={c.welcome} onChange={(v) => setC({ ...c, welcome: v })} />
-        <Button testID="asst-save" title={t('common.save')} onPress={save} className="mt-2" />
+        <Button testID="asst-save" title="Submit" onPress={save} className="mt-2" />
       </Card>
     </AdminPage>
   );

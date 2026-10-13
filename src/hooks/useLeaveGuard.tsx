@@ -53,34 +53,38 @@ export function useLeaveGuard(dirty: boolean, save: Guard['save'], discard: Guar
 /** A history checkpoint prevents browser Back from unmounting a dirty screen.
  * It is also used by sheets, so browser/mobile-web Back closes the top overlay first.
  */
+const checkpoints = new Map<symbol, () => void>();
+let checkpointMarker: string | null = null;
+function handleCheckpointPop(event: PopStateEvent) {
+  if (!checkpoints.size || !checkpointMarker) return;
+  event.stopImmediatePropagation();
+  window.history.pushState({ ...window.history.state, dwiraCheckpoint: checkpointMarker }, '', window.location.href);
+  [...checkpoints.values()].at(-1)?.();
+}
 export function useBackCheckpoint(active: boolean, onBack: () => void) {
   const latest = useRef(onBack); latest.current = onBack;
+  const focused = useIsFocused();
   useEffect(() => {
-    if (!active || Platform.OS !== 'web') return;
-    const marker = `overlay-${Date.now()}-${Math.random()}`;
-    window.history.pushState({ ...window.history.state, dwiraCheckpoint: marker }, '', window.location.href);
-    let installed = true;
-    const pop = (event: PopStateEvent) => {
-      if (!installed) return;
-      event.stopImmediatePropagation();
-      installed = false;
-      // Return to the checkpoint synchronously; the route underneath never changes.
-      window.history.pushState({ ...window.history.state, dwiraCheckpoint: marker }, '', window.location.href);
-      installed = true;
-      latest.current();
-    };
-    window.addEventListener('popstate', pop, true);
+    if (!active || !focused || Platform.OS !== 'web') return;
+    const id = Symbol('checkpoint');
+    checkpoints.set(id, () => latest.current());
+    if (!checkpointMarker) {
+      checkpointMarker = `checkpoint-${Date.now()}`;
+      window.history.pushState({ ...window.history.state, dwiraCheckpoint: checkpointMarker }, '', window.location.href);
+      window.addEventListener('popstate', handleCheckpointPop, true);
+    }
     return () => {
-      installed = false;
-      window.removeEventListener('popstate', pop, true);
+      checkpoints.delete(id);
+      if (checkpoints.size) return;
+      const marker = checkpointMarker; checkpointMarker = null;
+      window.removeEventListener('popstate', handleCheckpointPop, true);
       if (window.history.state?.dwiraCheckpoint === marker) {
-        // Consume the duplicate entry without letting Expo interpret it as navigation.
         const swallow = (event: PopStateEvent) => { event.stopImmediatePropagation(); window.removeEventListener('popstate', swallow, true); };
         window.addEventListener('popstate', swallow, true);
         window.history.back();
       }
     };
-  }, [active]);
+  }, [active, focused]);
 }
 
 export function UnsavedChangesHost() {

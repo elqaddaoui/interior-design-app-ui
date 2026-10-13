@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { Button, Icon, Input, Sheet, Toggle, Txt } from '@/components/ui';
+import { Button, Icon, Input, MediaView, Sheet, Toggle, Txt } from '@/components/ui';
 import { ICON_CHOICES } from '@/components/ui/Icon';
 import { ColorPicker } from './ColorPicker';
 import { ImageField } from './ImageField';
 import { useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
 import { toast } from '@/store/useToast';
+import { requestLeave, useLeaveGuard } from '@/hooks/useLeaveGuard';
 import type { LText } from '@/data/types';
 
 export type Opt = { value: string; label: string };
@@ -135,7 +136,7 @@ export function normalize(fields: FieldDef[], v: any) {
   return out;
 }
 
-function FormDialog({ visible, title, fields, initial, onClose, onSubmit }: { visible: boolean; title: string; fields: FieldDef[]; initial: any; onClose: () => void; onSubmit: (v: any) => Promise<void> | void }) {
+function FormDialog({ visible, title, fields, initial, onClose, onSubmit, onDraftChange }: { visible: boolean; title: string; fields: FieldDef[]; initial: any; onClose: () => void; onSubmit: (v: any) => Promise<void> | void; onDraftChange?: (v: any) => void }) {
   const { t } = useT();
   const L = useL();
   const s = useStore();
@@ -146,15 +147,26 @@ function FormDialog({ visible, title, fields, initial, onClose, onSubmit }: { vi
   const submit = async () => {
     const e = validate(fields, v, t);
     setErr(e);
-    if (Object.keys(e).length) return;
+    if (Object.keys(e).length) return false;
     setBusy(true);
-    try { await onSubmit(normalize(fields, v)); } catch { toast(t('improve.saveError')); } finally { setBusy(false); }
+    try { await onSubmit(normalize(fields, v)); return true; } catch { toast(t('improve.saveError')); return false; } finally { setBusy(false); }
   };
+  const dirty = visible && JSON.stringify(v) !== JSON.stringify(initial ?? {});
+  useLeaveGuard(dirty, submit, onClose);
+  useEffect(() => { if (visible) onDraftChange?.(v); }, [v, visible, onDraftChange]);
+  const close = () => { if (!busy) requestLeave(onClose); };
   return (
-    <Sheet visible={visible} onClose={() => { if (!busy) onClose(); }} title={title} wide footer={<View className="flex-row gap-3">
-      <Button title={t('common.cancel')} variant="soft" onPress={onClose} disabled={busy} className="flex-1" />
-      <Button testID="form-save" title={t('common.save')} onPress={submit} loading={busy} className="flex-1" />
+    <Sheet visible={visible} onClose={close} title={title} wide footer={<View className="flex-row gap-3">
+      <Button title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" />
+      <Button testID="form-save" title="Submit" onPress={submit} loading={busy} className="flex-1" />
     </View>}>
+      {visible ? <View testID="form-preview" className="bg-soft rounded-xl p-3 mb-3">
+        <Txt className="text-muted text-[11px] font-bold mb-2">LIVE PREVIEW · NOT SAVED</Txt>
+        {v.image || v.media?.uri ? <MediaView uri={v.image || v.media?.poster || v.media?.uri} style={{ height: 130, borderRadius: 10, marginBottom: 8 }} /> : null}
+        <Txt className="font-bold text-[18px]">{L(v.title) || v.name || title}</Txt>
+        {v.subtitle ? <Txt className="text-muted text-[13px]">{L(v.subtitle)}</Txt> : null}
+        {v.colors ? <View className="flex-row gap-1 mt-2">{v.colors.map((color: string, i: number) => <View key={i} style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: color }} />)}</View> : null}
+      </View> : null}
       <FormFields fields={visible ? fields : []} value={v} errors={err} ctx={ctx} onChange={(key, value) => setV((old: any) => ({ ...old, [key]: value }))} />
     </Sheet>
   );
@@ -187,17 +199,21 @@ function BatchFormDialog({ mode, title, fields, initial, initialKeys = [], blank
   const pasted = mode === 'add' && pasteMode;
   const lines = text.split(/\r?\n/).map((line) => line.trim().replace(/^(?:[-*•]\s+|\d+[.)]\s+)/, '')).filter(Boolean);
   const submit = async () => {
-    if (pasted && (!lines.length || lines.length > 50)) { setPasteError(t('improve.pasteError')); return; }
+    if (pasted && (!lines.length || lines.length > 50)) { setPasteError(t('improve.pasteError')); return false; }
     const active = mode === 'edit' ? fields.filter((f) => keys.includes(f.key)) : fields;
     const values = pasted ? pasteDrafts.map((draft, i) => ({ ...shared, id: draft.id, [titleField!.key]: titleField!.kind === 'ltext' ? { dar: lines[i], ar: lines[i], fr: lines[i] } : lines[i] })) : drafts;
     const nextErrors = values.map((v) => validate(active, v, t));
     setErrors(nextErrors);
-    if (nextErrors.some((e) => Object.keys(e).length)) return;
+    if (nextErrors.some((e) => Object.keys(e).length)) return false;
     setBusy(true);
-    try { await onSubmit(values.map((v) => normalize(active, v)), keys); }
-    catch { toast(t('improve.saveError')); } finally { setBusy(false); }
+    try { await onSubmit(values.map((v) => normalize(active, v)), keys); return true; }
+    catch { toast(t('improve.saveError')); return false; } finally { setBusy(false); }
   };
-  return <Sheet visible={!!mode} title={title} wide={mode === 'add'} onClose={() => { if (!busy) onClose(); }} footer={<View className="flex-row gap-3"><Button title={t('common.cancel')} variant="soft" onPress={onClose} disabled={busy} className="flex-1" /><Button testID="batch-save" title={pasted ? t('improve.createCount', { count: lines.length }) : t('common.save')} onPress={submit} loading={busy} disabled={mode === 'edit' && !keys.length || pasted && (!lines.length || lines.length > 50)} className="flex-1" /></View>}>
+  const snapshot = JSON.stringify({ text, shared, drafts, keys });
+  const original = useRef(snapshot);
+  useLeaveGuard(!!mode && snapshot !== original.current, submit, onClose);
+  const close = () => { if (!busy) requestLeave(onClose); };
+  return <Sheet visible={!!mode} title={title} wide={mode === 'add'} onClose={close} footer={<View className="flex-row gap-3"><Button title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" /><Button testID="batch-save" title={pasted ? t('improve.createCount', { count: lines.length }) : t('common.save')} onPress={submit} loading={busy} disabled={mode === 'edit' && !keys.length || pasted && (!lines.length || lines.length > 50)} className="flex-1" /></View>}>
     {mode === 'edit' ? <>
       <Txt className="text-muted text-[13px] leading-[21px] mb-3">{t('improve.batchHelp')}</Txt>
       {fields.filter((f) => !f.show || f.show(drafts[0] ?? {})).map((f) => <View key={f.key} className="rounded-xl border border-line p-3 mb-3 bg-surface">

@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import { useViewState } from '@/hooks/useViewState';
+import React, { useMemo } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { router } from '@/hooks/useLeaveGuard';
 import { useStore, sorted } from '@/store/useStore';
@@ -20,7 +21,7 @@ export default function Home() {
   const branding = useStore((s) => s.doc.branding);
   const visibleTabs = useMemo(() => sorted(tabs).filter((x) => x.visible), [tabs]);
   const tabsVisible = useStore((s) => s.doc.settings.homeTabsVisible) !== false;
-  const [selectedTab, setTabId] = useState<string>(ALL);
+  const [selectedTab, setTabId] = useViewState<string>('selectedTab', ALL);
 
   const tabId = !tabsVisible || selectedTab === ALL ? ALL : visibleTabs.some((x) => x.id === selectedTab) ? selectedTab : ALL;
 

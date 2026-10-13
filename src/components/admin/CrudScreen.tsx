@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { Button, Card, ConfirmSheet, Icon, Txt } from '@/components/ui';
 import { CrudTable } from './CrudTable';
@@ -9,6 +9,7 @@ import { ENTITIES } from '@/admin/entities';
 import { nextOrder, sorted, uid, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
 import type { CollName } from '@/data/types';
+import { useViewState } from '@/hooks/useViewState';
 import { toast } from '@/store/useToast';
 
 /** The one generic CRUD screen: every admin entity is described by a config in `admin/entities.tsx`. */
@@ -19,7 +20,9 @@ export function CrudScreen({ entity }: { entity: string }) {
   const s = useStore();
   const [editing, setEditing] = useState<any | null>(null);
   const [isNew, setIsNew] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useViewState<string[]>('selected', []);
+  const [preview, setPreview] = useState<any>(null);
+  const previewDraft = useCallback((v: any) => setPreview(v), []);
   const [quickKeys, setQuickKeys] = useState<string[]>([]);
   const [batch, setBatch] = useState<'add' | 'edit' | null>(null);
   const [bulkDelete, setBulkDelete] = useState(false);
@@ -31,7 +34,7 @@ export function CrudScreen({ entity }: { entity: string }) {
   const rows = useMemo(() => (cfg?.ordered ? sorted((list ?? []) as any[]) : list ?? []), [cfg, list]);
   if (!cfg) return null;
 
-  const open = (r?: any) => { setIsNew(!r); setEditing(r ?? { ...cfg.blank(ctx) }); };
+  const open = (r?: any) => { setPreview(null); setIsNew(!r); setEditing(r ?? { ...cfg.blank(ctx) }); };
   const submit = async (v: any) => {
     if (cfg.name === 'models' && v.isDefault) {
       await Promise.all(s.models.filter((m) => m.isDefault && m.id !== v.id).map((m) => s.update('models', m.id, { isDefault: false })));
@@ -87,13 +90,13 @@ export function CrudScreen({ entity }: { entity: string }) {
         </ScrollView>
       </Card> : undefined}>
       {entity === 'tabs' ? <HomeTabsOption /> : null}
-      <CrudTable onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={rows} cols={cfg.cols(ctx)} rowTestID="row"
+      <CrudTable onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={editing && preview ? isNew ? [...rows, preview] : rows.map((r) => r.id === preview.id ? preview : r) : rows} cols={cfg.cols(ctx)} rowTestID="row"
         onEdit={open} onDelete={setDel}
         onMove={cfg.ordered && bulkEnabled ? (r, d) => s.move(cfg.name, r.id, d) : undefined}
         onToggle={(r) => s.update(cfg.name, r.id, { visible: r.visible === false } as any)} />
       <View className="h-6" />
       <FormModal visible={!!editing} title={`${isNew ? t('admin.crud.addNew') : t('admin.crud.editItem')} · ${t(`admin.nav.${cfg.navKey}`)}`}
-        fields={cfg.fields(ctx)} initial={editing} onClose={() => setEditing(null)} onSubmit={submit} />
+        fields={cfg.fields(ctx)} initial={editing} onDraftChange={previewDraft} onClose={() => setEditing(null)} onSubmit={submit} />
       <BatchFormModal initialKeys={quickKeys} mode={batch} title={batch === 'edit' ? t('improve.editCount', { count: selected.length }) : t('improve.addMultiple')} fields={cfg.fields(ctx)} initial={rows.find((r) => selected.includes(r.id))} blank={() => ({ ...cfg.blank({ ...ctx, s: useStore.getState() }), id: uid(cfg.name) })} onClose={() => setBatch(null)} onSubmit={submitBatch} />
       <ConfirmSheet visible={bulkDelete} onClose={() => setBulkDelete(false)} message={t('improve.deleteCount', { count: selected.length })} confirmLabel={t('common.delete')} cancelLabel={t('common.cancel')} onConfirm={() => run(async () => { if (bulkEnabled) { await removeRows(cfg.name, selected); setSelected([]); } })} />
       <ConfirmSheet visible={!!del} onClose={() => setDel(null)} message={t('admin.crud.confirmDelete')} confirmLabel={t('common.delete')} cancelLabel={t('common.cancel')} onConfirm={() => del && run(() => removeRows(cfg.name, [del.id]))} />

@@ -260,6 +260,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 /** Standard admin page: title row + scrollable, width-limited body. */
 export function AdminPage({ title, right, children, max = 1100, floating }: { title: string; right?: React.ReactNode; children: React.ReactNode; max?: number; floating?: React.ReactNode }) {
   const { tablet } = useBp();
+  const router = useRouter();
   return (
     <View style={{ flex: 1, minHeight: 0 }}><RememberScroll contentContainerStyle={{ padding: tablet ? 16 : 12, paddingBottom: floating ? 160 : 32 }}>
       <View style={{ width: '100%', maxWidth: max, alignSelf: 'center' }}>

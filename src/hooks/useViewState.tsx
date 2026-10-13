@@ -47,7 +47,7 @@ export function SearchTarget({ id, children }: { id: string; children: React.Rea
       const node = ref.current as unknown as HTMLElement;
       node?.scrollIntoView?.({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
     } else if (scroll?.current) {
-      const parent = scroll.current.getInnerViewRef();
+      const parent = scroll.current.getInnerViewNode();
       if (parent) ref.current?.measureLayout(parent, (_x, y) => scroll.current?.scrollTo({ y: Math.max(0, y - 16), animated: true }), () => {});
     }
     opacity.setValue(0.35);
