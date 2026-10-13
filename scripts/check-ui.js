@@ -32,6 +32,119 @@ async function main() {
   const saved = (key) => page.evaluate((key) => JSON.parse(localStorage.getItem(`dwira:v1:${key}`)), key);
   const seed = async (key, value) => { await page.evaluate(({ key, value }) => localStorage.setItem(`dwira:v1:${key}`, JSON.stringify(value)), { key, value }); };
 
+
+  // Draft documents, form previews, inline changes, exact search, and history restoration.
+  await go('/admin', 'dash-search');
+  const originalSettings = await saved('doc:settings');
+  await page.getByTestId('nav-interface').click();
+  await page.getByTestId('layout-masonry').click();
+  assert.deepEqual(await saved('doc:settings'), originalSettings, 'Preview wrote to storage');
+  await page.getByTestId('nav-tools').click();
+  assert.equal(await page.getByTestId('unsaved-message').innerText(), 'You have unsaved changes. Save or discard?');
+  await page.getByTestId('unsaved-cancel').click();
+  assert.match(page.url(), /\/admin\/interface$/);
+  assert.equal(await page.getByTestId('layout-masonry').getAttribute('aria-checked'), 'true');
+  await page.evaluate(() => history.back());
+  await page.getByTestId('unsaved-discard').click();
+  await page.getByTestId('dash-search').waitFor();
+  assert.deepEqual(await saved('doc:settings'), originalSettings);
+
+  await page.getByTestId('nav-interface').click();
+  for (const [language, fonts] of [['fr', ['Inter', 'Roboto', 'Poppins', 'Montserrat', 'Lato']], ['ar', ['Tajawal', 'Cairo', 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'Alexandria']]]) {
+    for (const font of fonts) {
+      await page.getByTestId(`font-dropdown-${language}`).click();
+      const specimen = page.getByTestId(`chip-${font}`);
+      assert((await specimen.innerText()).includes(font));
+      await specimen.click();
+      const family = await page.getByTestId(`font-preview-${language}`).locator('div').first().evaluate((el) => getComputedStyle(el).fontFamily);
+      assert(family.includes(font));
+    }
+  }
+  await page.getByTestId('interface-submit').click();
+  await page.getByTestId('admin-draft-bar').waitFor({ state: 'hidden' });
+  assert.equal((await saved('doc:settings')).frenchFont, 'Lato');
+  assert.equal((await saved('doc:settings')).arabicFont, 'Alexandria');
+  await page.getByTestId('layout-editorial').click();
+  await page.getByTestId('nav-tools').click();
+  await page.getByTestId('unsaved-save').click();
+  await page.getByTestId('crud-add').waitFor();
+  assert.equal((await saved('doc:settings')).galleryLayout, 'editorial');
+
+  await page.getByTestId('edit-tool_interior').click();
+  const toolName = await page.getByTestId('lt-title-fr').inputValue();
+  const originalTools = await saved('tools');
+  await page.getByTestId('lt-title-fr').fill('Unsubmitted preview');
+  assert.match(await page.getByTestId('form-preview').innerText(), /Unsubmitted preview/);
+  assert.deepEqual(await saved('tools'), originalTools);
+  await page.evaluate(() => history.back());
+  await page.getByTestId('unsaved-cancel').click();
+  assert.equal(await page.getByTestId('lt-title-fr').inputValue(), 'Unsubmitted preview');
+  await page.getByTestId('sheet-close').click();
+  await page.getByTestId('unsaved-discard').click();
+  await page.getByTestId('form-save').waitFor({ state: 'hidden' });
+  await page.getByTestId('edit-tool_interior').click();
+  assert.equal(await page.getByTestId('lt-title-fr').inputValue(), toolName);
+  await page.getByTestId('lt-title-fr').fill('Saved preview');
+  await page.getByTestId('sheet-close').click();
+  await page.getByTestId('unsaved-save').click();
+  await page.getByTestId('form-save').waitFor({ state: 'hidden' });
+  assert.equal((await saved('tools')).find((row) => row.id === 'tool_interior').title.fr, 'Saved preview');
+  await page.getByTestId('toggle-tool_interior').click();
+  const committedTools = await saved('tools');
+  await page.getByTestId('nav-users').click();
+  await page.getByTestId('unsaved-cancel').click();
+  assert.deepEqual(await saved('tools'), committedTools);
+  await page.getByTestId('crud-discard').click();
+
+  await page.getByTestId('nav-dashboard').click();
+  await page.getByTestId('dash-search').fill('Japandi');
+  await page.getByTestId('range-90').click();
+  await page.getByTestId('search-result-pal_japandi').click();
+  const target = page.getByTestId('target-pal_japandi');
+  await target.waitFor();
+  await page.waitForTimeout(500);
+  const targetBox = await target.boundingBox();
+  assert(targetBox.y >= 0 && targetBox.y + targetBox.height <= 1000);
+  assert.match(page.url(), /target=pal_japandi/);
+  await page.getByTestId('admin-back').click();
+  assert.equal(await page.getByTestId('dash-search').inputValue(), 'Japandi');
+  assert.match(await page.getByTestId('range-90').getAttribute('class'), /bg-ink/);
+  await page.getByTestId('dash-search').fill('');
+  await page.waitForTimeout(300);
+  const pageScroll = page.locator('[data-testid^="scroll-"][data-testid$=":page"]').last();
+  await pageScroll.evaluate((el) => { el.scrollTop = 100; });
+  await page.waitForTimeout(200);
+  const previousScroll = await pageScroll.evaluate((el) => el.scrollTop);
+  await page.getByTestId('nav-users').click();
+  await page.evaluate(() => history.back());
+  await page.getByTestId('dash-search').waitFor();
+  await page.waitForTimeout(500);
+  assert(Math.abs(await pageScroll.evaluate((el) => el.scrollTop) - previousScroll) < 2, 'Page scroll was reset');
+
+  for (const width of [320, 375, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await go('/admin/interface', 'layout-grid');
+    const cards = await Promise.all(['grid', 'masonry', 'editorial', 'carousel'].map((id) => page.getByTestId(`layout-${id}`).boundingBox()));
+    assert(Math.abs(cards[0].y - cards[1].y) < 2 && Math.abs(cards[2].y - cards[3].y) < 2);
+    assert(cards[2].y > cards[0].y);
+    assert(cards.every((box) => box.x >= 0 && box.x + box.width <= width));
+    if (width < 1000) {
+      await page.getByTestId('admin-menu-btn').click();
+      const menu = page.getByTestId('scroll-shared:admin-menu');
+      await menu.evaluate((el) => { el.scrollTop = 140; });
+      await page.waitForTimeout(200);
+      const before = await menu.evaluate((el) => el.scrollTop);
+      await page.evaluate(() => history.back());
+      await page.getByTestId('admin-drawer').waitFor({ state: 'hidden' });
+      assert.match(page.url(), /\/admin\/interface$/);
+      await page.getByTestId('admin-menu-btn').click();
+      await page.waitForTimeout(500);
+      assert(Math.abs(await menu.evaluate((el) => el.scrollTop) - before) < 2, 'Menu scroll was reset');
+      await page.getByTestId('admin-menu-close').click();
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
   for (const [path, id] of [['/admin', 'dash-search'], ['/admin/?period=30', 'dash-search'], ['/admin/requests', 'req-auto'], ['/admin/palettes', 'crud-add'], ['/tool/tool_interior', 'wizard-continue']]) {
     await go(path, id);
     await page.reload(); await page.getByTestId(id).first().waitFor();
@@ -84,10 +197,13 @@ async function main() {
   await go('/', 'brand-mark');
   assert.match(await page.getByTestId('brand-mark').innerText(), /Dwira/);
   await go('/admin/interface', 'bulk-enable-tabs');
+  await page.getByTestId('font-dropdown-fr').click();
   await page.getByTestId('chip-Inter').click();
+  await page.getByTestId('font-dropdown-ar').click();
   await page.getByTestId('chip-Tajawal').click();
   if (await page.getByTestId('bulk-enable-tabs').getAttribute('aria-checked') !== 'true') await page.getByTestId('bulk-enable-tabs').click();
-  await page.waitForTimeout(300);
+  await page.getByTestId('interface-submit').click();
+  await page.getByTestId('admin-draft-bar').waitFor({ state: 'hidden' });
   const settings = await saved('doc:settings');
   assert.equal(settings.frenchFont, 'Inter');
   assert.equal(settings.arabicFont, 'Tajawal');
@@ -123,6 +239,7 @@ async function main() {
   assert.equal(tabs.filter((row) => row.title.fr === 'Regression edited').length, 2);
   for (const row of added) await page.getByTestId(`select-${row.id}`).click();
   await page.getByTestId('crud-batch-move--1').click();
+  await page.getByTestId('crud-submit').click();
   await page.waitForTimeout(300);
   tabs = (await saved('tabs')).sort((a, b) => a.order - b.order);
   assert.deepEqual(tabs.slice(-3, -1).map((row) => row.id), added.map((row) => row.id));
@@ -204,11 +321,15 @@ async function main() {
   await page.getByTestId('hometab-tab_interior').click();
   await go('/admin/tabs', 'home-tabs-visible');
   await page.getByTestId('home-tabs-visible').click();
+  await page.getByTestId('admin-draft-submit').click();
+  await page.getByTestId('admin-draft-bar').waitFor({ state: 'hidden' });
   await go('/', 'brand-mark');
   assert.equal(await page.locator('[data-testid^="hometab-"]').count(), 0);
   assert.equal(await page.locator('[data-testid^="tool-tool_"]').count(), toolCount);
   await go('/admin/tabs', 'home-tabs-visible');
   await page.getByTestId('home-tabs-visible').click();
+  await page.getByTestId('admin-draft-submit').click();
+  await page.getByTestId('admin-draft-bar').waitFor({ state: 'hidden' });
 
   // Mobile request cards, bulk panel and title-paste creation stay inside the viewport.
   for (const lang of ['fr', 'ar']) {
@@ -233,6 +354,8 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('[data-testid="batch-save"]').getBoundingClientRect().bottom <= innerHeight);
     assert.equal(await page.getByTestId('batch-titles').inputValue(), 'Mobile A\nMobile B');
     await page.getByTestId('sheet-header').getByRole('button').click();
+    await page.getByTestId('unsaved-discard').click();
+    await page.getByTestId('batch-save').waitFor({ state: 'hidden' });
   }
   // Slider origin follows its heading direction; controls sit at the image sides.
   for (const lang of ['fr', 'ar']) {
@@ -255,7 +378,7 @@ async function main() {
   assert(scrollColor.trim().startsWith('#'));
 
   assert.deepEqual(errors, []);
-  console.log('PASS: direct routes/refresh/login, asset 404s, safe palette upgrades, shared text-paste creation/limits, long-press selection, isolated row actions, bulk add/edit/move/delete, home-tab visibility, mobile request spacing, compact dialogs, theme scroll colors, uploaded logos, video autoplay, fonts, galleries and RTL side controls');
+  console.log('PASS: preview-only storage, Save/Discard/Cancel on browser/in-app Back, exact search, remembered controls/page/menu scroll, 2x2 exhibition cards, ten font specimens, direct routes/refresh/login, asset 404s, safe palette upgrades, shared text-paste creation/limits, long-press selection, isolated row actions, bulk add/edit/move/delete, home-tab visibility, mobile request spacing, compact dialogs, theme scroll colors, uploaded logos, video autoplay, fonts, galleries and RTL side controls');
   await browser.close();
 }
 main().catch((error) => { console.error(error); process.exit(1); });
