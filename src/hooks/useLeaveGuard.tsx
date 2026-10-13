@@ -103,6 +103,7 @@ export function UnsavedChangesHost() {
     } catch { toast('Could not save changes. Your draft is still available.'); }
     finally { setBusy(false); }
   };
+  if (!pending) return null;
   return <Sheet visible={!!pending} history={false} onClose={() => { if (!busy) dialog.setState({ pending: null }); }} title="Unsaved changes">
     <Txt testID="unsaved-message" className="font-bold text-[17px] mb-4">You have unsaved changes. Save or discard?</Txt>
     <View className="gap-2">

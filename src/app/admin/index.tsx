@@ -44,6 +44,13 @@ function Kpi({ id, icon, label, value, delta, sub, active, onPress }: { id: stri
   );
 }
 
+const Section = ({ title, right, children, className = '' }: { title: string; right?: React.ReactNode; children: React.ReactNode; className?: string }) => (
+    <Card className={`p-4 ${className}`}>
+      <View className="flex-row items-center justify-between mb-3 gap-2"><Txt className="font-extrabold text-[16px] flex-1">{title}</Txt>{right}</View>
+      {children}
+    </Card>
+  );
+
 export default function Dashboard() {
   const { t, lang } = useT();
   const L = useL();
@@ -106,12 +113,6 @@ export default function Dashboard() {
   const agoText = (at: number) => { const a = ago(at); return a.key === 'now' ? t('admin.dash.now') : t(`admin.dash.${a.key}`, { n: a.n }); };
 
   const pill = (on: boolean) => `px-3.5 h-9 rounded-full items-center justify-center ${on ? 'bg-ink' : 'bg-surface2'}`;
-  const Section = ({ title, right, children, className = '' }: { title: string; right?: React.ReactNode; children: React.ReactNode; className?: string }) => (
-    <Card className={`p-4 ${className}`}>
-      <View className="flex-row items-center justify-between mb-3 gap-2"><Txt className="font-extrabold text-[16px] flex-1">{title}</Txt>{right}</View>
-      {children}
-    </Card>
-  );
   const metricLabel = (m: Metric) => t(`admin.dash.m${m[0].toUpperCase()}${m.slice(1)}`);
 
   return (

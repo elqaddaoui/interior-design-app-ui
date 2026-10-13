@@ -1,4 +1,4 @@
-import { useViewState } from '@/hooks/useViewState';
+import { SearchTarget, useViewState } from '@/hooks/useViewState';
 import React from 'react';
 import { Linking, Pressable, View } from 'react-native';
 import { Button, Card, EmptyState, Icon, MediaView, Sheet, Toggle, Txt } from '@/components/ui';
@@ -11,7 +11,6 @@ import { toast } from '@/store/useToast';
 import { waLink } from '@/lib/share';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { requestLeave, useLeaveGuard } from '@/hooks/useLeaveGuard';
-import { SearchTarget } from '@/hooks/useViewState';
 import { useLocalSearchParams } from 'expo-router';
 import type { RenderRequest, RequestStatus } from '@/data/types';
 
@@ -43,7 +42,8 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const { t } = useT();
   const r = s.requests.find((x) => x.id === id);
   const [final, setFinal] = useViewState('final', '');
-  React.useEffect(() => { setFinal(r?.finalResult ?? ''); }, [id]);
+  const record = React.useRef(id);
+  React.useEffect(() => { if (record.current !== id) { record.current = id; setFinal(r?.finalResult ?? ''); } }, [id, r?.finalResult, setFinal]);
   const dirty = !!r && final !== (r.finalResult ?? '');
   const saveDraft = async () => { if (r) await s.update('requests', r.id, { finalResult: final }); };
   useLeaveGuard(dirty, saveDraft, () => { setFinal(r?.finalResult ?? ''); onClose(); });

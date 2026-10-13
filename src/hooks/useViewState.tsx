@@ -12,11 +12,15 @@ function usePageKey() {
 /** Visit-scoped state survives remounts without leaking into another history entry. */
 export function useViewState<T>(name: string, initial: T | (() => T)): [T, React.Dispatch<React.SetStateAction<T>>] {
   const key = `${usePageKey()}:${name}`;
-  const [value, update] = useState<T>(() => states.has(key) ? states.get(key) as T : typeof initial === 'function' ? (initial as () => T)() : initial);
-  const set: React.Dispatch<React.SetStateAction<T>> = (next) => update((old) => {
-    const value = typeof next === 'function' ? (next as (old: T) => T)(old) : next;
-    states.set(key, value); return value;
-  });
+  const read = () => states.has(key) ? states.get(key) as T : typeof initial === 'function' ? (initial as () => T)() : initial;
+  const [record, update] = useState<{ key: string; value: T }>(() => ({ key, value: read() }));
+  if (record.key !== key) update({ key, value: read() });
+  const value = record.key === key ? record.value : read();
+  const set: React.Dispatch<React.SetStateAction<T>> = useCallback((next) => update((old) => {
+    const previous = old.key === key ? old.value : states.get(key) as T;
+    const value = typeof next === 'function' ? (next as (old: T) => T)(previous) : next;
+    states.set(key, value); return { key, value };
+  }), [key]);
   return [value, set];
 }
 const ScrollContext = createContext<React.RefObject<ScrollView | null> | null>(null);
@@ -40,9 +44,12 @@ export function SearchTarget({ id, children }: { id: string; children: React.Rea
   const focused = useIsFocused();
   const ref = useRef<View>(null); const scroll = useContext(ScrollContext);
   const opacity = useRef(new Animated.Value(0)).current;
+  const revealed = useRef('');
+  const token = `${id}:${focus ?? target ?? ''}`;
   const { colors } = useTheme();
   const reveal = useCallback(() => {
-    if (target !== id || !focused) return;
+    if (target !== id || !focused || revealed.current === token) return;
+    revealed.current = token;
     if (Platform.OS === 'web') {
       const node = ref.current as unknown as HTMLElement;
       node?.scrollIntoView?.({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
@@ -52,7 +59,7 @@ export function SearchTarget({ id, children }: { id: string; children: React.Rea
     }
     opacity.setValue(0.35);
     Animated.timing(opacity, { toValue: 0, duration: 1800, useNativeDriver: true }).start();
-  }, [target, id, focused, scroll, opacity]);
+  }, [target, id, focused, scroll, opacity, token]);
   useFocusEffect(useCallback(() => { const timer = setTimeout(reveal, 200); return () => clearTimeout(timer); }, [reveal, focus]));
   return <View ref={ref} collapsable={false} onLayout={reveal} testID={`target-${id}`} style={{ minWidth: 0 }}>
     {children}

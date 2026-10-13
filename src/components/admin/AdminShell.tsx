@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Pressable, View } from 'react-native';
 import { Href, usePathname } from 'expo-router';
-import { useRouter } from '@/hooks/useLeaveGuard';
+import { useRouter, requestLeave, useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, Icon, Txt } from '@/components/ui';
 import { useBp } from '@/hooks/useBp';
@@ -9,7 +9,6 @@ import { useT } from '@/i18n';
 import { useLocal } from '@/store/useLocal';
 import { useStore } from '@/store/useStore';
 import { RememberScroll, SearchTarget, useViewState } from '@/hooks/useViewState';
-import { requestLeave, useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import type { AdminNavMode } from '@/data/types';
 
@@ -73,7 +72,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const pending = useStore((s) => s.requests.filter((r) => r.status === 'pending').length);
   const [open, setOpen] = useViewState('drawer-open', false); // mobile drawer overlay
   const [collapsed, setCollapsed] = useViewState('drawer-collapsed', false); // desktop drawer
-  useEffect(() => setOpen(false), [pathname]);
+  useEffect(() => setOpen(false), [pathname, setOpen]);
   useBackCheckpoint(open, () => setOpen(false));
   const settingsDraft = useDraftDoc('settings');
 
@@ -108,7 +107,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       {ADMIN_GROUPS.map((g) => (
         <View key={g.key} className="mb-3">
           <Txt className="text-muted text-[11px] font-bold uppercase tracking-wide px-3 mb-1">{t(`admin.group.${g.key}`)}</Txt>
-          <View style={{ gap: 2 }}>{g.items.map((n) => <View key={n.key} onTouchEnd={onItem}><Row n={n} /></View>)}</View>
+          <View style={{ gap: 2 }}>{g.items.map((n) => <View key={n.key} onTouchEnd={onItem}>{Row({ n })}</View>)}</View>
         </View>
       ))}
     </RememberScroll>
@@ -130,7 +129,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   /** Icon-only fixed rail (mobile + desktop). */
   const Rail = () => (
     <View className="w-[64px] bg-surface border-e border-line items-center" style={{ paddingTop: insets.top + 8 }}>
-      <Brand compact />
+      {Brand({ compact: true })}
       <RememberScroll stateKey="shared:admin-rail" showsVerticalScrollIndicator={desktop} style={{ flex: 1, alignSelf: 'stretch' }} contentContainerStyle={{ alignItems: 'center', paddingVertical: 10 }}>
         {ADMIN_GROUPS.map((g, gi) => (
           <View key={g.key} className="items-center" style={{ gap: 4 }}>
@@ -138,17 +137,17 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             {g.items.map((n) => {
               const on = active(n.href);
               return (
-                <Pressable key={n.key} testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
+                <SearchTarget key={n.key} id={`menu-${n.key}`}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
                   className={`w-11 h-11 rounded-xl items-center justify-center ${on ? 'bg-primary' : 'active:bg-surface2'}`}>
                   <Icon name={n.icon} size={22} tone={on ? 'onprimary' : 'fg'} />
                   {n.key === 'requests' && pending > 0 ? <View className="absolute -top-0.5 -end-0.5 bg-danger rounded-full min-w-[16px] h-4 px-1 items-center justify-center"><Txt className="text-white text-[10px] font-bold">{pending}</Txt></View> : null}
-                </Pressable>
+                </Pressable></SearchTarget>
               );
             })}
           </View>
         ))}
       </RememberScroll>
-      <Footer compact />
+      {Footer({ compact: true })}
     </View>
   );
 
@@ -163,12 +162,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               {g.items.map((n) => {
                 const on = active(n.href);
                 return (
-                  <Pressable key={n.key} testID={`nav-${n.key}`} accessibilityRole="link" onPress={() => go(n.href)}
+                  <SearchTarget key={n.key} id={`menu-${n.key}`}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" onPress={() => go(n.href)}
                     className={`flex-row items-center gap-2 px-3 h-9 rounded-full ${on ? 'bg-primary' : 'bg-surface2'}`}>
                     <Icon name={n.icon} size={17} tone={on ? 'onprimary' : 'fg'} />
                     <Txt className={`font-semibold text-[13px] ${on ? 'text-onprimary' : ''}`}>{label(n.key)}</Txt>
                     {n.key === 'requests' ? <Badge n={pending} /> : null}
-                  </Pressable>
+                  </Pressable></SearchTarget>
                 );
               })}
             </View>
@@ -182,7 +181,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     <View className="flex-row items-center px-3 h-14 gap-2 bg-bg">
       {menuBtn ? <Pressable testID="admin-menu-btn" accessibilityLabel={t('admin.menu.open')} onPress={() => setOpen(true)} className="w-10 h-10 rounded-full items-center justify-center active:bg-surface2"><Icon name="menu" size={23} /></Pressable> : null}
       <Txt numberOfLines={1} className="font-extrabold text-[17px] flex-1">{name} · {t('admin.title')}</Txt>
-      <LayoutBtn />
+      {LayoutBtn()}
       {mode === 'top' ? (
         <>
           <Pressable onPress={() => router.push('/')} accessibilityLabel={t('admin.openApp')} className="w-10 h-10 items-center justify-center"><Icon name="open-in-new" size={21} /></Pressable>
@@ -196,9 +195,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   if (mode === 'rail') {
     return (
       <View className="flex-1 flex-row bg-bg">
-        <Rail />
+        {Rail()}
         <View className="flex-1">
-          {!desktop ? <View style={{ paddingTop: insets.top }}><TopBar /></View> : null}
+          {!desktop ? <View style={{ paddingTop: insets.top }}>{TopBar({})}</View> : null}
           {children}{draftBar}
         </View>
       </View>
@@ -208,8 +207,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   if (mode === 'top') {
     return (
       <View className="flex-1 bg-bg" style={{ paddingTop: insets.top }}>
-        <TopBar />
-        <TopMenu />
+        {TopBar({})}
+        {TopMenu()}
         <View className="flex-1">{children}{draftBar}</View>
       </View>
     );
@@ -219,18 +218,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   if (desktop) {
     return (
       <View className="flex-1 flex-row bg-bg">
-        {collapsed ? <Rail /> : (
+        {collapsed ? Rail() : (
           <View className="w-[260px] bg-surface border-e border-line" style={{ paddingTop: insets.top }}>
-            <View className="px-4 py-4 flex-row items-center justify-between"><Brand /></View>
-            <GroupedList />
-            <Footer />
+            <View className="px-4 py-4 flex-row items-center justify-between">{Brand({})}</View>
+            {GroupedList({})}
+            {Footer({})}
           </View>
         )}
         <View className="flex-1">
           <View className="flex-row items-center px-3 h-12 gap-1">
             <Pressable testID="admin-collapse" accessibilityLabel={collapsed ? t('admin.menu.expand') : t('admin.menu.collapse')} onPress={() => setCollapsed((c) => !c)} className="w-10 h-10 rounded-full items-center justify-center active:bg-surface2"><Icon name="menu" size={22} /></Pressable>
             <View className="flex-1" />
-            <LayoutBtn />
+            {LayoutBtn()}
           </View>
           {children}{draftBar}
         </View>
@@ -239,17 +238,17 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }
   return (
     <View className="flex-1 bg-bg" style={{ paddingTop: insets.top }}>
-      <TopBar menuBtn />
+      {TopBar({ menuBtn: true })}
       <View className="flex-1">{children}{draftBar}</View>
       {open ? (
         <View testID="admin-drawer" className="absolute inset-0 flex-row" style={{ zIndex: 50 }}>
           <View className="w-[280px] max-w-[85%] bg-surface border-e border-line" style={{ paddingTop: insets.top }}>
             <View className="px-4 py-3 flex-row items-center justify-between">
-              <Brand />
+              {Brand({})}
               <Pressable testID="admin-menu-close" accessibilityLabel={t('admin.menu.close')} onPress={() => setOpen(false)} className="w-9 h-9 rounded-full items-center justify-center active:bg-surface2"><Icon name="close" size={21} /></Pressable>
             </View>
-            <GroupedList />
-            <Footer />
+            {GroupedList({})}
+            {Footer({})}
           </View>
           <Pressable accessibilityLabel={t('admin.menu.close')} onPress={() => setOpen(false)} className="flex-1" style={{ backgroundColor: 'rgba(0,0,0,0.45)' }} />
         </View>
