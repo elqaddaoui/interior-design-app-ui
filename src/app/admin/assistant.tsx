@@ -19,9 +19,9 @@ export default function AssistantAdmin() {
   const types: AssistantConfig['type'][] = ['ai', 'whatsapp'];
   return (
     <AdminPage title={t('admin.nav.assistant')} max={760}>
-      <Card className="p-5">
+      <Card className="p-3">
         <Txt className="text-[13px] font-semibold text-muted mb-1.5">{t('admin.assistant.type')}</Txt>
-        <View className="flex-row gap-3 mb-5">
+        <View className="flex-row gap-3 mb-3">
           {types.map((k) => (
             <Pressable key={k} testID={`asst-${k}`} onPress={() => setC({ ...c, type: k })} className={`flex-1 h-14 rounded-2xl flex-row items-center justify-center gap-2 ${c.type === k ? 'bg-primary' : 'bg-surface2'}`}>
               <Icon name={k === 'ai' ? 'robot-outline' : 'whatsapp'} size={22} tone={c.type === k ? 'onprimary' : 'fg'} />

@@ -22,12 +22,12 @@ export default function Credits() {
   };
   return (
     <AdminPage title={t('admin.nav.credits')} max={720}>
-      <Card className="p-5 mb-5">
+      <Card className="p-3 mb-3">
         <Input testID="credits-default" label={t('admin.credits.defaultCredits')} value={def} onChangeText={(v) => setDef(v.replace(/\D/g, ''))} keyboardType="number-pad" />
         <Txt className="text-muted text-[12px] mb-3 -mt-1">{t('admin.credits.defaultNote')}</Txt>
         <Button testID="credits-save" title={t('common.save')} onPress={saveDef} />
       </Card>
-      <Card className="p-5">
+      <Card className="p-3">
         <Txt className="font-extrabold text-[17px] mb-3">{t('admin.credits.grant')}</Txt>
         <Txt className="text-[13px] font-semibold text-muted mb-1.5">{t('admin.credits.user')}</Txt>
         <View className="flex-row flex-wrap gap-2 mb-4">

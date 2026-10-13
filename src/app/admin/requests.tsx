@@ -9,6 +9,10 @@ import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/useToast';
 import { waLink } from '@/lib/share';
+import { useDraftDoc } from '@/hooks/useDraftDoc';
+import { requestLeave, useLeaveGuard } from '@/hooks/useLeaveGuard';
+import { SearchTarget } from '@/hooks/useViewState';
+import { useLocalSearchParams } from 'expo-router';
 import type { RenderRequest, RequestStatus } from '@/data/types';
 
 const STATUSES: RequestStatus[] = ['pending', 'processing', 'delivered'];
@@ -40,6 +44,10 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const r = s.requests.find((x) => x.id === id);
   const [final, setFinal] = useViewState('final', '');
   React.useEffect(() => { setFinal(r?.finalResult ?? ''); }, [id]);
+  const dirty = !!r && final !== (r.finalResult ?? '');
+  const saveDraft = async () => { if (r) await s.update('requests', r.id, { finalResult: final }); };
+  useLeaveGuard(dirty, saveDraft, () => { setFinal(r?.finalResult ?? ''); onClose(); });
+  const close = () => requestLeave(onClose);
   if (!r) return <Sheet visible={false} onClose={onClose}><View /></Sheet>;
   const set = async (status: RequestStatus, extra: Partial<RenderRequest> = {}) => {
     await s.update('requests', r.id, { status, ...extra });
@@ -52,7 +60,7 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const saveFinal = async () => { await s.update('requests', r.id, { finalResult: final }); toast(t('admin.crud.saved')); };
   const open = () => Linking.openURL(waLink(r.whatsapp, t('admin.req.waMsg', { name: r.name })));
   return (
-    <Sheet visible={!!id} onClose={onClose} title={t('admin.req.details')} wide>
+    <Sheet visible={!!id} onClose={close} title={t('admin.req.details')} wide>
       <View className="flex-row items-center justify-between mb-3"><View><Txt className="text-[18px] font-extrabold">{r.name}</Txt><Txt className="text-muted">{r.whatsapp}</Txt></View><Badge s={r.status} /></View>
       <Choices r={r} />
       <View className="flex-row gap-3 mt-4">
@@ -76,13 +84,15 @@ export default function Requests() {
   const s = useStore();
   const [open, setOpen] = useViewState<string | null>('open', null);
   const [filter, setFilter] = useViewState<RequestStatus | 'all'>('filter', 'all');
-  const rows = [...s.requests].sort((a, b) => b.createdAt - a.createdAt).filter((r) => filter === 'all' || r.status === filter);
-  const auto = s.doc.settings.autoSendWhatsApp;
+  const { target } = useLocalSearchParams<{ target?: string }>();
+  const rows = [...s.requests].sort((a, b) => b.createdAt - a.createdAt).filter((r) => r.id === target || filter === 'all' || r.status === filter);
+  const { draft: settings, patch } = useDraftDoc('settings');
+  const auto = settings.autoSendWhatsApp;
   return (
     <AdminPage title={t('admin.req.title')}>
       <Card className="p-4 mb-4 flex-row items-center gap-3">
         <View className="flex-1"><Txt className="font-bold text-[14px]">{t('admin.req.autoSend')}</Txt><Txt className="text-muted text-[12px] leading-[20px] mt-2">{t('admin.req.autoSendNote')}</Txt></View>
-        <Toggle testID="req-auto" label={t('admin.req.autoSend')} value={auto} onValueChange={(v) => s.patchDoc('settings', { autoSendWhatsApp: v })} />
+        <Toggle testID="req-auto" label={t('admin.req.autoSend')} value={auto} onValueChange={(v) => patch({ autoSendWhatsApp: v })} />
       </Card>
       <View className="flex-row flex-wrap gap-2 mb-4">
         {(['all', ...STATUSES] as const).map((k) => (
@@ -100,7 +110,7 @@ export default function Requests() {
             </View>
           ) : null}
           {rows.map((r) => (
-            <Pressable key={r.id} testID={`req-${r.id}`} onPress={() => setOpen(r.id)} className="px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3">
+            <SearchTarget key={r.id} id={r.id}><Pressable testID={`req-${r.id}`} onPress={() => setOpen(r.id)} className="px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3">
               <MediaView uri={r.aiResult || r.photoUri} className="rounded-lg" style={{ width: 48, height: 48 }} />
               {desktop ? (<>
                 <Txt className="font-bold" style={{ flex: 1.2 }} numberOfLines={1}>{r.name}</Txt>
@@ -117,7 +127,7 @@ export default function Requests() {
                   <Choices r={r} />
                 </View>
               )}
-            </Pressable>
+            </Pressable></SearchTarget>
           ))}
         </Card>
       )}

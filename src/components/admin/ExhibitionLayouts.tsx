@@ -11,7 +11,8 @@ const layouts: { id: GalleryLayout; title: string; description: string }[] = [
   { id: 'carousel', title: 'Slideshow', description: 'One image in the spotlight' },
 ];
 export function ExhibitionLayouts({ value, onChange }: { value: GalleryLayout; onChange: (layout: GalleryLayout) => void }) {
-  const images = useStore((s) => s.inspirations.slice(0, 6).map((i) => i.image));
+  const inspirations = useStore((s) => s.inspirations);
+  const images = inspirations.slice(0, 6).map((i) => i.image);
   const photo = (i: number, height: number) => <MediaView uri={images[i % images.length]} style={{ height, borderRadius: 5 }} />;
   return <View testID="exhibition-layouts" style={{ flexDirection: 'row', flexWrap: 'wrap', margin: -4 }}>
     {layouts.map(({ id, title, description }) => <View key={id} style={{ width: '50%', padding: 4 }}>

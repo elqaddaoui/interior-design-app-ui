@@ -8,7 +8,7 @@ import { useBp } from '@/hooks/useBp';
 import { useT } from '@/i18n';
 import { useLocal } from '@/store/useLocal';
 import { useStore } from '@/store/useStore';
-import { RememberScroll, useViewState } from '@/hooks/useViewState';
+import { RememberScroll, SearchTarget, useViewState } from '@/hooks/useViewState';
 import { requestLeave, useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import type { AdminNavMode } from '@/data/types';
@@ -94,12 +94,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const Row = ({ n }: { n: NavItem }) => {
     const on = active(n.href);
     return (
-      <Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
+      <SearchTarget id={`menu-${n.key}`}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
         className={`flex-row items-center gap-3 px-3 h-11 rounded-xl ${on ? 'bg-primary' : 'active:bg-surface2'}`}>
         <Icon name={n.icon} size={20} tone={on ? 'onprimary' : 'fg'} />
         <Txt numberOfLines={1} className={`flex-1 font-semibold text-[14px] ${on ? 'text-onprimary' : ''}`}>{label(n.key)}</Txt>
         {n.key === 'requests' ? <Badge n={pending} /> : null}
-      </Pressable>
+      </Pressable></SearchTarget>
     );
   };
 

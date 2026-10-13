@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
-import { Button, Card, ConfirmSheet, Icon, Txt } from '@/components/ui';
+import { Button, Card, ConfirmSheet, Icon, Input, Txt } from '@/components/ui';
 import { CrudTable } from './CrudTable';
 import { BatchFormModal, FormModal, validate } from './FormModal';
 import { AdminPage } from './AdminShell';
@@ -8,6 +8,7 @@ import { HomeTabsOption } from './HomeTabsOption';
 import { ENTITIES } from '@/admin/entities';
 import { nextOrder, sorted, uid, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
+import { useLocalSearchParams } from 'expo-router';
 import type { CollName } from '@/data/types';
 import { useViewState } from '@/hooks/useViewState';
 import { toast } from '@/store/useToast';
@@ -18,6 +19,8 @@ export function CrudScreen({ entity }: { entity: string }) {
   const { t } = useT();
   const L = useL();
   const s = useStore();
+  const { target } = useLocalSearchParams<{ target?: string }>();
+  const [query, setQuery] = useViewState('query', '');
   const [editing, setEditing] = useState<any | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [selected, setSelected] = useViewState<string[]>('selected', []);
@@ -32,6 +35,7 @@ export function CrudScreen({ entity }: { entity: string }) {
   const ctx = { s, L, t };
   const list = cfg ? s[cfg.name as CollName] : undefined;
   const rows = useMemo(() => (cfg?.ordered ? sorted((list ?? []) as any[]) : list ?? []), [cfg, list]);
+  const filtered = rows.filter((r) => r.id === target || !query.trim() || JSON.stringify(r).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   if (!cfg) return null;
 
   const open = (r?: any) => { setPreview(null); setIsNew(!r); setEditing(r ?? { ...cfg.blank(ctx) }); };
@@ -89,8 +93,9 @@ export function CrudScreen({ entity }: { entity: string }) {
           <Button testID="crud-batch-delete" size="sm" icon="trash-can-outline" variant="ghost" title={t('common.delete')} disabled={busy} onPress={() => setBulkDelete(true)} />
         </ScrollView>
       </Card> : undefined}>
+      <View className="flex-row items-center gap-3 mb-2"><View className="flex-1"><Input testID="crud-filter" placeholder={t('admin.dash.searchPh')} value={query} onChangeText={setQuery} /></View><Txt className="text-muted text-[12px]">{filtered.length} / {rows.length}</Txt></View>
       {entity === 'tabs' ? <HomeTabsOption /> : null}
-      <CrudTable onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={editing && preview ? isNew ? [...rows, preview] : rows.map((r) => r.id === preview.id ? preview : r) : rows} cols={cfg.cols(ctx)} rowTestID="row"
+      <CrudTable visual={['categories', 'inspirations', 'styles'].includes(entity)} onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={editing && preview ? isNew ? [...filtered, preview] : filtered.map((r) => r.id === preview.id ? preview : r) : filtered} cols={cfg.cols(ctx)} rowTestID="row"
         onEdit={open} onDelete={setDel}
         onMove={cfg.ordered && bulkEnabled ? (r, d) => s.move(cfg.name, r.id, d) : undefined}
         onToggle={(r) => s.update(cfg.name, r.id, { visible: r.visible === false } as any)} />

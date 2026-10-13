@@ -26,11 +26,11 @@ export default function Branding() {
   };
   return (
     <AdminPage title={t('admin.nav.branding')} max={900}>
-      <Card className="p-5 mb-4">
+      <Card className="p-3 mb-4">
         <Txt className="font-bold text-[16px] mb-3">{t('admin.theme.preview')}</Txt>
         <BrandHeader branding={draft} />
       </Card>
-      <Card className="p-5">
+      <Card className="p-3">
         <Input testID="brand-name" label={t('admin.brand.appName')} value={draft.appName} onChangeText={(v) => set('appName', v)} />
         {choice('logoMode', ['text', 'image'], draft.logoUri ? 'image' : 'text')}
         {(draft.logoMode ?? (draft.logoUri ? 'image' : 'text')) === 'image' ? <ImageField label={t('admin.brand.logo')} value={draft.logoUri} onChange={(v) => set('logoUri', v)} /> : <>
