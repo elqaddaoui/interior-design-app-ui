@@ -19,6 +19,10 @@ build or the database schema changes. Vercel keeps working at the same time (see
 | Entry file | `server/start.js` (this is what `npm run start:server` runs) |
 | Start command (if shown) | `npm run start:server` |
 
+`server/start.js` starts the server whenever it is loaded. It has no `if (require.main === module)` guard on purpose:
+Hostinger loads the entry file through its own wrapper, where that condition is false, so a guarded file never calls
+`listen()` and the log says *"App did not call listen() within 3 seconds"*. Do not add such a guard back.
+
 Prefer the **Entry file** when both fields exist: Hostinger then runs `node server/start.js` directly. Going through
 `npm run` adds an npm parent process that stays alive (measured: about 70 MB of RAM and 11 threads, on top of the server).
 
@@ -75,14 +79,16 @@ Without it the server does not start. The runtime log then shows:
 | `SYNC_CACHE_MS` | `2000` | How long `/api/sync` versions are reused in memory (0 disables) |
 | `BACKGROUND_INTERVAL_MS` | `30000` | Notification retries and campaign scheduler while the app is in use |
 | `BACKGROUND_IDLE_MS` | `300000` | The same when nobody used the app for 5 minutes |
+| `DB_RETRY_MS` | `1000` | First delay between database connection retries at startup (doubles up to 15 s) |
 | `TRUST_PROXY` | `true` on Hostinger | Reads the visitor address forwarded by Hostinger's local proxy (per-visitor rate limits) |
 
 ## 3. Check the deployment
 
-1. The **Runtime logs** show one line like this (it never contains a password or a connection string):
+1. The **Runtime logs** show these lines (they never contain a password or a connection string). The first appears
+   within milliseconds, **before** the database is touched; the second once the database answered:
 
    ```
-   [dwira] Server ready on http://0.0.0.0:3000 | platform: hostinger | Node.js 24.x | database: postgres (neon, pooled, migrations via DATABASE_URL_UNPOOLED) | web: dist/ | threads: libuv 2
+   [dwira] Server ready on http://0.0.0.0:3000 | platform: hostinger | Node.js 24.x | database: postgres (neon, pooled, migrations via DATABASE_URL_UNPOOLED), connecting in the background | web: dist/ | threads: libuv 2
    [dwira] Database connected.
    ```
 2. Open `https://YOUR-DOMAIN/api/health`. It must return HTTP 200 with JSON:
@@ -90,16 +96,38 @@ Without it the server does not start. The runtime log then shows:
    ```json
    { "ok": true, "runtime": "node", "node": "24.x", "platform": "hostinger", "database": "pg", "media": "r2", "adminConfigured": true, "uptime": 42 }
    ```
-   `database` is `pg` when Postgres answers, `error` (HTTP 503) when it does not. If you get **HTML** instead of JSON, the
-   site is deployed as static: clear **Output directory** and set **Entry file** to `server/start.js`.
+   `database` is one of:
+
+   | Value | HTTP | Meaning |
+   |---|---|---|
+   | `pg` | 200 | Postgres answers |
+   | `starting` | 503 | The server is up but the database is still connecting, creating the schema or migrating (a sleeping Neon database needs a few seconds to wake up). Retried automatically; no restart needed. |
+   | `error` | 503 | Connected before, but the database does not answer now |
+
+   If you get **HTML** instead of JSON, the site is deployed as static: clear **Output directory** and set **Entry file**
+   to `server/start.js`.
 3. Open `/`, `/lead` and `/admin`. Every app route loads the same `index.html`, as on Vercel.
 
 | Symptom | Fix |
 |---|---|
 | 503 page, log says `Cannot start: configuration is incomplete` | Add the variable named in the log, save (this redeploys) |
-| `/api/health` → `"database":"error"` | Wrong `DATABASE_URL` or password, or the Neon project is deleted or over quota. The log line `Database not reachable yet (...)` shows the error code (never the URL). |
+| Log says `App did not call listen() within 3 seconds` | The entry file is not `server/start.js`, or an old copy with an `if (require.main === module)` guard is deployed. Redeploy the current `server/start.js` (no guard, it always calls `listen()` first). |
+| `/api/health` → `"database":"starting"` for a few seconds after a deploy | Normal while Neon wakes up; other `/api/*` routes answer `503` ("The database is starting up") meanwhile, and the web pages are served. |
+| `/api/health` stays `"database":"starting"` | Wrong `DATABASE_URL` or password, Neon project deleted or over quota, or the endpoint is unreachable. The log shows `Database not reachable yet (attempt N, <error code>)` (never the URL); the server keeps retrying with a delay growing from 1 s to 15 s. |
 | 503 / "too many processes" | hPanel → Resource usage → **Stop running processes**, then Restart. `domain.tld` and `www.domain.tld` each run one process: redirect `www` to the main domain if you do not need both. |
 | Log warns `DATABASE_URL points to a direct Neon endpoint` | Put the `-pooler` URL in `DATABASE_URL` and the direct one in `DATABASE_URL_UNPOOLED` |
+
+### How start-up works
+
+1. `server/start.js` checks the environment (no network, instant) and calls `listen()` straight away (about 100 ms).
+2. Only then the database is opened in the background: connection, schema check, and, if the schema changed, the
+   migration (over `DATABASE_URL_UNPOOLED` when set). On failure it retries after 1, 2, 4, 8 s, then every 15 s, until
+   Neon answers. A failed attempt closes its connections before the next one.
+3. Until the database is ready, `/api/health` answers `503` with `"database":"starting"`, every other `/api/*` route
+   answers `503` `{"error":"The database is starting up. Please retry in a few seconds."}` (with `Retry-After: 5`), and the
+   background notification timer waits. Static pages are served the whole time. Afterwards everything works as before.
+
+Vercel is unaffected: it does not run `server/start.js` and its backend is always "ready" (it connects lazily per request).
 
 ## 4. Scheduled campaigns and notification retries (optional cron)
 
@@ -132,7 +160,8 @@ as a function. These files are used by the long-running server only and ignored 
 
 | File | Role |
 |---|---|
-| `server/start.js` | Entry point: env check, startup log, `PORT` / `0.0.0.0`, shutdown |
+| `server/start.js` | Entry point: env check, `listen()` first, startup log, `PORT` / `0.0.0.0`, shutdown |
+| `server/warmup.js` | Background database connection + schema / migration with retries (exponential, 1 s to 15 s), after `listen()` |
 | `server/config.js` | Variable validation, port and platform detection, log redaction |
 | `server/static.js` | `dist/` hosting with vercel.json's SPA fallback and cache headers (`scripts/check-node-hosting.js` compares them) |
 

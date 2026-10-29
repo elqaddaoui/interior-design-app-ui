@@ -4,9 +4,16 @@
  *
  * Shared-hosting friendly: no cluster, no child processes, a 2-thread libuv pool (instead of 4) and a small database pool.
  * It refuses to start, with a readable message, when a required variable is missing, and never prints a credential.
+ *
+ * Loading this file starts the server (there is deliberately no `require.main === module` guard: Hostinger loads the entry
+ * file through its own wrapper, where that condition is false). listen() is called right away, BEFORE the database is
+ * touched; the connection, schema creation and migrations run in the background afterwards (server/warmup.js) with retries,
+ * because a sleeping Neon database can take several seconds to wake up. Until then /api/health answers 503
+ * (database: "starting") and every other /api route answers 503 with a clear message; static files are served at once.
  */
 const path = require('node:path');
 const fs = require('node:fs');
+const { warmUp } = require('./warmup');
 
 // Must happen before anything uses the libuv thread pool (file reads, DNS lookups). Override with UV_THREADPOOL_SIZE.
 if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '2';
@@ -55,7 +62,9 @@ function start() {
   process.on('unhandledRejection', error => { console.error('[dwira] Unhandled rejection:', redact(error?.stack || error)); });
 
   const { createBackend } = require('./index');
-  const backend = createBackend({ env });
+  // `warm` only exists once the server listens: until the database answered, the API reports 503 "starting".
+  let warm;
+  const backend = createBackend({ env, isReady: () => warm?.ready === true });
   const { server, db, staticFiles } = backend;
   const database = describeDatabase(require('./db').connectionString(env));
   for (const warning of checked.warnings) console.warn(`[dwira] Warning: ${warning}`);
@@ -68,12 +77,9 @@ function start() {
   });
   server.listen(port, '0.0.0.0', () => {
     const db_ = database.kind === 'postgres' ? `postgres (${database.provider}${database.pooled === null ? '' : database.pooled ? ', pooled' : ', direct'}${env.DATABASE_URL_UNPOOLED ? ', migrations via DATABASE_URL_UNPOOLED' : ''})` : `pglite (${env.PGLITE_DIR || 'server/data/pglite'})`;
-    console.log(`[dwira] Server ready on http://0.0.0.0:${port} | platform: ${platform} | Node.js ${process.versions.node} | database: ${db_} | web: ${staticFiles.available() ? 'dist/' : 'not built'} | threads: libuv ${env.UV_THREADPOOL_SIZE}${envFiles.length ? ` | env files: ${envFiles.join(', ')}` : ''}`);
-    // Open the database once now (applies the schema if needed) so a bad DATABASE_URL shows up in the logs immediately.
-    db.info().then(
-      () => { console.log('[dwira] Database connected.'); void backend.pump(); },
-      error => console.error(`[dwira] Database not reachable yet (${redact(error.code || error.message)}). /api/health reports 503 until it is; check DATABASE_URL.`),
-    );
+    console.log(`[dwira] Server ready on http://0.0.0.0:${port} | platform: ${platform} | Node.js ${process.versions.node} | database: ${db_}, connecting in the background | web: ${staticFiles.available() ? 'dist/' : 'not built'} | threads: libuv ${env.UV_THREADPOOL_SIZE}${envFiles.length ? ` | env files: ${envFiles.join(', ')}` : ''}`);
+    // Only now, with the port already open: connect, create / migrate the schema, retrying while the database wakes up.
+    warm = warmUp(db, { redact: message => redact(message, env), minDelayMs: Math.max(50, Number(env.DB_RETRY_MS) || 1000), onReady: () => backend.pump() });
   });
 
   let stopping = false;
@@ -81,6 +87,7 @@ function start() {
     if (stopping) return;
     stopping = true;
     console.log(`[dwira] ${signal} received, shutting down.`);
+    warm?.stop();
     server.close(() => process.exit(0));
     server.closeIdleConnections?.();
     setTimeout(() => process.exit(0), 5000).unref();
@@ -90,4 +97,4 @@ function start() {
 }
 
 module.exports = { start, loadEnvFiles };
-if (require.main === module) start();
+start(); // always: no require.main guard (see the header)
