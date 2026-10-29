@@ -67,6 +67,9 @@ All media (admin images and videos, client photos, AI results, chat images, exte
 5. Optional environment variables: `CRON_SECRET` (protects `/api/push/pump`), `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (otherwise generated and stored in the database), `FCM_SERVICE_ACCOUNT_JSON` (native Android app). See `server/.env.example`.
 6. Node 22.13+ is required (`engines` in `package.json`).
 
+## Deploy on Hostinger (managed Node.js, UI + API in one process)
+Build command `npm run build:web`, entry file `server/start.js` (= `npm run start:server`), output directory **empty**, Node 24, one required variable: `DATABASE_URL` (Neon pooled). Exact hPanel settings, all variables and troubleshooting: [docs/HOSTINGER.md](docs/HOSTINGER.md). Vercel keeps working unchanged; `vercel.json` and `api/` are Vercel-only.
+
 ### Performance (first load)
 What keeps the first load fast, and where to change it:
 - **The UI never waits for the network.** Home renders as soon as the device-only reads (language, local flags) are done. Public content comes from, in order: the HTML shell's early request (`scripts/postexport.js` injects a `fetch('/api/content')` that starts before the JavaScript has downloaded), the copy cached on the device (`dwira:v1:content-cache`, public content only, never an admin copy), then the network. With nothing cached, Home shows same-size placeholders (never a false "empty" message). The session check runs in the background. Startup reads retry at most 4 times (0.8 s, 1.6 s, 2.4 s) and then the app stays open; the 4 s sync loop keeps trying.
@@ -114,7 +117,7 @@ Why `scripts/postexport.js`? Vercel never serves paths containing a `node_module
 npm run build:web
 PGLITE_DIR=:memory: COOKIE_SECURE=false npm run start:server   # API + dist on http://localhost:8080 (in-process Postgres, no install)
 ```
-Without `PGLITE_DIR`, data is stored in `server/data/pglite`. Set `DATABASE_URL` to use a real Postgres instead. `/api/health` returns JSON with `ok`, `runtime`, `database` and `adminConfigured`; HTML means `/api` routing is wrong. For a separately hosted API, set `EXPO_PUBLIC_API_URL=https://api-host/api` **before building** (required for Android/iOS) and `APP_ORIGINS` on the backend. To intentionally run the UI-only demo, build with `EXPO_PUBLIC_BACKEND_MODE=demo`.
+`npm run start:server` runs `server/start.js`: one process for `dist/` and `/api/*`, listening on `PORT` (0.0.0.0). It refuses to start without `DATABASE_URL` unless `PGLITE_DIR` is set (`:memory:` or a folder, e.g. `server/data/pglite`). Set `DATABASE_URL` to use a real Postgres instead. `/api/health` returns JSON with `ok`, `runtime`, `database` and `adminConfigured`; HTML means `/api` routing is wrong. For a separately hosted API, set `EXPO_PUBLIC_API_URL=https://api-host/api` **before building** (required for Android/iOS) and `APP_ORIGINS` on the backend. To intentionally run the UI-only demo, build with `EXPO_PUBLIC_BACKEND_MODE=demo`.
 
 ### Checks
 ```bash

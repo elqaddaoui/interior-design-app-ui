@@ -75,19 +75,48 @@ export async function syncOnce() {
   finally { running = false; }
 }
 
-/** Starts polling while the app is visible; returns the stop function. Websockets are unavailable on serverless hosting, so this is the real-time channel. */
+/**
+ * Web only: how long to wait between polls given the time since the person last touched the page. 4 s while in use; a tab
+ * left open but untouched slows to 15 s after 2 minutes and 30 s after 10 minutes. Any click, key, scroll, focus or the
+ * tab becoming visible again polls at once and returns to 4 s, so nothing visible to an active user changes. Native apps
+ * keep the fixed 4 s (they only poll while in the foreground).
+ */
+export function webPollDelay(idleMs: number) {
+  if (idleMs < 2 * 60000) return POLL_MS;
+  if (idleMs < 10 * 60000) return 15000;
+  return 30000;
+}
+
+/** Starts polling while the app is visible; returns the stop function. Inbound websockets are unavailable on serverless and shared hosting, so this is the real-time channel. */
 export function startSync() {
   if (!backendEnabled) return () => {};
   void refreshAdminSession();
   const tick = () => { void syncOnce(); };
-  const timer = setInterval(() => { if (Platform.OS !== 'web' || typeof document === 'undefined' || !document.hidden) tick(); }, POLL_MS);
-  const wake = () => { if (typeof document === 'undefined' || !document.hidden) tick(); };
-  if (Platform.OS === 'web' && typeof document !== 'undefined') { document.addEventListener('visibilitychange', wake); window.addEventListener('focus', wake); window.addEventListener('online', wake); }
-  const app = Platform.OS === 'web' ? null : AppState.addEventListener('change', s => { if (s === 'active') tick(); });
-  tick();
+  const web = Platform.OS === 'web' && typeof document !== 'undefined' && typeof window !== 'undefined';
+  let lastInput = Date.now(), lastPoll = 0;
+  const poll = () => { lastPoll = Date.now(); tick(); };
+  // A 1 s check (no request) decides whether a poll is due; requests follow webPollDelay on web, POLL_MS on native.
+  const timer = setInterval(() => {
+    if (!web) { if (Date.now() - lastPoll >= POLL_MS - 500) poll(); return; }
+    if (document.hidden || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    if (Date.now() - lastPoll >= webPollDelay(Date.now() - lastInput) - 500) poll();
+  }, 1000);
+  const wake = () => { lastInput = Date.now(); if (!web || !document.hidden) poll(); };
+  // Interaction only resets the idle clock; it polls immediately only if the page had already slowed down.
+  const input = () => { const wasIdle = Date.now() - lastInput >= 2 * 60000; lastInput = Date.now(); if (wasIdle && !document.hidden) poll(); };
+  const inputEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
+  if (web) {
+    document.addEventListener('visibilitychange', wake); window.addEventListener('focus', wake); window.addEventListener('online', wake);
+    for (const name of inputEvents) window.addEventListener(name, input, { passive: true });
+  }
+  const app = Platform.OS === 'web' ? null : AppState.addEventListener('change', s => { if (s === 'active') poll(); });
+  poll();
   return () => {
     clearInterval(timer);
-    if (Platform.OS === 'web' && typeof document !== 'undefined') { document.removeEventListener('visibilitychange', wake); window.removeEventListener('focus', wake); window.removeEventListener('online', wake); }
+    if (web) {
+      document.removeEventListener('visibilitychange', wake); window.removeEventListener('focus', wake); window.removeEventListener('online', wake);
+      for (const name of inputEvents) window.removeEventListener(name, input);
+    }
     app?.remove();
   };
 }

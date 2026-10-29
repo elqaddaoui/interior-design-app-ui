@@ -1,10 +1,9 @@
 const http = require('node:http');
-const fs = require('node:fs');
 const path = require('node:path');
 const { isIP } = require('node:net');
 const crypto = require('node:crypto');
 const { createDb } = require('./db');
-const { sendBuffer, sendFile } = require('./compress');
+const { sendBuffer } = require('./compress');
 const { createClients } = require('./clients');
 const { createSync } = require('./sync');
 const { createContent } = require('./content');
@@ -13,6 +12,7 @@ const { translate } = require('./translate');
 const { createNotifier, validateSubscription, trim, phone } = require('./notifications');
 const { createCampaigns, cleanCampaign } = require('./campaigns');
 const { createChat } = require('./chat');
+const { createStatic } = require('./static');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => Object.assign(new Error(message), { status });
 function passwordMatches(password, encoded) {
@@ -71,20 +71,38 @@ const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve 
 function createBackend({ env = process.env, db = createDb(env), senders, media: mediaOptions = {}, translator = translate, chatFetch } = {}) {
   const notifier = createNotifier(db, env, senders, { settings: () => content.getDoc('settings') });
   const clients = createClients(db);
-  const sync = createSync(db);
+  // Long-running server: anonymous polls are answered from a 2 s in-memory copy of the versions (local writes invalidate it at once).
+  // Serverless instances keep no cache: each one only sees a fraction of the writes.
+  const sync = createSync(db, { cacheMs: env.VERCEL ? 0 : Math.max(0, Math.min(10000, Number(env.SYNC_CACHE_MS ?? 2000) || 0)) });
   const content = createContent(db, sync, { env, ...mediaOptions });
   const media = content.media;
   // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
   const campaigns = createCampaigns(db, notifier, { sync, settings: () => content.getDoc('settings') });
   const chat = createChat(db, { env, ...(chatFetch ? { fetch: chatFetch } : {}) });
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
+  // Managed hosts (Hostinger) put a reverse proxy on the same machine in front of the app: every request then comes from a
+  // loopback address. TRUST_PROXY=true (set automatically by server/start.js on Hostinger) reads the client address the proxy
+  // forwards for loopback peers only; the app port itself is not reachable from the internet there.
+  const trustLoopback = env.TRUST_PROXY === 'true';
+  const loopback = remote => remote === '::1' || /^(::ffff:)?127\./.test(remote);
   const address = req => {
     const remote = req.socket?.remoteAddress || 'unknown';
     // On Vercel every request reaches the function through the platform proxy: without this all visitors would
     // share one rate-limit bucket and real traffic (including leads) would be throttled.
-    const forwarded = env.VERCEL ? String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',')[0].trim() : req.headers['x-real-ip'];
-    return (env.VERCEL || trustedProxies.has(remote)) && typeof forwarded === 'string' && isIP(forwarded) ? forwarded : remote;
+    if (env.VERCEL) {
+      const forwarded = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',')[0].trim();
+      return isIP(forwarded) ? forwarded : remote;
+    }
+    if (!trustedProxies.has(remote) && !(trustLoopback && loopback(remote))) return remote;
+    // X-Real-IP is set by the proxy; otherwise the LAST X-Forwarded-For entry, the one the immediate proxy appended
+    // (earlier entries can be written by the client).
+    const real = typeof req.headers['x-real-ip'] === 'string' ? req.headers['x-real-ip'].trim() : '';
+    const chain = String(req.headers['x-forwarded-for'] || '').split(',').map(value => value.trim()).filter(Boolean);
+    const forwarded = real || chain[chain.length - 1] || '';
+    return isIP(forwarded) ? forwarded : remote;
   };
+  const staticFiles = createStatic(env.STATIC_DIR || path.join(__dirname, '..', 'dist'));
+  let lastApiAt = 0; // last API request (any route): the background timer slows down while nobody uses the app
   const allowedOrigins = String(env.APP_ORIGINS || 'http://localhost:4173,http://localhost:8080').split(',').map(value => value.trim());
   const apiLimit = Math.max(300, Math.min(5000, Number(env.API_RATE_LIMIT) || 300));
   const buckets = new Map();
@@ -125,10 +143,12 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
     const origin = req.headers.origin;
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     const json = (status, value, extra) => sendBuffer(req, res, status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra }, Buffer.from(JSON.stringify(value)));
     try {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
+        lastApiAt = Date.now();
         // Same-origin needs no configuration; other origins need an explicit allowlist.
         const sameOrigin = origin && /^https?:\/\//.test(origin) && new URL(origin).host === req.headers.host;
         if (origin && !sameOrigin && !allowedOrigins.includes(origin)) throw fail(403, 'Origin not allowed');
@@ -159,11 +179,18 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (bucket.count > (bucketName === 'login' ? 20 : bucketName === 'sync' ? 20000 : bucketName === 'chat' ? Math.max(5, Math.min(2000, Number(env.CHAT_RATE_LIMIT) || 90)) : apiLimit)) throw fail(429, 'Too many requests');
 
         if (url.pathname === '/api/health' && req.method === 'GET') {
-          // Never exposes secrets: only whether the database is reachable.
+          // Never exposes secrets: only whether the database answers right now (one `SELECT 1`, 5 s at most).
           let database = 'missing';
-          try { if (db.configured()) database = await db.info(); } catch { database = 'error'; }
+          try {
+            if (db.configured()) {
+              const kind = await db.info();
+              const answered = await withTimeout(db.query('SELECT 1 AS ok').then(rows => rows[0]?.ok === 1), 5000);
+              database = answered ? kind : 'error';
+            }
+          } catch { database = 'error'; }
+          const ok = database !== 'error' && database !== 'missing';
           // media: 'r2' | 'database' (no R2 variables) | 'incomplete' (some missing). Only the mode, never a value.
-          return json(database === 'error' || database === 'missing' ? 503 : 200, { ok: database !== 'error' && database !== 'missing', runtime: process.versions.bun ? 'bun' : 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH) });
+          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
         }
         if (!db.configured()) throw fail(503, 'DATABASE_NOT_CONFIGURED');
 
@@ -216,11 +243,14 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname === '/api/sync' && req.method === 'GET') {
           const keys = ['content', ...(session ? ['requests', 'clients', 'chats', 'campaigns', `a:${adminId}`] : []), ...(client ? [`c:${client.id}`] : []), ...(clientHash && !client ? [`g:${clientHash}`] : [])];
           const versions = await sync.read(keys);
-          // Opportunistic retry of failed notifications (serverless has no background timer; cron is only daily).
-          const waiting = (await db.query('SELECT 1 FROM outbox WHERE next_at<=$1 LIMIT 1', [now]))[0];
-          if (waiting) await withTimeout(pump(), 9000);
-          // Scheduled / recurring / automated campaigns are driven by any open app too (cross-instance throttled to one run per 10 s).
-          if (env.VERCEL) await withTimeout(campaigns.tick({ budgetMs: 6000 }), 8000); else void campaigns.tick();
+          if (env.VERCEL) {
+            // Serverless has no background timer (cron is only daily): any open app retries failed notifications and drives
+            // scheduled / recurring / automated campaigns (cross-instance throttled to one run per 10 s).
+            const waiting = (await db.query('SELECT 1 FROM outbox WHERE next_at<=$1 LIMIT 1', [now]))[0];
+            if (waiting) await withTimeout(pump(), 9000);
+            await withTimeout(campaigns.tick({ budgetMs: 6000 }), 8000);
+          }
+          // Long-running server: the background timer below does both, so a poll costs only the version read.
           return json(200, { content: versions.content, campaigns: session ? versions.campaigns : null, requests: session ? versions.requests : null, clients: session ? versions.clients : null, chats: session ? versions.chats : null, admin: session ? versions[`a:${adminId}`] : null, client: client ? versions[`c:${client.id}`] : null, guest: clientHash && !client ? versions[`g:${clientHash}`] : null, user: client ? { id: client.id, blocked: !!client.blocked } : null, isAdmin: !!session });
         }
         if (url.pathname === '/api/prefs') {
@@ -569,19 +599,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         throw fail(404, 'API route not found');
       }
-      // Optional same-origin static hosting (Node/Bun server only; Vercel serves dist/ itself).
-      const root = path.resolve(env.STATIC_DIR || path.join(__dirname, '..', 'dist'));
-      const pathname = decodeURIComponent(url.pathname);
-      let file = path.resolve(root, '.' + pathname);
-      if (!file.startsWith(root + path.sep) && file !== root) throw fail(403, 'Forbidden');
-      if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-        if (/^\/(assets|_expo)\//.test(pathname) || /\.(js|json|ico|webmanifest|png)$/.test(pathname)) throw fail(404, 'Asset not found');
-        file = path.join(root, 'index.html');
-      }
-      const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.avif': 'image/avif', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
-      // Same policy as vercel.json: hashed bundles/fonts never change; icons, favicon and manifest are long-lived; the HTML shell always revalidates.
-      const cache = /^\/(assets|_expo)\//.test(pathname) ? 'public, max-age=31536000, immutable' : /^\/(icons\/|favicon\.ico$)/.test(pathname) ? 'public, max-age=2592000, stale-while-revalidate=86400' : pathname === '/manifest.webmanifest' ? 'public, max-age=86400, stale-while-revalidate=604800' : 'no-cache';
-      sendFile(req, res, file, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream', 'Cache-Control': file.endsWith('index.html') ? 'no-cache' : cache });
+      // Same-origin static hosting of dist/ for the long-running server (Vercel serves dist/ itself). Same rules as vercel.json.
+      return staticFiles.handle(req, res, url);
     } catch (error) {
       if (!error.status) console.warn('API error', error.code || error.message);
       if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error' }); else res.end();
@@ -589,15 +608,27 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   }
   const server = http.createServer(handle);
   server.requestTimeout = 30000;
-  const timer = setInterval(() => { void pump(); void campaigns.tick(); }, 15000);
+  /*
+   * Background work of the long-running server: notification retries and the campaign scheduler. Every
+   * BACKGROUND_INTERVAL_MS (default 30 s) while the app is in use (an API request in the last 5 minutes), every
+   * BACKGROUND_IDLE_MS (default 5 minutes) otherwise, so an idle site stops querying the database every few seconds and
+   * Neon can suspend. Scheduled campaigns therefore start at most ~5 minutes late when nobody has the app open; a host cron
+   * calling /api/push/pump (docs/HOSTINGER.md) makes them exact.
+   */
+  const activeEvery = Math.max(5000, Number(env.BACKGROUND_INTERVAL_MS) || 30000);
+  const idleEvery = Math.max(activeEvery, Number(env.BACKGROUND_IDLE_MS) || 300000);
+  let lastRunAt = 0, closed = false;
+  const timer = setInterval(() => {
+    if (!db.configured()) return;
+    const now = Date.now();
+    if (now - lastRunAt < (now - lastApiAt < 300000 ? activeEvery : idleEvery) - 1000) return;
+    lastRunAt = now;
+    void pump().then(() => (closed ? null : campaigns.tick()));
+  }, Math.min(activeEvery, 15000));
   timer.unref();
-  server.on('close', () => { clearInterval(timer); void db.close(); });
-  return { server, handle, pump, db, clients, notifier, campaigns, chat };
-}
-if (require.main === module) {
-  const backend = createBackend();
-  if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD_HASH) console.warn('Custom admin credentials are not configured: the default login admin / admin is active.');
-  backend.server.listen(Number(process.env.PORT || 8080), '0.0.0.0', () => { console.log(`Dwira backend listening on port ${process.env.PORT || 8080} (${process.versions.bun ? 'Bun' : 'Node.js'})`); void backend.pump(); });
-  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => backend.server.close());
+  server.on('close', () => { closed = true; clearInterval(timer); void db.close(); });
+  return { server, handle, pump, db, clients, notifier, campaigns, chat, staticFiles };
 }
 module.exports = { createBackend, passwordMatches };
+// `node server/index.js` keeps working (README, browser checks): same startup as server/start.js.
+if (require.main === module) require('./start').start();
