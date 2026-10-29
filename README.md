@@ -117,7 +117,7 @@ Why `scripts/postexport.js`? Vercel never serves paths containing a `node_module
 npm run build:web
 PGLITE_DIR=:memory: COOKIE_SECURE=false npm run start:server   # API + dist on http://localhost:8080 (in-process Postgres, no install)
 ```
-`npm run start:server` runs `server/start.js`: one process for `dist/` and `/api/*`, listening on `PORT` (0.0.0.0). It refuses to start without `DATABASE_URL` unless `PGLITE_DIR` is set (`:memory:` or a folder, e.g. `server/data/pglite`). Set `DATABASE_URL` to use a real Postgres instead. `/api/health` returns JSON with `ok`, `runtime`, `database` and `adminConfigured`; HTML means `/api` routing is wrong. For a separately hosted API, set `EXPO_PUBLIC_API_URL=https://api-host/api` **before building** (required for Android/iOS) and `APP_ORIGINS` on the backend. To intentionally run the UI-only demo, build with `EXPO_PUBLIC_BACKEND_MODE=demo`.
+`npm run start:server` runs `server/start.js`: one process for `dist/` and `/api/*`, listening on `PORT` (0.0.0.0). It refuses to start without `DATABASE_URL` unless `PGLITE_DIR` is set (`:memory:` or a folder, e.g. `server/data/pglite`). Set `DATABASE_URL` to use a real Postgres instead. The server listens first and connects to the database in the background (retrying while a sleeping Neon database wakes up): `/api/health` answers 503 with `database: "starting"` until then. `/api/health` returns JSON with `ok`, `runtime`, `database` and `adminConfigured`; HTML means `/api` routing is wrong. For a separately hosted API, set `EXPO_PUBLIC_API_URL=https://api-host/api` **before building** (required for Android/iOS) and `APP_ORIGINS` on the backend. To intentionally run the UI-only demo, build with `EXPO_PUBLIC_BACKEND_MODE=demo`.
 
 ### Checks
 ```bash

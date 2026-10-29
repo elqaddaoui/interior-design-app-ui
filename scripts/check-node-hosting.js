@@ -4,7 +4,9 @@
  *  - PORT / platform detection;
  *  - static hosting identical to vercel.json (SPA fallback exclusions and Cache-Control), compared rule by rule;
  *  - the in-memory sync version cache;
- *  - a real `node server/start.js` process: startup message, /api/health, dist/ + SPA fallback, clean SIGTERM.
+ *  - a real `node server/start.js` process: startup message, /api/health, dist/ + SPA fallback, clean SIGTERM;
+ *  - Hostinger's start-up contract: no `require.main` guard, listen() immediately, the database connects in the background
+ *    (retrying while a Neon database wakes up), /api answers 503 "starting" until then, no credential in any log.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -206,4 +208,160 @@ test('start.js: one process serves /api/health and dist/ with the SPA fallback o
     assert.equal(await exited, 0);
     assert.match(out.stdout, /SIGTERM received/);
   } finally { child.kill('SIGKILL'); fs.rmSync(dist, { recursive: true, force: true }); }
+});
+
+const stripComments = source => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
+
+test('start.js has no require.main guard (Hostinger loads the entry file through its own wrapper)', () => {
+  const code = stripComments(fs.readFileSync(path.join(root, 'server/start.js'), 'utf8'));
+  assert.equal(/require\.main/.test(code), false);
+  assert.match(code, /^start\(\);/m, 'start() runs whenever the file is loaded');
+});
+
+test('loading start.js with require() (not as the main module) still starts the server immediately, before the database', async () => {
+  const port = await freePort();
+  const child = spawn(process.execPath, ['-e', `require(${JSON.stringify(path.join(root, 'server/start.js'))})`], { env: baseEnv({ PORT: String(port), PGLITE_DIR: ':memory:', DISABLE_DEFAULT_ADMIN: 'true' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  const startedAt = Date.now();
+  let stdout = '';
+  child.stdout.on('data', d => { stdout += d; });
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  try {
+    let listenedAfter = null;
+    while (listenedAfter === null && Date.now() - startedAt < 5000) {
+      if (stdout.includes('Server ready')) listenedAfter = Date.now() - startedAt;
+      else await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.notEqual(listenedAfter, null, `no "Server ready" within 5 s:\n${stdout}`);
+    assert(listenedAfter < 1000, `listen() took ${listenedAfter} ms (must be well under 1 s)`);
+    assert.match(stdout, /connecting in the background/);
+    child.kill('SIGTERM');
+    await exited;
+  } finally { child.kill('SIGKILL'); }
+});
+
+/**
+ * Preloaded into a real server process: replaces createDb with a wrapper whose database "sleeps" (rejects with
+ * ECONNREFUSED, like a suspended Neon endpoint) until a gate file exists, then wakes up (the real in-memory PGlite).
+ */
+function sleepingDatabaseFixture(dir) {
+  const gate = path.join(dir, 'awake');
+  const preload = path.join(dir, 'sleeping-db.js');
+  fs.writeFileSync(preload, `
+const fs = require('node:fs');
+const dbModule = require(${JSON.stringify(path.join(root, 'server/db.js'))});
+const real = dbModule.createDb;
+dbModule.createDb = env => {
+  const db = real(env);
+  const wait = () => { if (!fs.existsSync(${JSON.stringify(gate)})) throw Object.assign(new Error('connect ECONNREFUSED postgresql://neondb_owner:${SECRET}@ep-sleeping.example/neondb'), { code: 'ECONNREFUSED' }); };
+  return { ...db, info: async () => { wait(); return db.info(); }, query: async (...args) => { wait(); return db.query(...args); }, tx: async (...args) => { wait(); return db.tx(...args); } };
+};
+`);
+  return { gate, preload };
+}
+
+test('start.js listens first; /api/health is 503 "starting" and other /api routes 503 until the sleeping database wakes up, then everything works', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dwira-sleep-'));
+  const dist = path.join(dir, 'dist');
+  fs.mkdirSync(dist);
+  fs.writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>shell</title>');
+  const { gate, preload } = sleepingDatabaseFixture(dir);
+  const port = await freePort();
+  const started = Date.now();
+  const { child, out, exited } = run(baseEnv({ PORT: String(port), PGLITE_DIR: ':memory:', STATIC_DIR: dist, DISABLE_DEFAULT_ADMIN: 'true', DB_RETRY_MS: '100', NODE_OPTIONS: `--require ${preload}` }));
+  const url = pathname => `http://127.0.0.1:${port}${pathname}`;
+  const waitFor = async (check, label, timeout = 15000) => {
+    const until = Date.now() + timeout;
+    while (Date.now() < until) { const value = await check(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 50)); }
+    throw new Error(`timeout: ${label}\n${out.stdout}\n${out.stderr}`);
+  };
+  try {
+    // 1. The port opens quickly even though the database is asleep.
+    await waitFor(() => out.stdout.includes('Server ready'), 'Server ready');
+    assert(Date.now() - started < 1500, `listening took ${Date.now() - started} ms`);
+
+    // 2. During start-up: health is 503 / "starting", API routes are 503 with a clear message, static files work.
+    const health = await fetch(url('/api/health'));
+    assert.equal(health.status, 503);
+    const starting = await health.json();
+    assert.equal(starting.ok, false);
+    assert.equal(starting.database, 'starting');
+    assert.equal(health.headers.get('retry-after'), '5');
+    for (const pathname of ['/api/sync', '/api/content', '/api/user/session', '/api/media/' + 'a'.repeat(32) + '.png']) {
+      const response = await fetch(url(pathname));
+      assert.equal(response.status, 503, pathname);
+      assert.match((await response.json()).error, /database is starting up/i, pathname);
+    }
+    const login = await fetch(url('/api/user/login'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(login.status, 503);
+    assert.equal((await fetch(url('/admin'))).status, 200, 'the web app is served while the database starts');
+    assert.equal(out.stdout.includes('Database connected'), false);
+
+    // 3. The database keeps being retried in the background (and the log never shows the connection string or password).
+    await waitFor(() => /Database not reachable yet \(attempt 2,/.test(out.stderr), 'a retry');
+
+    // 4. The database wakes up: ready without a restart.
+    fs.writeFileSync(gate, '');
+    await waitFor(() => out.stdout.includes('Database connected'), 'Database connected');
+    const ready = await fetch(url('/api/health'));
+    assert.equal(ready.status, 200);
+    const body = await ready.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.database, 'pglite');
+    assert.equal((await fetch(url('/api/sync'))).status, 200);
+    assert.equal((await fetch(url('/api/content'))).status, 200);
+    assert.equal((await fetch(url('/api/nope'))).status, 404);
+
+    const logs = out.stdout + out.stderr;
+    assert.equal(logs.includes(SECRET), false, 'no credential in the logs');
+    assert.equal(logs.includes('neondb_owner'), false);
+    child.kill('SIGTERM');
+    assert.equal(await exited, 0);
+  } finally { child.kill('SIGKILL'); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a Postgres that refuses connections keeps the server up: health stays 503 "starting", retries are logged without the URL', async () => {
+  const port = await freePort();
+  const dead = await freePort(); // nothing listens there: ECONNREFUSED, like an unreachable endpoint
+  const url = `postgresql://neondb_owner:${SECRET}@127.0.0.1:${dead}/neondb`;
+  const { child, out, exited } = run(baseEnv({ PORT: String(port), DATABASE_URL: url, DISABLE_DEFAULT_ADMIN: 'true', DB_RETRY_MS: '100' }), { untilLog: 'Server ready' });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const until = Date.now() + 10000;
+    while (!/attempt 2,/.test(out.stderr) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.match(out.stderr, /Database not reachable yet \(attempt 1, ECONNREFUSED\)/);
+    const health = await fetch(`http://127.0.0.1:${port}/api/health`);
+    assert.equal(health.status, 503);
+    assert.equal((await health.json()).database, 'starting');
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/sync`)).status, 503);
+    const logs = out.stdout + out.stderr;
+    assert.equal(logs.includes(SECRET), false);
+    assert.equal(logs.includes('neondb_owner'), false);
+    child.kill('SIGTERM');
+    assert.equal(await exited, 0);
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('warmUp retries with a growing delay, redacts what it logs and reports ready once', async () => {
+  const { warmUp } = require('../server/warmup');
+  const lines = [];
+  const log = { log: line => lines.push(line), error: line => lines.push(line) };
+  let calls = 0;
+  const db = { info: async () => { if (++calls < 4) throw new Error(`password ${SECRET} rejected`); return 'pg'; } };
+  let readyCalls = 0;
+  const state = warmUp(db, { log, minDelayMs: 5, maxDelayMs: 20, redact: message => String(message).split(SECRET).join('***'), onReady: () => { readyCalls++; } });
+  const until = Date.now() + 3000;
+  while (!state.ready && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(state.ready, true);
+  assert.equal(state.attempts, 4);
+  assert.equal(readyCalls, 1);
+  assert.match(lines.join('\n'), /attempt 1, password \*\*\* rejected/);
+  assert.equal(lines.join('\n').includes(SECRET), false);
+  assert.match(lines.at(-1), /Database connected \(attempt 4\)/);
+  // stop() cancels pending retries
+  const failing = warmUp({ info: async () => { throw new Error('x'); } }, { log, minDelayMs: 5 });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  failing.stop();
+  const attempts = failing.attempts;
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(failing.attempts, attempts);
 });

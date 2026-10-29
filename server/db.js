@@ -147,7 +147,8 @@ function createDb(env = process.env) {
     if (!url && env.VERCEL) throw Object.assign(new Error('DATABASE_NOT_CONFIGURED'), { status: 503 });
     const db = url ? await openPg(url, env) : await openLite(env.PGLITE_DIR === ':memory:' ? undefined : env.PGLITE_DIR || (env.NODE_ENV === 'test' ? undefined : require('node:path').join(__dirname, 'data', 'pglite')));
     const migrationUrl = url && env.DATABASE_URL_UNPOOLED && env.DATABASE_URL_UNPOOLED !== url ? env.DATABASE_URL_UNPOOLED : '';
-    await ensureSchema(db, migrationUrl);
+    // A failed attempt must not leave its pool (and connections) behind: the caller may retry.
+    try { await ensureSchema(db, migrationUrl); } catch (error) { await db.close().catch(() => {}); throw error; }
     return db;
   })().catch(error => { ready = undefined; throw error; });
   return {

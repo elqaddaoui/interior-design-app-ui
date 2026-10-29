@@ -68,7 +68,12 @@ function mergeConversation(value, existing) {
 const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))]);
 
 /** `media` (tests): { storage, download } overrides for the R2 adapter and the external downloader. */
-function createBackend({ env = process.env, db = createDb(env), senders, media: mediaOptions = {}, translator = translate, chatFetch } = {}) {
+/**
+ * `isReady` (long-running server only, see server/start.js): while it returns false the database is still starting up in the
+ * background, so /api/health answers 503 `database: "starting"` and every other /api route 503 with a clear message.
+ * Without it (Vercel, tests) the backend is always ready and behaves exactly as before.
+ */
+function createBackend({ env = process.env, db = createDb(env), senders, media: mediaOptions = {}, translator = translate, chatFetch, isReady = () => true } = {}) {
   const notifier = createNotifier(db, env, senders, { settings: () => content.getDoc('settings') });
   const clients = createClients(db);
   // Long-running server: anonymous polls are answered from a 2 s in-memory copy of the versions (local writes invalidate it at once).
@@ -156,6 +161,12 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-User-Token');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+        if (!isReady()) {
+          const retry = { 'Retry-After': '5' };
+          if (url.pathname === '/api/health' && req.method === 'GET') return json(503, { ok: false, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.DWIRA_PLATFORM || 'node', database: 'starting', media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) }, retry);
+          res.setHeader('Retry-After', '5');
+          throw fail(503, 'The database is starting up. Please retry in a few seconds.');
+        }
         // Media (images and videos): stable content-addressed /api/media/<hash>.<ext> URLs. Files stored in R2 are a redirect
         // to the public R2 URL (bytes never pass through the function); the database fallback serves the bytes, cached forever.
         // Served before rate limiting: one Home screen can show dozens of them.
@@ -619,7 +630,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   const idleEvery = Math.max(activeEvery, Number(env.BACKGROUND_IDLE_MS) || 300000);
   let lastRunAt = 0, closed = false;
   const timer = setInterval(() => {
-    if (!db.configured()) return;
+    if (!db.configured() || !isReady()) return;
     const now = Date.now();
     if (now - lastRunAt < (now - lastApiAt < 300000 ? activeEvery : idleEvery) - 1000) return;
     lastRunAt = now;
@@ -631,4 +642,4 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
 }
 module.exports = { createBackend, passwordMatches };
 // `node server/index.js` keeps working (README, browser checks): same startup as server/start.js.
-if (require.main === module) require('./start').start();
+if (require.main === module) require('./start'); // loading start.js starts the server
