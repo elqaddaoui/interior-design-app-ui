@@ -8,6 +8,7 @@
     "@expo/metro-runtime": "~57.0.16",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "babel-preset-expo": "^57.0.14",
     "expo": "~57.0.27",
     "expo-constants": "~57.0.21",
     "expo-crypto": "~57.0.4",
@@ -52,7 +53,6 @@
     "@electric-sql/pglite": "^0.5.10",
     "@playwright/test": "^1.64.0",
     "@types/react": "~19.2.2",
-    "babel-preset-expo": "^57.0.14",
     "eslint": "^9.39.5",
     "eslint-config-expo": "~57.0.2",
     "typescript": "~6.0.3"
@@ -69,9 +69,10 @@
     "check:themes": "sucrase-node scripts/check-themes.ts",
     "lint": "expo lint",
     "test:ui": "node scripts/check-ui.js",
-    "test:server": "node --test --test-concurrency=1 scripts/check-backend-config.js scripts/check-push-server.js scripts/check-client-server.js scripts/check-sync-server.js scripts/check-translate-server.js scripts/check-chat-server.js scripts/check-campaigns-server.js scripts/check-chat-reply-server.js scripts/check-loaders.js scripts/check-media-server.js scripts/check-vercel-routing.js scripts/check-node-hosting.js",
+    "test:server": "node --test --test-concurrency=1 scripts/check-backend-config.js scripts/check-push-server.js scripts/check-client-server.js scripts/check-sync-server.js scripts/check-translate-server.js scripts/check-chat-server.js scripts/check-campaigns-server.js scripts/check-chat-reply-server.js scripts/check-loaders.js scripts/check-media-server.js scripts/check-vercel-routing.js scripts/check-node-hosting.js scripts/check-postinstall.js",
     "start:server": "node server/start.js",
-    "gen:seed": "sucrase-node scripts/gen-seed.ts"
+    "gen:seed": "sucrase-node scripts/gen-seed.ts",
+    "postinstall": "node scripts/postinstall.js"
   },
   "private": true,
   "engines": {

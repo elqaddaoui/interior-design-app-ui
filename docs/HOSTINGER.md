@@ -14,7 +14,7 @@ build or the database schema changes. Vercel keeps working at the same time (see
 | Node.js version | **24** (22 also works; `engines` requires 22.13 or newer) |
 | Root directory | `/` (empty) |
 | Package manager | **npm** (detected from `package-lock.json`) |
-| Build command | `npm run build:web` |
+| Build command | **leave empty** if the preset has no such field (Express.js preset). `dist/` is then built automatically while Hostinger runs `npm install` (see *How dist/ gets built* below). If your preset does have a build command field, `npm run build:web` also works; the automatic build then sees `dist/index.html` and skips itself. |
 | Output directory | **leave empty**. The server serves `dist/` itself. Do not enter `dist`, or Hostinger treats the app as a static site and `/api` stops working. |
 | Entry file | `server/start.js` (this is what `npm run start:server` runs) |
 | Start command (if shown) | `npm run start:server` |
@@ -27,6 +27,36 @@ Prefer the **Entry file** when both fields exist: Hostinger then runs `node serv
 `npm run` adds an npm parent process that stays alive (measured: about 70 MB of RAM and 11 threads, on top of the server).
 
 Then add the environment variables below and click **Deploy**.
+
+### How dist/ gets built (no build command needed)
+
+Hostinger's Express.js preset has no build command field, so nothing used to create `dist/` and the site showed
+*"The web app is not built yet"*. Now `package.json` has a `postinstall` script (`scripts/postinstall.js`) that runs the
+web export (`expo export -p web` + `scripts/postexport.js`) at the end of Hostinger's `npm install` / `npm ci`.
+
+| Rule | Detail |
+|---|---|
+| Runs only on Hostinger | Detected from the folder (`~/domains/<domain>/hbuilds/...` or `/home/u<digits>/...`) or `DWIRA_PLATFORM=hostinger`. A laptop install, Vercel (`VERCEL`), GitHub Actions (the Android release uses `npm ci` there) and EAS never build in `postinstall`. |
+| Skips when built | If `dist/index.html` exists (for example an earlier build command created it) nothing is rebuilt. |
+| Never breaks the install | If the export fails, the install still succeeds. The log shows `[dwira postinstall] WARNING: the web build FAILED, but the install continues.` with the reason, and any half-built `dist/` is removed so the next deploy retries. |
+| Low memory | `NODE_OPTIONS` gets `--max-old-space-size=2048` (unless you already set a cap) and Metro uses 2 workers. Measured on a clean export: about 800 MB peak RSS (Node 22, 1 CPU). The install itself takes a few minutes; the log prints progress. |
+| Works without devDependencies | Everything the export needs (`expo`, `expo-router`, `babel-preset-expo`, `nativewind`, `tailwindcss`, `react-native-web`, ...) is in `dependencies`. `babel-preset-expo` was moved there from `devDependencies`. The export was verified with `typescript`, `eslint`, `@types/react`, Playwright and PGlite removed from `node_modules`. |
+
+Overrides (environment variables, normally unset):
+
+| Variable | Effect |
+|---|---|
+| `DWIRA_BUILD_ON_INSTALL=1` | Build in `postinstall` on any host (use it if your Hostinger path does not match the detection above and the log says nothing) |
+| `DWIRA_SKIP_BUILD_ON_INSTALL=1` | Never build in `postinstall` (you build `dist/` elsewhere) |
+
+If `dist/` is still missing after a deploy, open the **build log** (not the runtime log) and search for `dwira postinstall`:
+no line at all means Hostinger did not run `npm install` scripts (set `DWIRA_BUILD_ON_INSTALL=1`, or check that it does not
+use `--ignore-scripts`); a `WARNING ... FAILED` line names the cause (typically `signal SIGKILL (out of memory?)`: try a
+larger plan, or build `dist/` elsewhere and upload it, see below).
+
+Fallback if the plan cannot build at all: run `npm run build:web` on your computer, then upload the `dist/` folder
+next to the app (or commit it to a separate `deploy` branch that Hostinger deploys from). `postinstall` skips itself
+whenever `dist/index.html` is present.
 
 If the domain is already on the plan as a normal website, remove that website first: the Node.js flow creates a fresh slot.
 Do not edit the `.htaccess` that Hostinger generates in `public_html`; redeploying recreates it.
@@ -110,6 +140,7 @@ Without it the server does not start. The runtime log then shows:
 
 | Symptom | Fix |
 |---|---|
+| Page says "The web app is not built yet" | `dist/` was not created. See *How dist/ gets built* above: look for `dwira postinstall` in the build log. |
 | 503 page, log says `Cannot start: configuration is incomplete` | Add the variable named in the log, save (this redeploys) |
 | Log says `App did not call listen() within 3 seconds` | The entry file is not `server/start.js`, or an old copy with an `if (require.main === module)` guard is deployed. Redeploy the current `server/start.js` (no guard, it always calls `listen()` first). |
 | `/api/health` → `"database":"starting"` for a few seconds after a deploy | Normal while Neon wakes up; other `/api/*` routes answer `503` ("The database is starting up") meanwhile, and the web pages are served. |

@@ -68,7 +68,7 @@ All media (admin images and videos, client photos, AI results, chat images, exte
 6. Node 22.13+ is required (`engines` in `package.json`).
 
 ## Deploy on Hostinger (managed Node.js, UI + API in one process)
-Build command `npm run build:web`, entry file `server/start.js` (= `npm run start:server`), output directory **empty**, Node 24, one required variable: `DATABASE_URL` (Neon pooled). Exact hPanel settings, all variables and troubleshooting: [docs/HOSTINGER.md](docs/HOSTINGER.md). Vercel keeps working unchanged; `vercel.json` and `api/` are Vercel-only.
+Build command not needed (`dist/` is built by `postinstall` during Hostinger's `npm install`; `npm run build:web` also works), entry file `server/start.js` (= `npm run start:server`), output directory **empty**, Node 24, one required variable: `DATABASE_URL` (Neon pooled). Exact hPanel settings, all variables and troubleshooting: [docs/HOSTINGER.md](docs/HOSTINGER.md). Vercel keeps working unchanged; `vercel.json` and `api/` are Vercel-only.
 
 ### Performance (first load)
 What keeps the first load fast, and where to change it:
