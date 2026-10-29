@@ -66,11 +66,14 @@ CREATE INDEX IF NOT EXISTS campaign_deliveries_campaign ON campaign_deliveries(c
 CREATE INDEX IF NOT EXISTS campaign_deliveries_client ON campaign_deliveries(client_id, sent_at);
 `;
 
-async function openPg(url) {
+const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+/** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */
+const poolMax = env => Math.max(1, Math.min(20, Number(env.DB_POOL_MAX) || (env.VERCEL ? 3 : 5)));
+
+async function openPg(url, env = {}) {
   const { Pool, types } = require('pg');
   types.setTypeParser(20, value => Number(value)); // BIGINT -> number (timestamps stay far below 2^53)
-  const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
-  const pool = new Pool({ connectionString: url, max: 3, idleTimeoutMillis: 10000, connectionTimeoutMillis: 8000, ssl: local ? false : { rejectUnauthorized: false } });
+  const pool = new Pool({ connectionString: url, max: poolMax(env), idleTimeoutMillis: 10000, connectionTimeoutMillis: 8000, ssl: isLocal(url) ? false : { rejectUnauthorized: false } });
   pool.on('error', () => {}); // idle client errors must never crash the function
   return {
     kind: 'pg',
@@ -110,11 +113,26 @@ async function openLite(dataDir) {
  * (each of which takes a lock on a database that may have just woken up).
  */
 const SCHEMA_VERSION = crypto.createHash('sha1').update(SCHEMA).digest('hex').slice(0, 12);
-async function ensureSchema(db) {
+/**
+ * `migrationUrl` (DATABASE_URL_UNPOOLED, optional): the schema DDL then runs once over a short-lived direct connection, which
+ * is what Neon recommends for migrations (its pooler runs PgBouncer in transaction mode). Normal queries stay on the pooled URL.
+ */
+async function ensureSchema(db, migrationUrl) {
   try {
     const marker = (await db.query("SELECT value FROM settings WHERE key='schema_version'"))[0];
     if (marker?.value === SCHEMA_VERSION) return;
   } catch { /* no settings table yet: fresh database */ }
+  if (migrationUrl) {
+    const { Client } = require('pg');
+    const direct = new Client({ connectionString: migrationUrl, connectionTimeoutMillis: 10000, ssl: isLocal(migrationUrl) ? false : { rejectUnauthorized: false } });
+    direct.on('error', () => {});
+    await direct.connect();
+    try {
+      await direct.query(SCHEMA);
+      await direct.query("INSERT INTO settings(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+    } finally { await direct.end().catch(() => {}); }
+    return;
+  }
   await db.exec(SCHEMA);
   await db.query("INSERT INTO settings(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
 }
@@ -127,8 +145,9 @@ function createDb(env = process.env) {
     // PGlite is a dev/test dependency only. Production on Vercel must provide a real database,
     // because serverless instances have no durable disk.
     if (!url && env.VERCEL) throw Object.assign(new Error('DATABASE_NOT_CONFIGURED'), { status: 503 });
-    const db = url ? await openPg(url) : await openLite(env.PGLITE_DIR === ':memory:' ? undefined : env.PGLITE_DIR || (env.NODE_ENV === 'test' ? undefined : require('node:path').join(__dirname, 'data', 'pglite')));
-    await ensureSchema(db);
+    const db = url ? await openPg(url, env) : await openLite(env.PGLITE_DIR === ':memory:' ? undefined : env.PGLITE_DIR || (env.NODE_ENV === 'test' ? undefined : require('node:path').join(__dirname, 'data', 'pglite')));
+    const migrationUrl = url && env.DATABASE_URL_UNPOOLED && env.DATABASE_URL_UNPOOLED !== url ? env.DATABASE_URL_UNPOOLED : '';
+    await ensureSchema(db, migrationUrl);
     return db;
   })().catch(error => { ready = undefined; throw error; });
   return {
@@ -139,4 +158,4 @@ function createDb(env = process.env) {
     info: async () => (await open()).kind,
   };
 }
-module.exports = { createDb };
+module.exports = { createDb, connectionString };
