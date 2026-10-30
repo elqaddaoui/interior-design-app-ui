@@ -1,7 +1,6 @@
 # Static-only Apache hosting cannot execute the API.
 # Configure a same-origin reverse proxy for /api/ to the running Bun backend.
 RewriteEngine On
-RewriteRule ^api(?:/|$) - [R=503,L]
 RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
 RewriteRule ^ - [L]
