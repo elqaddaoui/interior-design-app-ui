@@ -16,6 +16,7 @@ import { ToolCard } from '@/components/ToolCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { boot } from '@/lib/boot';
+import { resolveGlobal } from '@/lib/toolCards';
 
 const ALL = '__all__';
 
@@ -37,6 +38,8 @@ export default function Home() {
   const list = sorted(tools).filter((x) => x.visible && (x.id === target || tabId === ALL || x.tabId === tabId));
   const pills = useMemo(() => [{ id: ALL, label: t('home.all') }].concat(visibleTabs.map((x) => ({ id: x.id, label: L(x.title) }))), [visibleTabs, t, L]);
   const cols = pick(1, 2, 3);
+  // One global card height for every card (Admin > Tools cards); the placeholders use it too so nothing jumps.
+  const cardHeight = useStore((s) => resolveGlobal(s.doc.settings.toolCards).height);
 
   // Startup loader (automatic mode) goes away once the first two cards have painted.
   const count = list.length === 0 && !contentReady ? -1 : list.length;
@@ -69,7 +72,7 @@ export default function Home() {
           // Content is still on its way (first visit, nothing cached): same-size placeholders, never a false "empty" message.
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -8 }}>
             {Array.from({ length: cols }, (_, i) => (
-              <View key={i} style={{ width: `${100 / cols}%`, padding: 8 }}><Skeleton h={cols === 1 ? 200 : 230} r={16} /><View pointerEvents="none" style={{ position: 'absolute', top: 8, left: 8, right: 8, bottom: 8, alignItems: 'center', justifyContent: 'center' }}><Spinner size={36} /></View></View>
+              <View key={i} style={{ width: `${100 / cols}%`, padding: 8 }}><Skeleton h={cardHeight} r={16} /><View pointerEvents="none" style={{ position: 'absolute', top: 8, left: 8, right: 8, bottom: 8, alignItems: 'center', justifyContent: 'center' }}><Spinner size={36} /></View></View>
             ))}
           </View>
         ) : list.length === 0 ? (
@@ -78,7 +81,7 @@ export default function Home() {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -8 }}>
             {list.map((tool, i) => (
               <View key={tool.id} style={{ width: `${100 / cols}%`, padding: 8 }}>
-                <ToolCard tool={tool} index={i} height={cols === 1 ? 200 : 230} onPress={() => open(tool.id)} onReady={i < 2 ? () => boot.cardPainted(i) : undefined} />
+                <ToolCard tool={tool} index={i} onPress={() => open(tool.id)} onReady={i < 2 ? () => boot.cardPainted(i) : undefined} />
               </View>
             ))}
           </View>

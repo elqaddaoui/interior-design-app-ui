@@ -3,12 +3,14 @@ import { Pressable, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Icon, ICON_CHOICES } from '@/components/ui/Icon';
 import { Input } from '@/components/ui/Field';
-import { MediaView } from '@/components/ui/MediaView';
+import { MediaView, MediaView as Thumb } from '@/components/ui/MediaView';
 import { Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { ColorPicker } from './ColorPicker';
 import { ImageField } from './ImageField';
+import { SlideshowModal } from './toolcards/SlideshowModal';
+import { slideshowImages } from '@/lib/toolCards';
 import { LangDots, LangField } from './LangField';
 import { mergeStates } from '@/lib/langStatus';
 import { useStore } from '@/store/useStore';
@@ -51,7 +53,7 @@ function Chips({ options, value, onChange, multi }: { options: Opt[]; value: any
   );
 }
 
-export function Field({ f, value, onChange, ctx, error }: { f: FieldDef; value: any; onChange: (v: any) => void; ctx: Ctx; error?: string }) {
+export function Field({ f, value, onChange, ctx, error, record }: { f: FieldDef; value: any; onChange: (v: any) => void; ctx: Ctx; error?: string; record?: any }) {
   const { t } = ctx;
   const label = <Txt className="text-[13px] font-semibold text-muted mb-1.5">{f.label}</Txt>;
   switch (f.kind) {
@@ -89,9 +91,11 @@ export function Field({ f, value, onChange, ctx, error }: { f: FieldDef; value: 
       const m = value ?? { type: 'image', uri: '' };
       return (
         <View className="mb-2">{label}
-          <Chips options={[{ value: 'image', label: t('admin.f.image') }, { value: 'video', label: t('admin.f.video') }]} value={m.type} onChange={(v) => onChange({ ...m, type: v })} />
+          <MediaTypeChips m={m} onChange={onChange} record={record} />
           <View className="h-3" />
-          {m.type === 'image'
+          {m.type === 'slideshow'
+            ? <SlideshowSummary m={m} onChange={onChange} record={record} />
+            : m.type === 'image'
             ? <ImageField label={t('admin.f.mediaUrl')} value={m.uri} onChange={(v) => onChange({ ...m, uri: v })} />
             : <><Input label={`${t('admin.f.mediaUrl')} (.mp4)`} value={m.uri} onChangeText={(v) => onChange({ ...m, uri: v })} autoCapitalize="none" placeholder="https://…/video.mp4" />
                 {mediaUploadsEnabled ? <VideoUpload onUploaded={(uri, poster) => onChange({ ...m, uri, poster: poster || m.poster })} /> : null}
@@ -115,6 +119,41 @@ export function Field({ f, value, onChange, ctx, error }: { f: FieldDef; value: 
       );
     }
   }
+}
+
+/**
+ * Image / Video / Multiple images. Choosing "Multiple images" opens the slideshow popup at once (pictures + animation settings + live card preview).
+ * The first picture of an existing image becomes the first slide, so nothing the admin already uploaded is lost.
+ */
+function MediaTypeChips({ m, onChange, record }: { m: any; onChange: (v: any) => void; record?: any }) {
+  const { t } = useT();
+  const [open, setOpen] = React.useState(false);
+  const pick = (v: string) => {
+    if (v !== 'slideshow') { onChange({ ...m, type: v }); return; }
+    const images = m.images?.length ? m.images : m.type === 'image' && m.uri ? [m.uri] : [];
+    onChange({ ...m, type: 'slideshow', images, uri: images[0] ?? '' });
+    setOpen(true);
+  };
+  return <>
+    <Chips options={[{ value: 'image', label: t('admin.f.image') }, { value: 'video', label: t('admin.f.video') }, { value: 'slideshow', label: t('tc.multiImages') }]} value={m.type} onChange={pick} />
+    {open && m.type === 'slideshow' ? <SlideshowModal title={record?.title} subtitle={record?.subtitle} media={m} onChange={onChange} onClose={() => setOpen(false)} /> : null}
+  </>;
+}
+
+/** Slideshow selected: thumbnails of its pictures and the button that reopens the popup. */
+function SlideshowSummary({ m, onChange, record }: { m: any; onChange: (v: any) => void; record?: any }) {
+  const { t } = useT();
+  const [open, setOpen] = React.useState(false);
+  const images = slideshowImages(m);
+  return <View className="mb-3">
+    <View className="flex-row flex-wrap gap-2 mb-2">
+      {images.slice(0, 6).map((uri, i) => <Thumb key={`${i}-${uri}`} uri={uri} className="rounded-lg" style={{ width: 56, height: 56 }} />)}
+      {images.length > 6 ? <View className="rounded-lg bg-surface2 items-center justify-center" style={{ width: 56, height: 56 }}><Txt className="text-muted font-bold">+{images.length - 6}</Txt></View> : null}
+    </View>
+    <Txt className="text-muted text-[12px] mb-2">{t('tc.imagesCount', { n: images.length })}</Txt>
+    <View className="flex-row"><Button testID="slideshow-open" size="sm" variant="soft" icon="image-multiple-outline" title={t('tc.configure')} onPress={() => setOpen(true)} /></View>
+    {open ? <SlideshowModal title={record?.title} subtitle={record?.subtitle} media={m} onChange={onChange} onClose={() => setOpen(false)} /> : null}
+  </View>;
 }
 
 /** Direct (presigned) upload of a video file to R2; the field receives its /api/media URL. */
@@ -265,7 +304,7 @@ export function FormFields({ fields, value, errors, ctx, onChange }: { fields: F
   return <View testID="form-fields" onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ gap: 8 }}>
     {rows.map((row) => <View key={row.map((f) => f.key).join('+')} style={{ flexDirection: 'row', gap: 8, alignItems: 'stretch' }}>
       {row.map((f) => <View key={f.key} testID={`field-${f.key}`} className="bg-surface rounded-xl border border-line px-3 pt-2.5" style={{ flex: 1, minWidth: 0, justifyContent: f.kind === 'bool' ? 'center' : undefined, paddingBottom: f.kind === 'bool' ? 10 : 0 }}>
-        <Field f={f} ctx={ctx} value={value?.[f.key]} error={errors[f.key]} onChange={(v) => onChange(f.key, v)} />
+        <Field f={f} ctx={ctx} value={value?.[f.key]} record={value} error={errors[f.key]} onChange={(v) => onChange(f.key, v)} />
       </View>)}
     </View>)}
   </View>;

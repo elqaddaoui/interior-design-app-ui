@@ -26,7 +26,7 @@ const NAME = /^([a-f0-9]{32})\.(png|jpg|webp|gif|avif|svg|mp4|webm|mov)$/;
 /** Native clients receive absolute media URLs; store them host-independent again. */
 const ABSOLUTE = /^https?:\/\/[^/]+(\/api\/media\/[a-f0-9]{32}\.[a-z0-9]+)$/;
 /** Object keys whose string value is a picture shown by the app (external https URLs there are copied into storage). */
-const MEDIA_KEYS = new Set(['image', 'cover', 'poster', 'logoUri', 'loaderCustomUri', 'photoUri', 'aiResult', 'finalResult', 'before', 'after', 'uri']);
+const MEDIA_KEYS = new Set(['image', 'cover', 'poster', 'logoUri', 'loaderCustomUri', 'photoUri', 'aiResult', 'finalResult', 'before', 'after', 'uri', 'images']);
 const UPLOAD_EXPIRES = 300; // seconds: presigned PUT URLs are valid for 5 minutes
 const PENDING_TTL = 3600000; // an upload must be completed within 1 hour of its presign
 const CACHE = 'public, max-age=31536000, immutable';
