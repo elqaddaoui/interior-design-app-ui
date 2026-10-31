@@ -60,20 +60,41 @@ function createContent(db, sync, mediaOptions = {}) {
   /** Provider API keys are only ever returned to an authenticated admin. */
   const hideSecrets = row => ({ ...row, apiKey: '' });
 
-  async function snapshot(isAdmin) {
+  /**
+   * Database transfer: the whole content (every table row, ~30 KB and growing with the admin's work) used to be downloaded from
+   * Postgres on EVERY /api/content call. It only changes when an admin saves, and every save bumps the `content` version, so the
+   * result is kept per version (one public copy, one admin copy) and rebuilt only after a bump. The version is read BEFORE the
+   * rows: a save writes its rows first and bumps second, so a copy built under version N is never newer than N and the bump
+   * to N+1 always replaces it (the reverse order could keep old rows under a new number).
+   */
+  let built = null; // { version, rows: { items, docs }, publicCopy, adminCopy }
+  let building = null;
+  async function load() {
     await ensureSeed();
-    const collections = Object.fromEntries(COLLECTIONS.map(name => [name, []]));
-    // Three independent reads: one round trip of waiting instead of three in a row.
-    const [itemRows, docRows, versions] = await Promise.all([db.query('SELECT coll,data FROM content_items'), db.query('SELECT name,data FROM content_docs'), sync.read(['content'])]);
-    for (const row of itemRows) {
-      if (!collections[row.coll]) continue;
-      const item = JSON.parse(row.data);
-      collections[row.coll].push(row.coll === 'models' && !isAdmin ? hideSecrets(item) : item);
-    }
-    const docs = {};
-    for (const row of docRows) docs[row.name] = JSON.parse(row.data);
-    return { version: versions.content, collections, docs };
+    const version = (await sync.read(['content'])).content;
+    if (built?.version === version) return built;
+    // Concurrent callers on the same version share one set of reads.
+    if (building?.version === version) return building.promise;
+    const promise = (async () => {
+      const [itemRows, docRows] = await Promise.all([db.query('SELECT coll,data FROM content_items'), db.query('SELECT name,data FROM content_docs')]);
+      const items = Object.fromEntries(COLLECTIONS.map(name => [name, []]));
+      for (const row of itemRows) if (items[row.coll]) items[row.coll].push(JSON.parse(row.data));
+      const docs = {};
+      for (const row of docRows) docs[row.name] = JSON.parse(row.data);
+      const adminCopy = { version, collections: items, docs };
+      const publicCopy = { version, collections: { ...items, models: items.models.map(hideSecrets) }, docs };
+      return (built = { version, adminCopy, publicCopy });
+    })().finally(() => { if (building?.promise === promise) building = null; });
+    building = { version, promise };
+    return promise;
   }
+  /** `{ ...snapshot, etag }`: the etag identifies this exact version of this exact copy (public / admin). */
+  async function snapshot(isAdmin) {
+    const copy = await load();
+    return isAdmin ? copy.adminCopy : copy.publicCopy;
+  }
+  /** Cheap validator for conditional requests: costs one (cached) version read, never a table read. */
+  const etag = async isAdmin => { await ensureSeed(); return `W/"content:${isAdmin ? 'a' : 'p'}:${(await sync.read(['content'])).content}"`; };
 
   async function putItem(coll, id, body) {
     if (!COLLECTIONS.includes(coll)) throw fail(404, 'Unknown collection');
@@ -141,7 +162,8 @@ function createContent(db, sync, mediaOptions = {}) {
     await sync.bump(`c:${clientId}`);
     return next;
   }
-  const getDoc = async name => { await ensureSeed(); const row = (await db.query('SELECT data FROM content_docs WHERE name=$1', [name]))[0]; return row ? JSON.parse(row.data) : {}; };
-  return { media, getDoc, snapshot, putItem, deleteItems, patchDoc, adminPrefs, clientPrefs, setAdminPrefs, setClientPrefs, ensureSeed };
+  /** Settings documents come from the same per-version copy as /api/content: no table read per login / chat reply / scheduler tick. */
+  const getDoc = async name => ({ ...((await load()).adminCopy.docs[name] || {}) });
+  return { media, getDoc, snapshot, etag, putItem, deleteItems, patchDoc, adminPrefs, clientPrefs, setAdminPrefs, setClientPrefs, ensureSeed };
 }
 module.exports = { createContent, COLLECTIONS, DOCS };

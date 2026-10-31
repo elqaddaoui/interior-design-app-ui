@@ -12,8 +12,12 @@ import { useAdminChats } from '@/store/useAdminChats';
 import { useAdminCampaigns } from '@/store/useAdminCampaigns';
 
 /** What `GET /api/sync` returns: one monotonically increasing version per kind of data (null = not visible to this session). */
-interface SyncState { content: number; requests: number | null; clients: number | null; chats?: number | null; campaigns?: number | null; admin: number | null; client: number | null; guest?: number | null; user: { id: string; blocked: boolean } | null; isAdmin: boolean }
+interface SyncState { content: number; requests: number | null; clients: number | null; chats?: number | null; campaigns?: number | null; admin: number | null; client: number | null; parts?: Partial<Record<UserPart, number>> | null; guest?: number | null; user: { id: string; blocked: boolean } | null; isAdmin: boolean }
 const POLL_MS = 4000;
+/** The parts of a client's own space the server versions separately (`parts` in the sync answer). */
+type UserPart = 'conversations' | 'history' | 'requests';
+const USER_PARTS: UserPart[] = ['conversations', 'history', 'requests'];
+let seenParts: Partial<Record<UserPart, number>> | null = null;
 
 type Seen = Partial<Record<'content' | 'requests' | 'clients' | 'chats' | 'campaigns' | 'admin' | 'client' | 'guest', number | null>>;
 let seen: Seen = {};
@@ -43,7 +47,7 @@ export async function syncOnce() {
     const session = useUserSession.getState();
     // A different person on this device: forget what the previous one had already seen.
     const now = `${local.adminSession && state.isAdmin ? 'a' : ''}:${session.user?.id ?? ''}`;
-    if (now !== identity) { identity = now; seen = { content: seen.content }; }
+    if (now !== identity) { identity = now; seen = { content: seen.content }; seenParts = null; }
     const changed = (key: keyof Seen) => { const was = seen[key]; seen[key] = state[key]; return was !== undefined && was !== state[key] && state[key] != null; };
     // The first round compares against the snapshot the app booted with, so a change made in between is not lost.
     if (seen.content === undefined) seen.content = contentVersion();
@@ -61,14 +65,23 @@ export async function syncOnce() {
     }
     if (session.user) {
       if (state.user?.blocked) jobs.push(session.refresh()); // signs this device out
-      else if (changed('client')) jobs.push(session.refresh().then(reloadUserSpace));
+      else if (state.parts) {
+        // Finer versions: only the part that changed is fetched (a chat message no longer reloads designs and requests). The profile/credits are refreshed whenever anything about this client changed.
+        const before = seenParts;
+        seenParts = state.parts;
+        const parts = before ? USER_PARTS.filter(part => before[part] !== state.parts![part]) : [];
+        const profile = changed('client');
+        if (profile) jobs.push(session.refresh());
+        if (parts.length) jobs.push(reloadUserSpace(parts));
+      }
+      else if (changed('client')) jobs.push(session.refresh().then(() => reloadUserSpace()));
     } else if (state.guest != null && changed('guest')) {
       // A signed-out visitor's chats are in the database too: an admin answer (or another tab) shows up here.
       jobs.push(store.reload('conversations'));
     } else if (state.client != null && !state.user?.blocked) {
       // The server recognises a client session this device has not loaded (signed in from the cookie).
       // A blocked account is skipped: retrying it every poll would only re-announce the block.
-      jobs.push(session.refresh().then(reloadUserSpace));
+      jobs.push(session.refresh().then(() => reloadUserSpace()));
     }
     await Promise.allSettled(jobs);
   } catch { /* offline or server restarting: try again on the next tick */ }

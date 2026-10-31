@@ -26,7 +26,7 @@ export default function ItemViewer() {
 
   const use = () => {
     if (!section) return;
-    useWizard.getState().start(section.toolId, { styleId: item?.styleId, roomTypeId: cat?.roomTypeId });
+    useWizard.getState().start(section.toolId, { styleId: item?.styleId, roomTypeId: cat?.roomTypeId, inspirationId: item?.id });
     router.replace({ pathname: '/tool/[id]', params: { id: section.toolId } });
   };
 

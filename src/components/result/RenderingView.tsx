@@ -34,7 +34,7 @@ export function RenderingView({ photo, progress, stage }: { photo: string; progr
   return (
     <View className="items-center w-full">
       <View className="w-full rounded-3xl overflow-hidden bg-surface2" style={{ aspectRatio: 1.05 }} onLayout={(e) => setH(e.nativeEvent.layout.height)}>
-        <Image source={{ uri: photo }} style={StyleSheet.absoluteFill} contentFit="cover" blurRadius={14} />
+        {photo ? <Image source={{ uri: photo }} style={StyleSheet.absoluteFill} contentFit="cover" blurRadius={14} /> : <LinearGradient colors={['#2b2b33', '#4a4338']} style={StyleSheet.absoluteFill} />}
         <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
         <Animated.View style={[{ position: 'absolute', left: 0, right: 0, top: 0, height: 90 }, beam]} pointerEvents="none">
           <LinearGradient colors={['rgba(251,221,45,0)', 'rgba(251,221,45,0.55)', 'rgba(251,221,45,0)']} style={{ flex: 1 }} />

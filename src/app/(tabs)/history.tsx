@@ -106,7 +106,7 @@ export default function History() {
                 if (pending) { toast(t('result.pending')); return; }
                 router.push({ pathname: '/result/[id]', params: { id: h.id } });
               }} onLongPress={() => { setSelecting(true); toggle(h.id); }} className="active:opacity-90">
-                <MediaView uri={h.after ?? h.before} className="rounded-xl" style={{ aspectRatio: 1 }}>
+                <MediaView uri={h.after || h.before} className="rounded-xl" style={{ aspectRatio: 1 }}>
                   {pending ? <View className="absolute inset-0 bg-black/45 items-center justify-center gap-1"><Icon name="whatsapp" size={26} color="#25D366" /><Txt className="text-white text-[11px] font-bold px-2 text-center">{t('history.pending')}</Txt></View> : null}
                   <View className="absolute bottom-0 left-0 right-0 px-2 py-1.5 bg-black/40"><Txt className="text-white text-[11px] font-semibold" numberOfLines={1}>{toolOf(h.draft.toolId)?.title.fr ?? ''}</Txt></View>
                   {selecting ? <View className={`absolute top-2 end-2 w-6 h-6 rounded-full items-center justify-center border-2 ${on ? 'bg-primary border-primary' : 'border-white bg-black/30'}`}>{on ? <Icon name="check" size={14} tone="onprimary" /> : null}</View> : null}

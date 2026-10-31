@@ -12,6 +12,8 @@ const { translate } = require('./translate');
 const { createNotifier, validateSubscription, trim, phone } = require('./notifications');
 const { createCampaigns, cleanCampaign } = require('./campaigns');
 const { createChat } = require('./chat');
+const { createImageGen } = require('./imagegen');
+const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -41,7 +43,9 @@ async function readBody(req) {
 function validateDemand(value) {
   const name = trim(value?.name, 120), whatsapp = phone(value?.whatsapp);
   if (name.length < 2 || !/^\+?\d{6,20}$/.test(whatsapp)) throw fail(400, 'Name and phone required');
-  if (typeof value.photoUri !== 'string' || value.photoUri.length > 3000000 || !/^(data:image\/(png|jpeg|webp);base64,|https?:\/\/|\/api\/media\/[a-f0-9]{32}\.[a-z0-9]+$)/.test(value.photoUri)) throw fail(400, 'Invalid photo');
+  const textOnly = value.draft?.source === 'text' && (value.photoUri === '' || value.photoUri == null);
+  if (textOnly) value = { ...value, photoUri: '' };
+  if (!textOnly && (typeof value.photoUri !== 'string' || value.photoUri.length > 3000000 || !/^(data:image\/(png|jpeg|webp);base64,|https?:\/\/|\/api\/media\/[a-f0-9]{32}\.[a-z0-9]+$)/.test(value.photoUri))) throw fail(400, 'Invalid photo');
   const draft = {};
   for (const key of ['toolId', 'roomTypeId', 'styleId', 'paletteId', 'modelId', 'mode']) {
     if (value.draft?.[key] != null) {
@@ -50,6 +54,12 @@ function validateDemand(value) {
     }
   }
   if (!draft.toolId) throw fail(400, 'Tool required');
+  // AI inputs: the person's own words, custom palette colours (exact #RRGGBB), an Explore inspiration used as a style reference, and text-only mode.
+  if (value.draft?.prompt != null) { if (typeof value.draft.prompt !== 'string') throw fail(400, 'Invalid draft'); const text = value.draft.prompt.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 500); if (text) draft.prompt = text; }
+  if (value.draft?.colors != null) { if (!Array.isArray(value.draft.colors) || value.draft.colors.length > 8 || value.draft.colors.some(c => typeof c !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(c))) throw fail(400, 'Invalid colors'); const colors = normalizeColors(value.draft.colors); if (colors.length) draft.colors = colors; }
+  if (value.draft?.inspirationId != null) { if (typeof value.draft.inspirationId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(value.draft.inspirationId)) throw fail(400, 'Invalid draft'); draft.inspirationId = value.draft.inspirationId; }
+  if (value.draft?.source != null) { if (!['photo', 'text'].includes(value.draft.source)) throw fail(400, 'Invalid draft'); draft.source = value.draft.source; }
+  if (draft.source === 'text' && value.photoUri) throw fail(400, 'Invalid photo');
   return { name, whatsapp, draft, photoUri: value.photoUri, userId: trim(value.userId || 'client', 100), status: 'pending', createdAt: Date.now() };
 }
 /**
@@ -73,7 +83,7 @@ const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve 
  * background, so /api/health answers 503 `database: "starting"` and every other /api route 503 with a clear message.
  * Without it (Vercel, tests) the backend is always ready and behaves exactly as before.
  */
-function createBackend({ env = process.env, db = createDb(env), senders, media: mediaOptions = {}, translator = translate, chatFetch, isReady = () => true } = {}) {
+function createBackend({ env = process.env, db = createDb(env), senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, isReady = () => true } = {}) {
   const notifier = createNotifier(db, env, senders, { settings: () => content.getDoc('settings') });
   const clients = createClients(db);
   // Long-running server: anonymous polls are answered from a 2 s in-memory copy of the versions (local writes invalidate it at once).
@@ -83,6 +93,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   const media = content.media;
   // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
   const campaigns = createCampaigns(db, notifier, { sync, settings: () => content.getDoc('settings') });
+  const imagegen = createImageGen(db, { env, media, content, sync, ...(imageFetch ? { fetch: imageFetch } : {}) });
   const chat = createChat(db, { env, ...(chatFetch ? { fetch: chatFetch } : {}) });
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
   // Managed hosts (Hostinger) put a reverse proxy on the same machine in front of the app: every request then comes from a
@@ -158,7 +169,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         const sameOrigin = origin && /^https?:\/\//.test(origin) && new URL(origin).host === req.headers.host;
         if (origin && !sameOrigin && !allowedOrigins.includes(origin)) throw fail(403, 'Origin not allowed');
         if (origin) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Access-Control-Allow-Credentials', 'true'); res.setHeader('Vary', 'Origin'); }
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-User-Token');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-User-Token, If-None-Match');
+        res.setHeader('Access-Control-Expose-Headers', 'ETag');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
         if (!isReady()) {
@@ -173,11 +185,17 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname.startsWith('/api/media/') && (req.method === 'GET' || req.method === 'HEAD')) {
           if (!db.configured()) throw fail(503, 'DATABASE_NOT_CONFIGURED');
           await content.ensureSeed();
-          const file = await media.readMedia(url.pathname.slice('/api/media/'.length));
+          const name = url.pathname.slice('/api/media/'.length);
+          const file = await media.readMedia(name, { head: req.method === 'HEAD' });
           if (!file) throw fail(404, 'NOT_FOUND');
           // The target never changes for a name, but a day-long cache lets a change of R2_PUBLIC_BASE_URL take effect.
           if (file.redirect) { res.writeHead(302, { Location: file.redirect, 'Cache-Control': 'public, max-age=86400, s-maxage=86400' }); return res.end(); }
-          return sendBuffer(req, res, 200, { 'Content-Type': file.mime, 'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable', ...(file.mime === 'image/svg+xml' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) }, file.body);
+          // The name is the hash of the bytes: it is its own ETag, so a revalidation costs no database read at all.
+          const etag = `"${name}"`;
+          const headers = { 'Content-Type': file.mime, ETag: etag, 'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable', ...(file.mime === 'image/svg+xml' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) };
+          if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag, 'Cache-Control': headers['Cache-Control'] }); return res.end(); }
+          if (req.method === 'HEAD') { res.writeHead(200, { ...headers, 'Content-Length': file.size ?? file.body.length }); return res.end(); }
+          return sendBuffer(req, res, 200, headers, file.body);
         }
         const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : url.pathname === '/api/chat/reply' ? 'chat' : 'api';
         const key = `${address(req)}:${bucketName}`;
@@ -213,14 +231,19 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname === '/api/content' && req.method === 'GET') {
           const adminAsked = !!sessionToken || url.searchParams.has('a');
           const admin = !!sessionToken && !!(await db.query('SELECT 1 FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
-          const snapshot = await content.snapshot(admin);
+          // The ETag is the content version (one tiny sync_state read): an unchanged app gets a bodyless 304 and the database is never asked for the snapshot.
+          const etag = await content.etag(admin);
+          const matches = (req.headers['if-none-match'] || '').split(',').map(value => value.trim()).includes(etag);
           // The shared CDN may keep the PUBLIC copy briefly (CONTENT_S_MAXAGE seconds, default 30, 0 disables) and serve a stale one while it
           // refreshes in the background, so visitors rarely wait on a database that may be waking up. Browsers always revalidate
           // (max-age=0). Admin copies (which contain secrets) and admin-panel requests are never stored. Edits stay visible quickly:
           // /api/sync bumps the content version and the app then asks for /api/content?v=<version>, a distinct cache key.
           const maxAge = Math.max(0, Math.min(300, Number(env.CONTENT_S_MAXAGE ?? 30) || 0));
           const cacheable = !adminAsked && maxAge > 0;
-          return json(200, snapshot, { 'Cache-Control': cacheable ? `public, max-age=0, s-maxage=${maxAge}, stale-while-revalidate=${maxAge * 10}` : 'private, no-store' });
+          const cacheControl = cacheable ? `public, max-age=0, s-maxage=${maxAge}, stale-while-revalidate=${maxAge * 10}` : 'private, no-store';
+          if (matches) { res.writeHead(304, { ETag: etag, 'Cache-Control': cacheControl, ...(admin ? {} : { Vary: 'Accept-Encoding' }) }); return res.end(); }
+          const snapshot = await content.snapshot(admin);
+          return json(200, snapshot, { 'Cache-Control': cacheControl, ETag: etag });
         }
 
         const session = sessionToken && (await db.query('SELECT token_hash,admin_id FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
@@ -231,6 +254,9 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         const userCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_user='))?.slice(11);
         const userToken = req.headers['x-user-token'] || userCookie;
         const client = await clients.authenticate(userToken);
+        // One client's data changed: `c:<id>` (everything, the legacy key) plus one key per part so a device reloads only the part that changed.
+        const PARTS = ['conversations', 'history', 'requests'];
+        const touch = (id, ...parts) => [`c:${id}`, ...(parts.length ? parts : PARTS).map(part => `c:${id}:${part}`)];
         const requireUser = () => { if (!client) throw fail(401, 'USER_LOGIN_REQUIRED'); if (client.blocked) throw fail(403, 'ACCOUNT_BLOCKED'); return client; };
         const cookie = (name, token, age) => `${name}=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${age}${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
 
@@ -240,7 +266,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const result = await clients.login(body.name, body.phone, (await content.getDoc('settings')).defaultFreeCredits);
           res.setHeader('Set-Cookie', cookie('dwira_user', result.token, 365 * 86400));
           // Chats this device held as a visitor now belong to the person who just signed in.
-          if (clientHash && (await clients.adoptGuest(clientHash, result.user)).length) await sync.bump(`c:${result.user.id}`, 'chats', `g:${clientHash}`);
+          if (clientHash && (await clients.adoptGuest(clientHash, result.user)).length) await sync.bump(...touch(result.user.id, 'conversations'), 'chats', `g:${clientHash}`);
           if (result.created) {
             // A brand-new lead: tell the admins right away (bounded wait; failures stay queued for retry).
             await enqueue('lead', `lead:${result.user.id}`, { id: result.user.id, name: result.user.name, whatsapp: result.user.whatsapp });
@@ -252,7 +278,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname === '/api/user/session' && req.method === 'GET') return json(200, { user: requireUser(), prefs: await content.clientPrefs(client.id) });
         // ---- Sync, shared content and preferences ----
         if (url.pathname === '/api/sync' && req.method === 'GET') {
-          const keys = ['content', ...(session ? ['requests', 'clients', 'chats', 'campaigns', `a:${adminId}`] : []), ...(client ? [`c:${client.id}`] : []), ...(clientHash && !client ? [`g:${clientHash}`] : [])];
+          const keys = ['content', ...(session ? ['requests', 'clients', 'chats', 'campaigns', `a:${adminId}`] : []), ...(client ? [`c:${client.id}`, ...['conversations', 'history', 'requests'].map(part => `c:${client.id}:${part}`)] : []), ...(clientHash && !client ? [`g:${clientHash}`] : [])];
           const versions = await sync.read(keys);
           if (env.VERCEL) {
             // Serverless has no background timer (cron is only daily): any open app retries failed notifications and drives
@@ -262,7 +288,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
             await withTimeout(campaigns.tick({ budgetMs: 6000 }), 8000);
           }
           // Long-running server: the background timer below does both, so a poll costs only the version read.
-          return json(200, { content: versions.content, campaigns: session ? versions.campaigns : null, requests: session ? versions.requests : null, clients: session ? versions.clients : null, chats: session ? versions.chats : null, admin: session ? versions[`a:${adminId}`] : null, client: client ? versions[`c:${client.id}`] : null, guest: clientHash && !client ? versions[`g:${clientHash}`] : null, user: client ? { id: client.id, blocked: !!client.blocked } : null, isAdmin: !!session });
+          return json(200, { content: versions.content, campaigns: session ? versions.campaigns : null, requests: session ? versions.requests : null, clients: session ? versions.clients : null, chats: session ? versions.chats : null, admin: session ? versions[`a:${adminId}`] : null, client: client ? versions[`c:${client.id}`] : null, parts: client ? Object.fromEntries(['conversations', 'history', 'requests'].map(part => [part, versions[`c:${client.id}:${part}`]])) : null, guest: clientHash && !client ? versions[`g:${clientHash}`] : null, user: client ? { id: client.id, blocked: !!client.blocked } : null, isAdmin: !!session });
         }
         if (url.pathname === '/api/prefs') {
           const asAdmin = url.searchParams.get('as') === 'admin';
@@ -279,7 +305,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname === '/api/user/claim' && req.method === 'POST') {
           const body = await readBody(req);
           const claimed = await clients.claim(requireUser(), body.id);
-          await sync.bump(`c:${client.id}`, 'clients');
+          await sync.bump(...touch(client.id, 'history'), 'clients');
           return json(200, { user: claimed });
         }
         if (url.pathname === '/api/user/requests' && req.method === 'GET') {
@@ -293,16 +319,15 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           if (!clientHash) throw fail(400, 'Client token required');
           const id = guestChat[1];
           if (req.method === 'GET') {
-            const rows = await clients.guestList(clientHash);
-            if (!id) return json(200, rows);
-            const row = rows.find(row => row.id === id);
+            if (!id) return json(200, await clients.guestList(clientHash));
+            const row = await clients.guestGet(clientHash, id);
             if (!row) throw fail(404, 'NOT_FOUND');
             return json(200, row);
           }
           if (req.method === 'DELETE' && id) { await clients.guestRemove(clientHash, id); await sync.bump('chats', `g:${clientHash}`); return json(200, { ok: true }); }
           if (req.method === 'POST' || req.method === 'PATCH' && id) {
             const body = await readBody(req);
-            const existing = id && (await clients.guestList(clientHash)).find(row => row.id === id);
+            const existing = id && (await clients.guestGet(clientHash, id));
             if (id && !existing) throw fail(404, 'NOT_FOUND');
             const value = { ...existing, ...(await media.externalize(body, { remote: 'report', svg: false })).value };
             const fresh = mergeConversation(value, existing);
@@ -322,16 +347,15 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           requireUser();
           const kind = space[1], id = space[2];
           if (req.method === 'GET') {
-            const rows = await clients.listSpace(client, kind);
-            if (!id) return json(200, rows);
-            const row = rows.find(row => row.id === id);
+            if (!id) return json(200, await clients.listSpace(client, kind));
+            const row = await clients.getSpaceItem(client, kind, id);
             if (!row) throw fail(404, 'NOT_FOUND');
             return json(200, row);
           }
-          if (req.method === 'DELETE' && id) { await clients.removeSpace(client, kind, id); await sync.bump(`c:${client.id}`, 'clients'); return json(200, { ok: true }); }
+          if (req.method === 'DELETE' && id) { await clients.removeSpace(client, kind, id); await sync.bump(...touch(client.id, kind)); return json(200, { ok: true }); }
           if (req.method === 'POST' || req.method === 'PATCH' && id) {
             const body = await readBody(req);
-            const existing = id && (await clients.listSpace(client, kind)).find(row => row.id === id);
+            const existing = id && (await clients.getSpaceItem(client, kind, id));
             if (id && !existing) throw fail(404, 'NOT_FOUND');
             if (req.method === 'POST' && kind === 'history' && !(await clients.hasClaim(body.claimId, client.id))) throw fail(403, 'CLAIM_REQUIRED');
             // Inline uploads (data URLs) and external pictures go to media storage; a failed download keeps the URL so a design is never lost.
@@ -339,7 +363,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
             if (kind === 'history' && (!value.draft?.toolId || typeof value.before !== 'string' || !['pending', 'done'].includes(value.status))) throw fail(400, 'INVALID_HISTORY');
             const fresh = kind === 'conversations' ? mergeConversation(value, existing) : [];
             const saved = await clients.putSpace(client, kind, value, id || (kind === 'history' ? body.claimId : crypto.randomUUID()));
-            await sync.bump(`c:${client.id}`, 'clients');
+            // The admin client list shows profile and credits only: claims/credits bump `clients` themselves, so a chat or history write must not make every admin reload it.
+            await sync.bump(...touch(client.id, kind));
             if (fresh.length) {
               // Tell the admins about the newest message; the link opens exactly this conversation.
               const last = fresh[fresh.length - 1], jobId = `chat:${saved.id}:${last.id}`;
@@ -354,7 +379,13 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
 
         // ---- Admin ----
         if (url.pathname === '/api/admin/clients' && req.method === 'GET') { admin(); return json(200, await clients.users()); }
-        if (url.pathname === '/api/admin/conversations' && req.method === 'GET') { admin(); return json(200, await clients.adminConversations()); }
+        if (url.pathname === '/api/admin/conversations' && req.method === 'GET') {
+          admin();
+          // Without `since`: the newest 300 as a plain array (as before). With `since=<updatedAt>`: `{ chats, ids }`, only what changed after it.
+          const since = url.searchParams.get('since');
+          if (since === null) return json(200, (await clients.adminConversations()).chats);
+          return json(200, await clients.adminConversations({ since: Number(since) || 0 }));
+        }
         const adminChat = url.pathname.match(/^\/api\/admin\/conversations\/([A-Za-z0-9_-]{1,100})$/);
         if (adminChat && req.method === 'POST') {
           admin();
@@ -364,7 +395,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const { conversation, clientId, deviceHash } = await clients.adminReply(adminChat[1], text, message);
           // A visitor has no account to notify: their open chat picks the answer up through the sync loop.
           if (!clientId) { await sync.bump('chats', `g:${deviceHash}`); return json(200, conversation); }
-          await sync.bump(`c:${clientId}`, 'chats');
+          await sync.bump(...touch(clientId, 'conversations'), 'chats');
           const jobId = `reply:${conversation.id}:${message.id}`;
           await enqueue('reply', jobId, { id: conversation.id, text, audience: { type: 'client', id: clientId } });
           await withTimeout(pump(jobId), Number(env.PUSH_WAIT_MS) || 8000);
@@ -422,13 +453,27 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           if (config.type === 'whatsapp') throw fail(409, 'ASSISTANT_DISABLED');
           return json(200, await chat.reply(body.messages, config));
         }
+        // ---- AI image generation: the request (photo or text, style, palette, colours, prompt) was stored by POST /api/requests, which also spent the credit. ----
+        if (url.pathname === '/api/ai/status' && req.method === 'GET') return json(200, await imagegen.publicStatus(), { 'Cache-Control': 'private, max-age=30' });
+        if (url.pathname === '/api/ai/render' && req.method === 'POST') {
+          requireUser();
+          const body = await readBody(req);
+          try { return json(200, await imagegen.renderRequest(client, body.id)); }
+          catch (error) {
+            // The wizard shows its sample result when no engine is configured (demo mode) and offers Retry for every other failure.
+            if (error.status === 503 && error.message === 'AI_NOT_CONFIGURED') return json(503, { error: 'AI_NOT_CONFIGURED' });
+            throw error;
+          }
+        }
+        if (url.pathname === '/api/admin/ai/status' && req.method === 'GET') { admin(); return json(200, await imagegen.status()); }
+        if (url.pathname === '/api/admin/ai/keys' && req.method === 'PATCH') { admin(); return json(200, await imagegen.setKeys(await readBody(req))); }
         if (url.pathname === '/api/admin/chat/status' && req.method === 'GET') { admin(); return json(200, await chat.status()); }
         if (url.pathname === '/api/admin/chat/keys' && req.method === 'PATCH') { admin(); return json(200, await chat.setKeys(await readBody(req))); }
         if (url.pathname === '/api/admin/clients/bulk' && req.method === 'POST') {
           admin();
           const body = await readBody(req), result = await clients.bulk(body);
           if (body.action === 'delete') for (const id of body.ids) await notifier.removeOwner('client', id);
-          await sync.bump('clients', 'requests', ...(Array.isArray(body.ids) ? body.ids.map(id => `c:${id}`) : []));
+          await sync.bump('clients', 'requests', ...(Array.isArray(body.ids) ? body.ids.flatMap(id => typeof id === 'string' ? (body.action === 'delete' ? touch(id) : touch(id, 'requests')) : []) : []));
           return json(200, result);
         }
         const contentItem = url.pathname.match(/^\/api\/admin\/content\/([A-Za-z]+)(?:\/([A-Za-z0-9_-]{1,100}))?$/);
@@ -454,7 +499,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           admin();
           await clients.remove(creditClient[1]);
           await notifier.removeOwner('client', creditClient[1]);
-          await sync.bump('clients', 'requests', `c:${creditClient[1]}`);
+          await sync.bump('clients', 'requests', ...touch(creditClient[1]));
           return json(200, { ok: true });
         }
         // ---- Admin media uploads ----
@@ -555,7 +600,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           if (!known) input.photoUri = (await media.externalize({ photoUri: input.photoUri }, { remote: 'report', svg: false })).value.photoUri;
           const request = { ...input, id: crypto.randomUUID(), clientHash, clientRequestId: body.id };
           const inserted = await db.query('INSERT INTO requests(id,user_id,client_request_id,created_at,data) VALUES($1,$2,$3,$4,$5) ON CONFLICT (user_id, client_request_id) DO NOTHING RETURNING id', [request.id, client.id, body.id, request.createdAt, JSON.stringify(request)]);
-          if (inserted.length) { await enqueue('request', request.id); await sync.bump('requests', 'clients', `c:${client.id}`); }
+          if (inserted.length) { await enqueue('request', request.id); await sync.bump('requests', 'clients', ...touch(client.id, 'requests', 'history')); }
           const stored = rowOf((await db.query('SELECT data FROM requests WHERE user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0]);
           // The demand is already durable. Serverless functions freeze after the response, so send the
           // notification now (bounded) instead of in the background; failures stay queued for retry.
@@ -565,7 +610,10 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname === '/api/requests' && req.method === 'GET') {
           admin();
           void pump();
-          return json(200, (await db.query('SELECT data FROM requests ORDER BY created_at DESC')).map(row => publicRow(rowOf(row))));
+          // Newest first. Default: the newest 500 (a few hundred KB at most instead of every request ever made); ?limit= (max 2000) and ?before=<createdAt> page further back.
+          const limit = Math.max(1, Math.min(2000, Number(url.searchParams.get('limit')) || 500)), before = Number(url.searchParams.get('before')) || null;
+          const rows = before ? await db.query('SELECT data FROM requests WHERE created_at<$1 ORDER BY created_at DESC LIMIT $2', [before, limit]) : await db.query('SELECT data FROM requests ORDER BY created_at DESC LIMIT $1', [limit]);
+          return json(200, rows.map(row => publicRow(rowOf(row))));
         }
         const match = url.pathname.match(/^\/api\/requests\/([A-Za-z0-9_-]+)$/);
         if (match) {
@@ -573,7 +621,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const request = found && rowOf(found);
           if (!request || (!session && (!client || request.userId !== client.id))) throw fail(404, 'Not found');
           if (req.method === 'GET') return json(200, publicRow(request));
-          if (req.method === 'DELETE') { admin(); await db.query('DELETE FROM outbox WHERE request_id=$1', [request.id]); await db.query('DELETE FROM requests WHERE id=$1', [request.id]); await sync.bump('requests', `c:${request.userId}`); return json(200, { ok: true }); }
+          if (req.method === 'DELETE') { admin(); await db.query('DELETE FROM outbox WHERE request_id=$1', [request.id]); await db.query('DELETE FROM requests WHERE id=$1', [request.id]); await sync.bump('requests', ...touch(request.userId, 'requests')); return json(200, { ok: true }); }
           if (req.method === 'PATCH') {
             const body = await readBody(req), patch = {};
             const fields = session ? ['status', 'autoSent', 'aiResult', 'finalResult', 'historyId'] : ['aiResult', 'historyId'];
@@ -594,7 +642,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
               await q('UPDATE requests SET data=$1 WHERE id=$2', [JSON.stringify(next), request.id]);
               return next;
             });
-            await sync.bump('requests', `c:${result.userId}`);
+            await sync.bump('requests', ...touch(result.userId, 'requests', 'history'));
             // The admin delivered the final design: tell its owner on every device they enabled notifications on.
             if (session && result.status === 'delivered' && !wasDelivered) {
               await enqueue('ready', `ready:${result.id}`, { id: result.id, name: result.name, whatsapp: result.whatsapp, audience: { type: 'client', id: result.userId } });
@@ -602,7 +650,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
             }
             if (result.status === 'delivered' && result.historyId && (result.finalResult || result.aiResult)) {
               const owner = await clients.user(result.userId);
-              const item = owner && (await clients.listSpace(owner, 'history')).find(row => row.id === result.historyId);
+              const item = owner && result.historyId && (await clients.getSpaceItem(owner, 'history', result.historyId));
               if (item) await clients.putSpace(owner, 'history', { ...item, after: result.finalResult || result.aiResult, status: 'done' }, item.id);
             }
             return json(200, publicRow(result));

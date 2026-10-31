@@ -156,23 +156,25 @@ export const useMe = (): AppUser | undefined => {
   return user ?? guest;
 };
 const SPACE_COLLS = ['history', 'conversations', 'requests'] as const;
-let spaceInflight: { who: string; promise: Promise<void> } | null = null;
+let spaceInflight: { who: string; full: boolean; promise: Promise<void> } | null = null;
 /**
  * Reload the signed-in person's own chats, designs and requests. A response that arrives after the person changed
  * (sign-out, another account) is dropped, so one account's data can never land in another's session.
  * Concurrent calls for the same person share one set of requests (startup and the sign-in hook both ask).
  */
-export function reloadUserSpace(): Promise<void> {
+export function reloadUserSpace(only?: readonly CollName[]): Promise<void> {
   const who = useUserSession.getState().user?.id ?? '';
-  if (spaceInflight?.who === who) return spaceInflight.promise;
+  // A partial reload (one part changed) joins a full one in flight; a full reload is never replaced by a partial one.
+  if (spaceInflight?.who === who && (!only || spaceInflight.full)) return spaceInflight.promise;
   const promise = (async () => {
     // An admin device's `requests` list is the admin's, loaded by loadAdminData: only a signed-in person's own list is replaced here.
-    const names = useLocal.getState().adminSession && !who ? SPACE_COLLS.filter(name => name !== 'requests') : SPACE_COLLS;
+    const all = useLocal.getState().adminSession && !who ? SPACE_COLLS.filter(name => name !== 'requests') : SPACE_COLLS;
+    const names = only ? all.filter(name => only.includes(name)) : all;
     const lists = await Promise.all(names.map(name => repos[name].list()));
     if ((useUserSession.getState().user?.id ?? '') !== who) return;
     useStore.setState(Object.fromEntries(names.map((name, i) => [name, lists[i]])) as Partial<State>);
   })().finally(() => { if (spaceInflight?.promise === promise) spaceInflight = null; });
-  spaceInflight = { who, promise };
+  spaceInflight = { who, full: !only, promise };
   return promise;
 }
 /** Whoever the data on screen belongs to changed (sign-in, sign-out, expired or blocked session): start from an empty space, then load theirs. */

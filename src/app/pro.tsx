@@ -2,7 +2,7 @@ import { useViewState } from '@/hooks/useViewState';
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import { useWizardGuard } from '@/hooks/useWizardGuard';
-import { useWizard } from '@/store/useWizard';
+import { useWizard, wizardReady } from '@/store/useWizard';
 import { Pressable, View } from 'react-native';
 import { router } from '@/hooks/useLeaveGuard';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,7 +28,7 @@ export default function Pro() {
   // Plans, prices and the highlighted one are edited by the admin and stored in the database.
   const plans = sorted(useStore((s) => s.plans)).filter((p) => p.visible);
   const { generation } = useLocalSearchParams<{ generation?: string }>();
-  const canContinue = generation === '1' && !!useWizard.getState().photoUri && (me?.credits ?? 0) > 0;
+  const canContinue = generation === '1' && wizardReady(useWizard.getState()) && (me?.credits ?? 0) > 0;
   // Credits granted by the admin WHILE this screen is open resume the same generation automatically:
   //  - the balance is watched live (the sync loop refreshes the session when the admin changes this client),
   //  - and re-read from the server every few seconds while waiting, so nothing depends on the person tapping.
@@ -38,7 +38,7 @@ export default function Pro() {
   const freeUsed = !!me?.freeUsed;
   const signedIn = !!me;
   useEffect(() => {
-    if (!waiting || resumed.current || !signedIn || needsPro({ credits, freeUsed: freeUsed ? 1 : 0 }) || !useWizard.getState().photoUri) return;
+    if (!waiting || resumed.current || !signedIn || needsPro({ credits, freeUsed: freeUsed ? 1 : 0 }) || !wizardReady(useWizard.getState())) return;
     resumed.current = true;
     useWizard.setState({ proSeen: true });
     toast(t('improve.creditsArrived'));

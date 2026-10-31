@@ -208,6 +208,8 @@ const models: EntityConfig<'models'> = {
     { kind: 'text', key: 'name', label: c.t('admin.f.name'), required: true },
     { kind: 'text', key: 'provider', label: c.t('admin.f.provider'), required: true },
     { kind: 'text', key: 'modelName', label: c.t('admin.f.modelName'), required: true },
+    { kind: 'select', key: 'engine', label: c.t('admin.f.engine'), options: () => [{ value: '', label: c.t('admin.f.engineAuto') }, { value: 'pollinations', label: 'Pollinations' }, { value: 'openai', label: c.t('admin.ai.openai') }] },
+    { kind: 'text', key: 'baseUrl', label: c.t('admin.f.baseUrl') },
     { kind: 'secret', key: 'apiKey', label: c.t('admin.f.apiKey') },
     { kind: 'bool', key: 'enabled', label: c.t('admin.f.enabled') },
     { kind: 'bool', key: 'isDefault', label: c.t('admin.f.isDefault') },
@@ -216,14 +218,14 @@ const models: EntityConfig<'models'> = {
   view: (c) => (r) => ({
     lead: iconTile('robot-outline', r.enabled ? 'ink' : 'soft'),
     title: r.name || '—',
-    subtitle: `${r.provider} · ${r.modelName}`,
+    subtitle: `${r.provider} · ${r.modelName}${r.engine ? ` · ${r.engine}` : ''}`,
     chips: [
       { icon: r.enabled ? 'check-circle' : 'close-circle-outline', label: c.t('admin.f.enabled'), tone: r.enabled ? 'success' as const : 'muted' as const },
       ...(r.isDefault ? [{ icon: 'star', label: c.t('admin.f.isDefault'), tone: 'primary' as const }] : []),
       { icon: 'key-outline', label: r.apiKey ? '••••' + String(r.apiKey).slice(-4) : '—' },
     ],
   }),
-  blank: (c) => ({ name: '', provider: '', modelName: '', apiKey: '', enabled: true, isDefault: false, order: o(c, 'models'), visible: true }),
+  blank: (c) => ({ name: '', provider: '', modelName: '', apiKey: '', engine: '', baseUrl: '', enabled: true, isDefault: false, order: o(c, 'models'), visible: true }),
 };
 
 const plans: EntityConfig<'plans'> = {

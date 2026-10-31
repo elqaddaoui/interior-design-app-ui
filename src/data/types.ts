@@ -74,6 +74,10 @@ export interface AiModel {
   isDefault: boolean;
   order: number;
   visible: boolean;
+  /** Image engine this model runs on: 'pollinations' (free default) or 'openai' (any OpenAI-compatible images API). Empty = automatic. */
+  engine?: 'pollinations' | 'openai' | '';
+  /** Optional endpoint for the 'openai' engine. */
+  baseUrl?: string;
 }
 
 export interface AppUser {
@@ -97,6 +101,14 @@ export interface Draft {
   mode?: RenderMode;
   paletteId?: Id;
   modelId?: Id;
+  /** Free-text instructions written by the client (max 500 characters). */
+  prompt?: string;
+  /** Custom palette (hex colours). Overrides `paletteId` when present. */
+  colors?: string[];
+  /** Explore picture used as a style reference. */
+  inspirationId?: Id;
+  /** `text` = no photo: the room is generated from the description alone. */
+  source?: 'photo' | 'text';
 }
 export interface WizardDraft extends Draft { photoUri: string }
 
@@ -197,6 +209,8 @@ export interface AppSettings {
   loaderDelayMs?: number;
   /** Fill the other two languages automatically (free translation) when one is typed in an admin form. On unless false. */
   autoTranslate?: boolean;
+  /** Let clients switch between the AI models a tool allows (default off: the admin's model is used). */
+  aiModelPicker?: boolean;
   /** Bulk/reorder operations must be explicitly enabled per content panel. */
   bulkPanels?: string[];
 }

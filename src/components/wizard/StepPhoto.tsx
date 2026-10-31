@@ -8,8 +8,11 @@ import { Txt } from '@/components/ui/Txt';
 import { tArr, useT } from '@/i18n';
 import { pickPhoto } from '@/lib/photo';
 import { toast } from '@/store/useToast';
+import { Input } from '@/components/ui/Field';
+import { PROMPT_MAX } from '@/components/wizard/StepCustom';
+import type { Draft } from '@/data/types';
 
-export function StepPhoto({ photo, onChange }: { photo: string; onChange: (uri: string) => void }) {
+export function StepPhoto({ photo, onChange, draft, onDraft }: { photo: string; onChange: (uri: string) => void; draft?: Draft; onDraft?: (p: Partial<Draft>) => void }) {
   const { t } = useT();
   const [sheet, setSheet] = useState(false);
   const [tips, setTips] = useState(false);
@@ -22,6 +25,20 @@ export function StepPhoto({ photo, onChange }: { photo: string; onChange: (uri: 
     else if (r.error === 'failed') toast(t('wizard.photoFailed'));
   };
 
+  const textMode = !photo && draft?.source === 'text';
+  if (textMode && onDraft) {
+    return (
+      <View>
+        <Txt className="text-[16px] font-bold mb-1">{t('wizard.describeTitle')}</Txt>
+        <Txt className="text-muted text-[12.5px] mb-3">{t('wizard.describeNote')}</Txt>
+        <Input testID="describe-input" value={draft?.prompt ?? ''} onChangeText={(v) => onDraft({ prompt: v.slice(0, PROMPT_MAX) })} placeholder={t('wizard.describePlaceholder')} multiline maxLength={PROMPT_MAX} tight style={{ minHeight: 140, textAlignVertical: 'top', paddingTop: 12 }} />
+        <Txt className="text-muted text-[11.5px] mt-1 text-end">{(draft?.prompt ?? '').length}/{PROMPT_MAX}</Txt>
+        <Pressable testID="use-photo" onPress={() => onDraft({ source: 'photo' })} className="flex-row items-center gap-2 mt-5 self-start active:opacity-70">
+          <Icon name="camera-outline" size={18} tone="muted" /><Txt className="text-[14px] font-bold underline">{t('wizard.usePhotoInstead')}</Txt>
+        </Pressable>
+      </View>
+    );
+  }
   return (
     <View>
       <Txt className="text-[16px] font-bold mb-3">{t('wizard.uploadTitle')}</Txt>
@@ -45,6 +62,11 @@ export function StepPhoto({ photo, onChange }: { photo: string; onChange: (uri: 
           <Txt className="text-muted text-[12px] text-center mt-4 px-8">{t('wizard.photoNote')}</Txt>
         </View>
       )}
+      {!photo && onDraft ? (
+        <Pressable testID="use-text" onPress={() => onDraft({ source: 'text' })} className="flex-row items-center gap-2 mt-4 self-center active:opacity-70">
+          <Icon name="text-box-outline" size={18} tone="muted" /><Txt className="text-[14px] font-bold underline">{t('wizard.useTextInstead')}</Txt>
+        </Pressable>
+      ) : null}
 
       <Sheet visible={sheet} onClose={() => setSheet(false)} title={t('wizard.selectPhoto')}>
         <View className="flex-row gap-3">
