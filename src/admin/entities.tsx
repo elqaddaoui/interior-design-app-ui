@@ -85,6 +85,7 @@ const tools: EntityConfig<'tools'> = {
         { icon: r.roomGroup === 'exterior' ? 'home-roof' : 'sofa-outline', label: c.t(`admin.enums.${r.roomGroup ?? 'interior'}`) },
         ...r.steps.map((k: string) => ({ label: c.t(`admin.enums.${k}`), tone: 'primary' as const })),
         ...(r.media.type === 'video' ? [{ icon: 'video-outline', label: c.t('admin.enums.video') }] : []),
+        ...(r.media.type === 'slideshow' ? [{ icon: 'image-multiple-outline', label: c.t('tc.multiImages') }] : []),
       ],
     };
   },
