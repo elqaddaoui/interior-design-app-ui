@@ -3,7 +3,12 @@ export type Lang = 'dar' | 'ar' | 'fr';
 export type LText = Record<Lang, string>;
 export type Id = string;
 
-export type Media = { type: 'image' | 'video'; uri: string; poster?: string };
+/**
+ * A tool's media. `slideshow` = several images played with the 20 before/after effects (see ToolCardFx):
+ * `images` holds the pictures in order, `uri` mirrors the first one (so every screen that only knows image / video still shows a picture),
+ * `fx` holds this card's animation settings.
+ */
+export type Media = { type: 'image' | 'video' | 'slideshow'; uri: string; poster?: string; images?: string[]; fx?: ToolCardFx };
 /** Optional wizard steps. The AI model is NEVER a user step: it is resolved from the admin config. */
 export type StepKey = 'room' | 'style' | 'mode';
 export type Group = 'interior' | 'exterior';
@@ -12,6 +17,29 @@ export type RenderMode = 'restyle' | 'renovation';
 type Ordered = { order: number; visible: boolean };
 
 export interface HomeTab extends Ordered { id: Id; title: LText }
+
+/** GLOBAL tools-card layout: stored once (settings.toolCards) and read by every card, never per card. */
+export interface ToolCardsGlobal {
+  /** Total card height in px (140-420, step 2). */
+  height?: number;
+  /** Where the text zone sits on every card. */
+  textZone?: 'top' | 'bottom';
+}
+export type ToolCardGradient = 'soft' | 'medium' | 'strong';
+/** PER-CARD animation settings (Tool.media.fx, slideshow only). Every key is optional: missing keys use the defaults in lib/toolCards.ts. */
+export interface ToolCardFx {
+  mode?: 'single' | 'multiple';
+  /** Multiple mode: kept effect ids (1-20), played one after another. Empty = static AFTER image. */
+  effects?: number[];
+  /** Single mode: the chosen effect id. */
+  effect?: number;
+  /** Pause between transitions, seconds. */
+  pause?: number;
+  /** Animation speed multiplier. */
+  speed?: number;
+  textPlacement?: 'inside' | 'outside';
+  gradient?: ToolCardGradient;
+}
 
 export interface Tool extends Ordered {
   id: Id;
@@ -190,6 +218,8 @@ export interface AppSettings {
   autoSendWhatsApp: boolean;
   /** Legacy preference, retained for persisted settings compatibility. */
   homeShowAll: boolean;
+  /** Global layout shared by every home tools card (height + text zone). */
+  toolCards?: ToolCardsGlobal;
   /** Show the home tab filters; hiding them never hides tool cards. */
   homeTabsVisible?: boolean;
   userNavStyle: UserNavStyle;
