@@ -69,7 +69,7 @@
     "check:themes": "sucrase-node scripts/check-themes.ts",
     "lint": "expo lint",
     "test:ui": "node scripts/check-ui.js",
-    "test:server": "node --test --test-concurrency=1 scripts/check-backend-config.js scripts/check-push-server.js scripts/check-client-server.js scripts/check-sync-server.js scripts/check-translate-server.js scripts/check-chat-server.js scripts/check-campaigns-server.js scripts/check-chat-reply-server.js scripts/check-loaders.js scripts/check-media-server.js scripts/check-vercel-routing.js scripts/check-node-hosting.js scripts/check-postinstall.js",
+    "test:server": "node --test --test-concurrency=1 scripts/check-backend-config.js scripts/check-push-server.js scripts/check-client-server.js scripts/check-sync-server.js scripts/check-translate-server.js scripts/check-chat-server.js scripts/check-campaigns-server.js scripts/check-chat-reply-server.js scripts/check-loaders.js scripts/check-media-server.js scripts/check-neon-transfer.js scripts/check-imagegen-server.js scripts/check-vercel-routing.js scripts/check-node-hosting.js scripts/check-postinstall.js",
     "start:server": "node server/start.js",
     "gen:seed": "sucrase-node scripts/gen-seed.ts",
     "postinstall": "node scripts/postinstall.js"

@@ -12,6 +12,7 @@ import { Icon } from '@/components/ui/Icon';
 import { PageHeader } from '@/components/ui/StepHeader';
 import { Screen } from '@/components/ui/Screen';
 import { Txt } from '@/components/ui/Txt';
+import { MediaView } from '@/components/ui/MediaView';
 // Own chunk (with the gesture library): the slider code is only downloaded when a result is opened.
 const BeforeAfter = React.lazy(() => import('@/components/GestureKit').then((m) => ({ default: m.BeforeAfter })));
 import { saveImage, shareImage } from '@/lib/share';
@@ -43,7 +44,7 @@ export default function Result() {
     if ((current?.credits ?? 0) <= 0) { toast(t('result.noCredits')); router.push('/pro'); return; }
     const w = useWizard.getState();
     w.start(item.draft.toolId, item.draft);
-    w.setPhoto(item.before);
+    if (item.before) w.setPhoto(item.before);
     // Credits available: go straight to the render, no paywall in between.
     router.replace('/render');
   };
@@ -68,16 +69,18 @@ export default function Result() {
       footer={<View className="flex-row gap-2.5"><Button testID="btn-regen" title={t('result.regenerate')} icon="refresh" variant="outline" onPress={regenerate} className="flex-1" /><Button testID="btn-new" title={t('result.newDesign')} onPress={newDesign} className="flex-1" /></View>}>
       <Animated.View entering={FadeInDown.duration(400)}>
         <Suspense fallback={<View style={{ aspectRatio: desktop ? 1.25 : 0.9, width: '100%' }} className="rounded-3xl overflow-hidden bg-surface2" />}>
-          <BeforeAfter before={item.before} after={item.after} hold={hold} aspect={desktop ? 1.25 : 0.9} />
+          {item.before
+            ? <BeforeAfter before={item.before} after={item.after} hold={hold} aspect={desktop ? 1.25 : 0.9} />
+            : <MediaView uri={item.after} className="rounded-3xl" style={{ aspectRatio: desktop ? 1.25 : 0.9, width: '100%' }} />}
         </Suspense>
       </Animated.View>
-      <View className="flex-row items-center justify-between mt-4">
+      {item.before ? <View className="flex-row items-center justify-between mt-4">
         <Pressable testID="btn-before" onPressIn={() => setHold(true)} onPressOut={() => setHold(false)} {...NO_CONTEXT_MENU} style={NO_SELECT} className={`flex-row items-center gap-2 h-11 px-5 rounded-full border ${hold ? 'bg-ink border-ink' : 'bg-surface border-line'} active:opacity-90`}>
           <Icon name="image-filter-hdr" size={18} tone={hold ? 'onink' : 'fg'} />
           <Txt style={NO_SELECT} className={`font-bold ${hold ? 'text-onink' : 'text-fg'}`}>{t('result.before')}</Txt>
         </Pressable>
         <Txt style={NO_SELECT} className="text-muted text-[12px] flex-1 text-end ms-3">{t('result.holdHint')}</Txt>
-      </View>
+      </View> : null}
       {actions}
     </Screen>
   );

@@ -9,7 +9,7 @@ import { useUserSession } from '@/store/useUserSession';
 import { backendEnabled, BackendError, isBackendUnavailable } from '@/lib/backend';
 import { useWizardGuard } from '@/hooks/useWizardGuard';
 import { reloadUserSpace } from '@/store/useStore';
-import { useWizard } from '@/store/useWizard';
+import { useWizard, wizardReady } from '@/store/useWizard';
 import { useT } from '@/i18n';
 import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
@@ -31,7 +31,7 @@ export default function Lead() {
   const [err, setErr] = useState<{ n?: string; p?: string }>({});
   const [busy, setBusy] = useState(false);
 
-  if (!w.photoUri) return <Redirect href="/" />;
+  if (!wizardReady(w)) return <Redirect href="/" />;
 
   const submit = async () => {
     const e: typeof err = {};

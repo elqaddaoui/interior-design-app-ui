@@ -112,6 +112,24 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
   const saved = new Set();
   const remoteCache = new Map(); // url -> Promise<media URL>: an external image is downloaded once per process
   const stats = { stored: 0, downloaded: 0 };
+  /*
+   * Read-path caches (database transfer). A media id is the hash of its bytes, so what it maps to never changes:
+   *   meta    id -> { mime, storage, size }   what the row says (a few bytes). Only settled rows ('r2' | 'db') are kept.
+   *   bodies  id -> Buffer                    files served from the database (no-R2 fallback / legacy rows), LRU by bytes.
+   * Without these every GET /api/media/<id> downloaded the whole blob out of Postgres (even for files that live in R2 and are
+   * only redirected), which is the single biggest consumer of Neon network transfer.
+   */
+  const meta = new Map();
+  const bodies = new Map();
+  let bodyBytes = 0;
+  const bodyBudget = Math.max(0, Math.min(512, Number(env.MEDIA_CACHE_MB ?? 24))) * 1024 * 1024;
+  const bodyMax = Math.min(bodyBudget, 4 * 1024 * 1024);
+  const keepBody = (id, body) => {
+    if (!bodyBudget || body.length > bodyMax) return;
+    if (bodies.has(id)) { bodyBytes -= bodies.get(id).length; bodies.delete(id); }
+    bodies.set(id, body); bodyBytes += body.length;
+    for (const [oldest, value] of bodies) { if (bodyBytes <= bodyBudget) break; bodies.delete(oldest); bodyBytes -= value.length; }
+  };
 
   /**
    * THE single function that stores media. `body` = file bytes, `mime` = verified type. Content-addressed, so storing the
@@ -126,6 +144,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
       if (existing?.storage !== 'r2') {
         await storage.put(keyOf(name), body, mime);
         await db.query("INSERT INTO media(id,mime,data,body,size,storage,created_at) VALUES($1,$2,'',NULL,$3,'r2',$4) ON CONFLICT (id) DO UPDATE SET storage='r2', size=EXCLUDED.size", [id, mime, body.length, Date.now()]);
+        meta.delete(id);
         stats.stored++;
       }
     } else if (!existing) {
@@ -226,17 +245,39 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     return { value: result, changed };
   }
 
-  /** THE single read function. `name` = `<hash>.<ext>`. Returns { redirect } | { mime, body } | null when unknown. */
-  async function readMedia(name) {
+  /**
+   * THE single read function. `name` = `<hash>.<ext>`. Returns { redirect } | { mime, body } | null when unknown.
+   * `{ head: true }` (HEAD requests) never loads the file. Database transfer: only the small metadata columns are read for a
+   * file in R2 (the bytes are never needed), and a file served from the database is read at most once per cache lifetime.
+   */
+  async function readMedia(name, { head = false } = {}) {
     const match = NAME.exec(String(name || ''));
     if (!match) return null;
-    const row = (await db.query('SELECT mime,storage,data,body FROM media WHERE id=$1', [match[1]]))[0];
-    if (!row || MIME[match[2]] !== row.mime) return null;
-    if (row.storage === 'r2') return storage ? { redirect: storage.publicUrl(keyOf(match[0])), mime: row.mime } : null;
-    if (row.storage !== 'db') return null; // pending direct upload
-    if (row.body) return { mime: row.mime, body: Buffer.from(row.body) };
-    if (row.data) return { mime: row.mime, body: Buffer.from(row.data, 'base64') }; // legacy base64 row (read-only)
-    return null;
+    const id = match[1];
+    let info = meta.get(id);
+    if (!info) {
+      const row = (await db.query('SELECT mime,storage,size FROM media WHERE id=$1', [id]))[0];
+      if (!row) return null;
+      info = { mime: row.mime, storage: row.storage, size: row.size == null ? null : Number(row.size) };
+      if (info.storage === 'r2' || info.storage === 'db') { // 'pending' rows change: never remembered
+        if (meta.size >= 5000) meta.delete(meta.keys().next().value);
+        meta.set(id, info);
+      }
+    }
+    if (MIME[match[2]] !== info.mime) return null;
+    if (info.storage === 'r2') return storage ? { redirect: storage.publicUrl(keyOf(match[0])), mime: info.mime } : null;
+    if (info.storage !== 'db') return null; // pending direct upload
+    if (head) return { mime: info.mime, body: Buffer.alloc(0), size: info.size };
+    const cached = bodies.get(id);
+    if (cached) { bodies.delete(id); bodies.set(id, cached); return { mime: info.mime, body: cached }; } // refresh LRU position
+    const row = (await db.query('SELECT data,body FROM media WHERE id=$1', [id]))[0];
+    if (!row) return null;
+    let body = null;
+    if (row.body) body = Buffer.from(row.body);
+    else if (row.data) body = Buffer.from(row.data, 'base64'); // legacy base64 row (read-only)
+    if (!body) return null;
+    keepBody(id, body);
+    return { mime: info.mime, body };
   }
 
   /** Step 1 of a direct upload (admin only, checked by the caller). The server picks the key; type and size are signed. */
@@ -268,6 +309,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     if (object.size !== Number(row.size) || object.mime !== row.mime) return reject('UPLOAD_MISMATCH');
     try { verifyMedia(await storage.getRange(keyOf(name), 64), row.mime, kindOf(row.mime)); } catch { return reject('INVALID_MEDIA'); }
     await db.query("UPDATE media SET storage='r2' WHERE id=$1", [id]);
+    meta.delete(id);
     return { url: PREFIX + name };
   }
 
@@ -284,6 +326,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     const object = await storage.head(keyOf(name));
     if (!object || object.size !== body.length) await storage.put(keyOf(name), body, row.mime);
     await db.query("UPDATE media SET storage='r2', size=$2 WHERE id=$1", [row.id, body.length]);
+    meta.delete(row.id);
     return true;
   }
 

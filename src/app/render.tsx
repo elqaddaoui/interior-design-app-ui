@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { Redirect } from 'expo-router';
 import { router } from '@/hooks/useLeaveGuard';
 import { useStore } from '@/store/useStore';
-import { useWizard } from '@/store/useWizard';
+import { useWizard, wizardReady } from '@/store/useWizard';
 import { services } from '@/data/repositories';
 import { useT } from '@/i18n';
 import { Button } from '@/components/ui/Button';
@@ -50,7 +50,7 @@ export default function RenderPage() {
       if (signal.current.cancelled) return;
       await useUserSession.getState().refresh();
       if (signal.current.cancelled) return;
-      const { imageUri } = await services.render.render({ photoUri: wiz.photoUri, draft: wiz.draft }, (p) => setState(p), signal.current);
+      const { imageUri } = await services.render.render({ photoUri: wiz.photoUri, draft: wiz.draft, claimId: wiz.claimId }, (p) => setState(p), signal.current);
       if (signal.current.cancelled) return;
       const lead = useWizard.getState().lead;
       const fresh = useStore.getState();
@@ -107,7 +107,7 @@ export default function RenderPage() {
     return () => clearInterval(timer);
   }, [failed]);
 
-  if (!w.photoUri || !me) return <Redirect href="/" />;
+  if (!wizardReady(w) || !me) return <Redirect href="/" />;
 
   const cancel = () => router.dismissTo('/');
   return (

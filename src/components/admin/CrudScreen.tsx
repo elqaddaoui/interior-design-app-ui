@@ -10,6 +10,7 @@ import { CrudTable } from './CrudTable';
 import { BatchFormModal, FormModal, validate } from './FormModal';
 import { AdminPage } from './AdminShell';
 import { HomeTabsOption } from './HomeTabsOption';
+import { AiEnginePanel } from './AiEnginePanel';
 import { ENTITIES } from '@/admin/entities';
 import { nextOrder, sorted, uid, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
@@ -141,6 +142,7 @@ export function CrudScreen({ entity }: { entity: string }) {
       </Card> : undefined}>
       <View className="flex-row items-center gap-3 mb-2"><View className="flex-1"><Input testID="crud-filter" placeholder={t('admin.dash.searchPh')} value={query} onChangeText={setQuery} /></View>{hasLangs && (todoCount > 0 || onlyTodo) ? <Pressable testID="crud-untranslated" accessibilityRole="button" accessibilityState={{ selected: onlyTodo }} accessibilityLabel={t('improve.langFilter')} onPress={() => setOnlyTodo(!onlyTodo)} className={`flex-row items-center gap-1.5 rounded-full px-3 h-9 border ${onlyTodo ? 'bg-primary border-primary' : 'bg-surface border-line'}`}><Icon name="translate" size={15} tone={onlyTodo ? 'onprimary' : 'muted'} /><Txt className={`text-[12.5px] font-bold ${onlyTodo ? 'text-onprimary' : ''}`}>{t('improve.langFilterShort', { count: todoCount })}</Txt></Pressable> : null}<Txt className="text-muted text-[12px]">{filtered.length} / {rows.length}</Txt></View>
       {entity === 'tabs' ? <HomeTabsOption /> : null}
+      {entity === 'models' ? <AiEnginePanel /> : null}
       <CrudTable langs={hasLangs ? langsOf : undefined} visual={!!cfg.visual} onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={shown} view={cfg.view(ctx)} rowTestID="row"
         onEdit={open} onDelete={setDel}
         onReorder={cfg.ordered && bulkEnabled && !query.trim() ? staged.drop : undefined}

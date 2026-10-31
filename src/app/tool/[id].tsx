@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import { router } from '@/hooks/useLeaveGuard';
 import { useStore } from '@/store/useStore';
-import { useWizard } from '@/store/useWizard';
+import { useWizard, wizardReady } from '@/store/useWizard';
 import { useL, useT } from '@/i18n';
 import { Button } from '@/components/ui/Button';
 import { useUserSession } from '@/store/useUserSession';
@@ -14,6 +14,8 @@ import { StepPhoto } from '@/components/wizard/StepPhoto';
 import { StepRoom } from '@/components/wizard/StepRoom';
 import { StepStyle } from '@/components/wizard/StepStyle';
 import { StepMode } from '@/components/wizard/StepMode';
+import { StepCustom } from '@/components/wizard/StepCustom';
+import { ModelBadge } from '@/components/wizard/ModelBadge';
 import { resolveModelId } from '@/lib/models';
 import type { StepKey } from '@/data/types';
 
@@ -30,6 +32,7 @@ export default function ToolWizard() {
   useWizardGuard();
   const user = useUserSession(s => s.user);
   const [checking, setChecking] = useState(false);
+  const pickerOn = useStore((s) => s.doc.settings.aiModelPicker) === true;
 
   // Ensure the store is primed when the route is opened directly (deep link / refresh).
   useEffect(() => { const wizard = useWizard.getState(); if (id && wizard.toolId !== id) wizard.start(id); }, [id]);
@@ -44,7 +47,7 @@ export default function ToolWizard() {
   const key = steps[Math.min(i, steps.length - 1)] as string;
   const d = w.draft;
   const valid =
-    key === 'photo' ? !!w.photoUri :
+    key === 'photo' ? wizardReady(w) :
     key === 'room' ? !!d.roomTypeId :
     key === 'style' ? !!d.styleId :
     true;
@@ -54,7 +57,8 @@ export default function ToolWizard() {
     if (!valid || checking) return;
     if (!last) { router.push({ pathname: '/tool/[id]', params: { id, step: String(i + 1), forward: '1' } }); return; }
     // The AI model is chosen by the admin (tool config), never by the user.
-    const modelId = resolveModelId(tool, allModels);
+    const allowed = d.modelId && allModels.some((m) => m.id === d.modelId && m.enabled && tool.modelIds.includes(m.id));
+    const modelId = pickerOn && allowed ? d.modelId : resolveModelId(tool, allModels);
     w.patch({ modelId, mode: d.mode ?? 'restyle' });
     // First free render => collect name + WhatsApp, the design is delivered there.
     if (!user) { router.push('/lead'); return; }
@@ -72,10 +76,12 @@ export default function ToolWizard() {
       header={<StepHeader title={L(tool.title)} step={i + 1} total={steps.length} onBack={i > 0 ? back : undefined} onClose={close} />}
       footer={<Button testID="wizard-continue" title={last ? t('wizard.generate') : t('common.continue')} onPress={next} disabled={!valid} loading={checking} full size="lg" />}
     >
-      {key === 'photo' && <StepPhoto photo={w.photoUri} onChange={w.setPhoto} />}
+      {key === 'photo' && <StepPhoto photo={w.photoUri} onChange={w.setPhoto} draft={d} onDraft={(p) => w.patch(p)} />}
       {key === 'room' && <StepRoom group={tool.roomGroup} value={d.roomTypeId} onChange={(v) => w.patch({ roomTypeId: v })} />}
       {key === 'style' && <StepStyle value={d.styleId} onChange={(v) => w.patch({ styleId: v })} />}
       {key === 'mode' && <StepMode mode={d.mode} paletteId={d.paletteId} onMode={(m) => w.patch({ mode: m })} onPalette={(p) => w.patch({ paletteId: p })} />}
+      {last && <StepCustom draft={d} onChange={(p) => w.patch(p)} showPrompt={d.source !== 'text'} />}
+      {last && <ModelBadge tool={tool} draft={d} hasPhoto={!!w.photoUri} onChange={(modelId) => w.patch({ modelId })} />}
 
     </Screen>
   );

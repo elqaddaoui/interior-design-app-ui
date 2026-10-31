@@ -19,7 +19,8 @@ export interface DocRepo<T> {
 export type Repositories = { [K in keyof CollMap]: CollectionRepo<CollMap[K]> };
 export type DocRepositories = { [K in keyof DocMap]: DocRepo<DocMap[K]> };
 
-export interface RenderInput { photoUri: string; draft: Draft }
+/** `claimId` identifies the request created for this generation (the server renders it once, whatever the retries). */
+export interface RenderInput { photoUri: string; draft: Draft; claimId?: string }
 export interface RenderProgress { progress: number; stage: number }
 export interface RenderService {
   /** Resolves with the URL of the generated image. */

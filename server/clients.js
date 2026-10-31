@@ -6,6 +6,9 @@ const canonicalPhone = input => {
   return '+' + phone.replace(/^\+/, '');
 };
 const MAX_CREDITS = 1000000;
+/** Only the columns toUser() needs: `prefs` (notification settings, can be large) is never read to authenticate, list or charge a client. */
+const COLS = 'id,phone,name,free_used,credits,created_at,blocked,last_seen';
+const CCOLS = COLS.split(',').map(c => 'c.' + c).join(',');
 /**
  * A client who has not used the free design is shown `credits + 1`. To make the balance an admin types equal the balance
  * the user sees, a target of 0 also consumes the unused free design; any other target keeps it and stores the remainder.
@@ -16,7 +19,7 @@ const toUser = row => row && ({ id: row.id, name: row.name, whatsapp: row.phone,
 
 /** Phone-based client profiles, sessions, free/paid entitlement claims and per-client history/chat space. */
 function createClients(db) {
-  const byId = async (id, q = db.query) => (await q('SELECT * FROM clients WHERE id=$1', [id]))[0];
+  const byId = async (id, q = db.query) => (await q('SELECT ' + COLS + ' FROM clients WHERE id=$1', [id]))[0];
   async function login(name, input, defaultCredits = 1) {
     const canonical = canonicalPhone(input);
     if (!/^\+[1-9]\d{5,14}$/.test(canonical) || typeof name !== 'string' || name.trim().length < 2 || name.length > 120) throw fail(400, 'INVALID_PROFILE');
@@ -24,7 +27,7 @@ function createClients(db) {
     // The admin's "default credits" setting is the balance a new client starts with (free design included).
     const start = balance({ free_used: 0 }, Number.isSafeInteger(defaultCredits) && defaultCredits >= 0 ? Math.min(defaultCredits, MAX_CREDITS) : 1);
     const created = (await db.query('INSERT INTO clients(id,phone,name,created_at,credits,free_used) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (phone) DO NOTHING RETURNING id', [crypto.randomUUID(), canonical, name.trim(), Date.now(), start.credits, start.freeUsed])).length > 0;
-    const row = (await db.query('SELECT * FROM clients WHERE phone=$1', [canonical]))[0];
+    const row = (await db.query('SELECT ' + COLS + ' FROM clients WHERE phone=$1', [canonical]))[0];
     if (row.blocked) throw fail(403, 'ACCOUNT_BLOCKED');
     const token = crypto.randomBytes(32).toString('hex');
     await db.query('DELETE FROM user_sessions WHERE expires_at<=$1', [Date.now()]);
@@ -34,7 +37,7 @@ function createClients(db) {
   }
   async function authenticate(token) {
     if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
-    const rows = await db.query('SELECT c.* FROM user_sessions s JOIN clients c ON c.id=s.client_id WHERE s.token_hash=$1 AND s.expires_at>$2', [digest(token), Date.now()]);
+    const rows = await db.query('SELECT ' + CCOLS + ' FROM user_sessions s JOIN clients c ON c.id=s.client_id WHERE s.token_hash=$1 AND s.expires_at>$2', [digest(token), Date.now()]);
     const row = rows[0];
     // Activity for notification segments: the sync poll only runs while the app is visible, so this is real usage. Written at most every 5 minutes.
     if (row && Date.now() - Number(row.last_seen || 0) > 300000) await db.query('UPDATE clients SET last_seen=$1 WHERE id=$2', [Date.now(), row.id]).catch(() => {});
@@ -58,6 +61,8 @@ function createClients(db) {
     });
   }
   const listSpace = async (client, kind) => (await db.query('SELECT value FROM space WHERE client_id=$1 AND kind=$2', [client.id, kind])).map(row => JSON.parse(row.value));
+  /** One item by id (never the whole list): the row must belong to this client and kind. */
+  const getSpaceItem = async (client, kind, id) => { const row = (await db.query('SELECT value FROM space WHERE id=$1 AND client_id=$2 AND kind=$3', [id, client.id, kind]))[0]; return row ? JSON.parse(row.value) : null; };
   async function putSpace(client, kind, value, id) {
     const existing = (await db.query('SELECT client_id,kind FROM space WHERE id=$1', [id]))[0];
     if (existing && (existing.client_id !== client.id || existing.kind !== kind)) throw fail(404, 'NOT_FOUND');
@@ -65,13 +70,26 @@ function createClients(db) {
     await db.query('INSERT INTO space VALUES($1,$2,$3,$4) ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value', [id, client.id, kind, JSON.stringify(next)]);
     return next;
   }
-  /** Admin view of every assistant conversation: clients' (with who wrote it) and visitors' who have not signed in (`guest: true`, no name or phone). */
-  const adminConversations = async () => [
-    ...(await db.query("SELECT s.value, c.name, c.phone FROM space s JOIN clients c ON c.id=s.client_id WHERE s.kind='conversations'"))
-      .map(row => ({ ...JSON.parse(row.value), clientName: row.name, whatsapp: row.phone })),
-    ...(await db.query('SELECT value FROM guest_chats ORDER BY updated_at DESC LIMIT 300')).map(row => ({ ...JSON.parse(row.value), clientName: '', whatsapp: '', guest: true })),
-  ].filter(row => Array.isArray(row.messages) && row.messages.length)
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 300);
+  /**
+   * Admin view of the newest 300 assistant conversations: clients' (with who wrote it) and visitors' who have not signed in
+   * (`guest: true`, no name or phone). The database picks the newest and only the chosen rows are read (the previous version
+   * read every conversation ever written and sliced in JavaScript). `since` (an `updatedAt`) returns only conversations
+   * changed after it, plus `ids` (the current top-300 set) so the app can drop deleted ones: `{ chats, ids }`.
+   */
+  const UPDATED = "CASE WHEN (s.value::jsonb->>'updatedAt') ~ '^[0-9]{1,15}$' THEN (s.value::jsonb->>'updatedAt')::bigint ELSE 0 END";
+  async function adminConversations({ since = null } = {}) {
+    const top = [
+      ...(await db.query(`SELECT s.id, ${UPDATED} AS at FROM space s WHERE s.kind='conversations' AND CASE WHEN jsonb_typeof(s.value::jsonb->'messages')='array' THEN jsonb_array_length(s.value::jsonb->'messages') ELSE 0 END > 0 ORDER BY at DESC LIMIT 300`)).map(row => ({ id: row.id, at: Number(row.at), guest: false })),
+      ...(await db.query('SELECT s.id, s.updated_at AS at FROM guest_chats s ORDER BY s.updated_at DESC LIMIT 300')).map(row => ({ id: row.id, at: Number(row.at), guest: true })),
+    ].sort((a, b) => b.at - a.at).slice(0, 300);
+    const pick = top.filter(item => since == null || item.at > since);
+    const clientIds = pick.filter(item => !item.guest).map(item => item.id), guestIds = pick.filter(item => item.guest).map(item => item.id);
+    const rows = [
+      ...(clientIds.length ? (await db.query("SELECT s.value, c.name, c.phone FROM space s JOIN clients c ON c.id=s.client_id WHERE s.kind='conversations' AND s.id = ANY($1)", [clientIds])).map(row => ({ ...JSON.parse(row.value), clientName: row.name, whatsapp: row.phone })) : []),
+      ...(guestIds.length ? (await db.query('SELECT value FROM guest_chats WHERE id = ANY($1)', [guestIds])).map(row => ({ ...JSON.parse(row.value), clientName: '', whatsapp: '', guest: true })) : []),
+    ].filter(row => Array.isArray(row.messages) && row.messages.length).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return { chats: rows, ids: top.map(item => item.id) };
+  }
   /** An admin answers inside the conversation: the thread stays in its owner's space (or the visitor's device chat) only. */
   async function adminReply(id, text, message) {
     const row = (await db.query("SELECT s.client_id, s.value, c.name, c.phone FROM space s JOIN clients c ON c.id=s.client_id WHERE s.id=$1 AND s.kind='conversations'", [id]))[0];
@@ -92,6 +110,7 @@ function createClients(db) {
   /* ---- Visitors who have not signed in: their chats live under the (hashed) device token ---- */
   const MAX_GUEST_CHATS = 30;
   const guestList = async device => (await db.query('SELECT value FROM guest_chats WHERE device_hash=$1 ORDER BY updated_at DESC', [device])).map(row => JSON.parse(row.value));
+  const guestGet = async (device, id) => { const row = (await db.query('SELECT value FROM guest_chats WHERE id=$1 AND device_hash=$2', [id, device]))[0]; return row ? JSON.parse(row.value) : null; };
   async function guestPut(device, value, id) {
     const existing = (await db.query('SELECT device_hash FROM guest_chats WHERE id=$1', [id]))[0];
     if (existing && existing.device_hash !== device) throw fail(404, 'NOT_FOUND');
@@ -120,12 +139,12 @@ function createClients(db) {
     });
   }
   return {
-    adminConversations, adminReply, guestList, guestPut, guestRemove, adoptGuest,
+    adminConversations, adminReply, guestList, guestGet, getSpaceItem, guestPut, guestRemove, adoptGuest,
     login, authenticate, claim, listSpace, putSpace,
     hasClaim: async (id, clientId) => !!(await db.query('SELECT 1 FROM claims WHERE id=$1 AND client_id=$2', [id, clientId]))[0],
     user: async id => toUser(await byId(id)),
     logout: async token => { if (token) await db.query('DELETE FROM user_sessions WHERE token_hash=$1', [digest(token)]); },
-    users: async () => (await db.query('SELECT * FROM clients ORDER BY created_at DESC')).map(toUser),
+    users: async () => (await db.query('SELECT ' + COLS + ' FROM clients ORDER BY created_at DESC')).map(toUser),
     grant: async (id, credits) => {
       const row = await byId(id);
       if (!row) throw fail(404, 'NOT_FOUND');
@@ -139,7 +158,7 @@ function createClients(db) {
       if (patch.credits !== undefined && (!Number.isSafeInteger(patch.credits) || patch.credits < 0 || patch.credits > MAX_CREDITS)) throw fail(400, 'INVALID_CREDITS');
       if (patch.blocked !== undefined && typeof patch.blocked !== 'boolean') throw fail(400, 'INVALID_BLOCKED');
       return db.tx(async q => {
-        const row = (await q('SELECT * FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
+        const row = (await q('SELECT ' + COLS + ' FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
         if (!row) throw fail(404, 'NOT_FOUND');
         if (patch.credits !== undefined) { const next = balance(row, patch.credits); await q('UPDATE clients SET credits=$1, free_used=$2 WHERE id=$3', [next.credits, next.freeUsed, id]); }
         if (patch.blocked !== undefined) await q('UPDATE clients SET blocked=$1 WHERE id=$2', [patch.blocked ? 1 : 0, id]);
@@ -160,7 +179,7 @@ function createClients(db) {
       return db.tx(async q => {
         const rows = [];
         for (const id of unique.sort()) { // stable lock order avoids deadlocks between concurrent bulk calls
-          const row = (await q('SELECT * FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
+          const row = (await q('SELECT ' + COLS + ' FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
           if (row) rows.push(row);
         }
         for (const row of rows) {

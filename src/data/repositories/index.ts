@@ -12,6 +12,7 @@ import { remoteRequests } from './remoteRequests';
 import { remoteCollection, remoteDoc } from './remoteContent';
 import { mockServices } from '../mock/services';
 import { remoteChat } from './remoteChat';
+import { remoteRender } from './remoteRender';
 
 const demo = (): Repositories => ({
   tabs: createMockCollection('tabs', S.seedTabs),
@@ -55,7 +56,7 @@ export const docs: DocRepositories = backendEnabled
   ? { branding: remoteDoc('branding', S.defaultBranding), theme: remoteDoc('theme', S.defaultTheme), assistant: remoteDoc('assistant', S.defaultAssistant), settings: remoteDoc('settings', S.defaultSettings) }
   : { branding: createMockDoc('branding', S.defaultBranding), theme: createMockDoc('theme', S.defaultTheme), assistant: createMockDoc('assistant', S.defaultAssistant), settings: createMockDoc('settings', S.defaultSettings) };
 
-export const services: Services = backendEnabled ? { ...mockServices, chat: remoteChat(), auth: { loginAdmin: backendLogin } } : mockServices;
+export const services: Services = backendEnabled ? { ...mockServices, render: remoteRender(), chat: remoteChat(), auth: { loginAdmin: backendLogin } } : mockServices;
 export { ME } from '../mock/seed';
 /** Owner id of conversations written before sign-in (the server stamps `guest`); the offline demo keeps its local profile. */
 export const VISITOR = backendEnabled ? 'guest' : S.ME;
