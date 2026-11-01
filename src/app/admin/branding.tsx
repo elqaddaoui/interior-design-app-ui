@@ -8,6 +8,8 @@ import { Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt, ARABIC_FONTS, FRENCH_FONTS } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
+import { useStore } from '@/store/useStore';
 import { ImageField } from '@/components/admin/ImageField';
 import { ColorPicker } from '@/components/admin/ColorPicker';
 import { FieldLabel, OptionTile, Section, Stepper } from '@/components/admin/branding/parts';
@@ -37,6 +39,7 @@ function FontRow({ font, name, selected, onSelect }: { font: string; name: strin
 }
 
 export default function Branding() {
+  const contentReady = useStore((s) => s.contentReady);
   const { t } = useT();
   const { draft, set: setDraft, save: submitDraft, discard, dirty } = useDraftDoc('branding');
   const [busy, setBusy] = useState(false);
@@ -135,6 +138,7 @@ export default function Branding() {
     </Card>
   );
 
+  if (!contentReady) return <AdminPage title={t('admin.nav.branding')}><AdminLoading /></AdminPage>;
   return (
     <AdminPage title={t('admin.nav.branding')} max={1000} floating={bar}>
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>

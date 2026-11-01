@@ -5,6 +5,8 @@ import { Card } from '@/components/ui/Card';
 import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
+import { useStore } from '@/store/useStore';
 import { ColorPicker } from '@/components/admin/ColorPicker';
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
@@ -75,6 +77,7 @@ function Swatch({ id, active, onPress }: { id: string; active: boolean; onPress:
 }
 
 export default function ThemeAdmin() {
+  const contentReady = useStore((s) => s.contentReady);
   const { t } = useT();
   const { desktop } = useBp();
   const { draft: cfg, set: setCfg, save: submitDraft, dirty } = useDraftDoc('theme');
@@ -83,6 +86,7 @@ export default function ThemeAdmin() {
   const save = async () => { if (await submitDraft()) toast(t('admin.crud.saved')); };
   const pill = (on: boolean) => `px-3.5 h-9 rounded-full items-center justify-center ${on ? 'bg-ink' : 'bg-surface2'}`;
 
+  if (!contentReady) return <AdminPage title={t('admin.theme.title')}><AdminLoading /></AdminPage>;
   return (
     <AdminPage title={t('admin.theme.title')} right={<Button testID="theme-save" size="sm" icon="check" title={t('improve.submit')} disabled={!dirty} onPress={save} />}>
       <View className={desktop ? 'flex-row gap-6 items-start' : 'gap-5'}>

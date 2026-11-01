@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Field';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
 import { useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
 import { router, useBackCheckpoint, useLeaveGuard } from '@/hooks/useLeaveGuard';
@@ -28,6 +29,7 @@ export default function Credits() {
     await s.update('users', u.id, { credits: u.credits + n });
     toast(t('admin.credits.granted'));
   };
+  if (!s.contentReady || !s.adminLoaded) return <AdminPage title={t('admin.nav.credits')} max={720}><AdminLoading /></AdminPage>;
   return (
     <AdminPage title={t('admin.nav.credits')} max={720}>
       <Card className="p-3 mb-3">

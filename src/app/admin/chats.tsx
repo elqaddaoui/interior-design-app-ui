@@ -9,6 +9,8 @@ import { Icon } from '@/components/ui/Icon';
 import { Sheet } from '@/components/ui/Sheet';
 import { Txt, useAppFont } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
+import { RightClick, sep, type MenuItem } from '@/components/admin/ContextMenu';
 import { SearchTarget, useViewState } from '@/hooks/useViewState';
 import { useT } from '@/i18n';
 import { waLink } from '@/lib/share';
@@ -76,14 +78,22 @@ export default function Chats() {
   React.useEffect(() => {
     if (requested && opened.current !== requested && chats.some(c => c.id === requested)) { opened.current = requested; setOpen(requested); }
   }, [requested, chats, setOpen]);
+  const menuOf = (chat: AdminConversation): MenuItem[] => [
+    { key: 'open', label: t('inbox.reply'), icon: 'message-reply-text-outline', onPress: () => setOpen(chat.id) },
+    ...(chat.guest || !chat.whatsapp ? [] : [
+      sep('s1'),
+      { key: 'wa', label: t('inbox.openWa'), icon: 'whatsapp', onPress: () => Linking.openURL(waLink(chat.whatsapp, '')) } as MenuItem,
+      { key: 'copy', label: t('ax.copyNumber'), icon: 'content-copy', onPress: () => { try { void (globalThis as any).navigator?.clipboard?.writeText(chat.whatsapp); toast(t('ax.copied')); } catch { /* clipboard unavailable */ } } } as MenuItem,
+    ]),
+  ];
   const missing = !!requested && loaded && !chats.some(c => c.id === requested);
   return (
     <AdminPage title={t('inbox.chatsTitle')}>
       {missing ? <Txt testID="admin-chat-missing" className="text-muted text-[13px] mb-3">{t('inbox.notFound')}</Txt> : null}
-      {!chats.length ? <EmptyState icon="message-text-outline" title={t('inbox.empty')} subtitle={t('inbox.emptySub')} /> : (
+      {!chats.length && !loaded ? <AdminLoading /> : !chats.length ? <EmptyState icon="message-text-outline" title={t('inbox.empty')} subtitle={t('inbox.emptySub')} /> : (
         <View className="gap-2.5">
           {chats.map(chat => (
-            <SearchTarget key={chat.id} id={chat.id}>
+            <SearchTarget key={chat.id} id={chat.id}><RightClick items={() => menuOf(chat)}>
               <Pressable testID={`admin-chat-${chat.id}`} accessibilityRole="button" onPress={() => setOpen(chat.id)} className="active:opacity-70">
                 <Card className={`p-3.5 flex-row items-center gap-3 ${target === chat.id ? 'border-primary' : ''}`}>
                   <View className="w-11 h-11 rounded-full bg-soft items-center justify-center"><Icon name="account-outline" size={22} tone="primary" /></View>
@@ -96,7 +106,7 @@ export default function Chats() {
                   </View>
                 </Card>
               </Pressable>
-            </SearchTarget>
+            </RightClick></SearchTarget>
           ))}
         </View>
       )}

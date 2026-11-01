@@ -11,6 +11,8 @@ import { BatchFormModal, FormModal, validate } from './FormModal';
 import { AdminPage } from './AdminShell';
 import { HomeTabsOption } from './HomeTabsOption';
 import { AiEnginePanel } from './AiEnginePanel';
+import { AdminLoading } from './AdminLoading';
+import { RightClick, sep, type MenuItem } from './ContextMenu';
 import { ENTITIES } from '@/admin/entities';
 import { nextOrder, sorted, uid, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
@@ -21,6 +23,7 @@ import { useViewState } from '@/hooks/useViewState';
 import { toast } from '@/store/useToast';
 import { PartialSaveError, revealAdded } from '@/hooks/useReveal';
 import { mergeStates, LANG_ORDER } from '@/lib/langStatus';
+import { LANGS } from '@/i18n';
 
 /** The one generic CRUD screen: every admin entity is described by a config in `admin/entities.tsx`. */
 export function CrudScreen({ entity }: { entity: string }) {
@@ -65,6 +68,51 @@ export function CrudScreen({ entity }: { entity: string }) {
 
   const open = (r?: any) => { setPreview(null); setIsNew(!r); // A new item gets its id up front: the live preview row and the saved row are then the same row (never a duplicate), and retrying a save that timed out can only overwrite, not add a second copy.
     setEditing(r ?? { ...cfg.blank(ctx), id: uid(cfg.name.slice(0, 3)) }); };
+  /** Copies rows (same order as listed) to the end of the collection: new ids, "(copy)" after the title, hidden defaults cleared. */
+  const duplicate = async (source: any[]) => {
+    if (busy || !source.length) return;
+    setBusy(true);
+    const made: string[] = [];
+    try {
+      const ordered = rows.filter((r) => source.some((x) => x.id === r.id));
+      const mark = (v: any) => {
+        if (v && typeof v === 'object') return Object.fromEntries(LANGS.map((l) => [l, v[l] ? `${v[l]} ${t('ax.copySuffix')}` : v[l] ?? '']));
+        return v ? `${v} ${t('ax.copySuffix')}` : v;
+      };
+      for (const r of ordered) {
+        const { id: _id, ...rest } = structuredClone(r) as any;
+        const copy: any = { ...rest, id: uid(cfg.name.slice(0, 3)) };
+        if ('title' in copy && cfg.fields(ctx).some((f) => f.key === 'title' && f.kind === 'ltext')) copy.title = mark(copy.title);
+        if (cfg.name === 'models') { copy.name = mark(copy.name); copy.isDefault = false; }
+        if (cfg.ordered) copy.order = nextOrder(useStore.getState()[cfg.name as CollName] as any[]);
+        made.push((await s.create(cfg.name, copy)).id);
+      }
+      toast(made.length > 1 ? t('ax.duplicatedN', { count: made.length }) : t('ax.duplicated'));
+      showAdded(made);
+    } catch { if (made.length) showAdded(made); toast(t('improve.saveError')); } finally { setBusy(false); }
+  };
+  const itemMenu = (r: any): MenuItem[] => {
+    const group = bulkEnabled && selected.includes(r.id) && selected.length > 1;
+    const targets = group ? rows.filter((x) => selected.includes(x.id)) : [r];
+    const menu: MenuItem[] = [
+      { key: 'edit', label: t('common.edit'), icon: 'pencil-outline', onPress: () => open(r) },
+      { key: 'duplicate', label: group ? t('ax.duplicateSelected', { count: targets.length }) : t('ax.duplicate'), icon: 'content-copy', onPress: () => duplicate(targets) },
+      { key: 'toggle', label: r.visible === false ? t('admin.crud.showHide') : t('admin.crud.showHide'), icon: r.visible === false ? 'eye-outline' : 'eye-off-outline', onPress: () => targets.forEach((x) => staged.update(x.id, { visible: x.visible === false } as any)) },
+    ];
+    if (cfg.ordered && bulkEnabled && !query.trim()) {
+      menu.push(sep('s1'),
+        { key: 'first', label: t('ax.moveFirst'), icon: 'arrow-collapse-up', disabled: rows[0]?.id === r.id, onPress: () => rows[0] && staged.drop(targets.map((x) => x.id), rows[0].id) },
+        { key: 'last', label: t('ax.moveLast'), icon: 'arrow-collapse-down', disabled: rows[rows.length - 1]?.id === r.id, onPress: () => { const last = rows[rows.length - 1]; if (last) staged.drop(targets.map((x) => x.id), last.id); } });
+    }
+    if (bulkEnabled) menu.push(sep('s2'), { key: 'select', label: selected.includes(r.id) ? t('ax.deselect') : t('common.select'), icon: selected.includes(r.id) ? 'select-off' : 'checkbox-marked-circle-outline', onPress: () => setSelected((old) => old.includes(r.id) ? old.filter((x) => x !== r.id) : [...old, r.id]) });
+    menu.push(sep('s3'), { key: 'delete', label: group ? t('ax.deleteSelected', { count: targets.length }) : t('common.delete'), icon: 'trash-can-outline', danger: true, onPress: () => group ? setBulkDelete(true) : setDel(r) });
+    return menu;
+  };
+  const pageMenu = (): MenuItem[] => [
+    { key: 'add', label: t('common.add'), icon: 'plus', onPress: () => open() },
+    ...(bulkEnabled ? [{ key: 'addmany', label: t('improve.addMultiple'), icon: 'playlist-plus', onPress: () => setBatch('add') } as MenuItem, { key: 'all', label: t('common.all'), icon: 'select-all', onPress: () => setSelected(rows.map((x) => x.id)) } as MenuItem] : []),
+    ...(selected.length ? [{ key: 'clear', label: t('ax.deselect'), icon: 'select-off', onPress: () => setSelected([]) } as MenuItem] : []),
+  ];
   const submit = async (v: any) => {
     if (!await staged.save()) throw new Error('Could not save draft');
     if (cfg.name === 'models' && v.isDefault) {
@@ -137,17 +185,18 @@ export function CrudScreen({ entity }: { entity: string }) {
           <Button size="sm" icon="select-all" variant="ghost" title={t('common.all')} disabled={busy} onPress={() => setSelected(rows.map((r) => r.id))} />
           <Button testID="crud-batch-edit" size="sm" icon="pencil-outline" variant="ghost" title={t('common.edit')} disabled={busy} onPress={() => { setQuickKeys([]); setBatch('edit'); }} />
           <Button testID="crud-batch-visibility" size="sm" icon="eye-outline" variant="ghost" title={t('improve.visibilityShort')} disabled={busy} onPress={() => { setQuickKeys(['visible']); setBatch('edit'); }} />
+          <Button testID="crud-batch-duplicate" size="sm" icon="content-copy" variant="ghost" title={t('ax.duplicate')} disabled={busy} onPress={() => duplicate(rows.filter((r) => selected.includes(r.id)))} />
           <Button testID="crud-batch-delete" size="sm" icon="trash-can-outline" variant="ghost" title={t('common.delete')} disabled={busy} onPress={() => setBulkDelete(true)} />
         </ScrollView>
       </Card> : undefined}>
       <View className="flex-row items-center gap-3 mb-2"><View className="flex-1"><Input testID="crud-filter" placeholder={t('admin.dash.searchPh')} value={query} onChangeText={setQuery} /></View>{hasLangs && (todoCount > 0 || onlyTodo) ? <Pressable testID="crud-untranslated" accessibilityRole="button" accessibilityState={{ selected: onlyTodo }} accessibilityLabel={t('improve.langFilter')} onPress={() => setOnlyTodo(!onlyTodo)} className={`flex-row items-center gap-1.5 rounded-full px-3 h-9 border ${onlyTodo ? 'bg-primary border-primary' : 'bg-surface border-line'}`}><Icon name="translate" size={15} tone={onlyTodo ? 'onprimary' : 'muted'} /><Txt className={`text-[12.5px] font-bold ${onlyTodo ? 'text-onprimary' : ''}`}>{t('improve.langFilterShort', { count: todoCount })}</Txt></Pressable> : null}<Txt className="text-muted text-[12px]">{filtered.length} / {rows.length}</Txt></View>
       {entity === 'tabs' ? <HomeTabsOption /> : null}
       {entity === 'models' ? <AiEnginePanel /> : null}
-      <CrudTable langs={hasLangs ? langsOf : undefined} visual={!!cfg.visual} onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={shown} view={cfg.view(ctx)} rowTestID="row"
-        onEdit={open} onDelete={setDel}
+      {!s.contentReady && !rows.length ? <AdminLoading /> : <RightClick items={pageMenu}><CrudTable langs={hasLangs ? langsOf : undefined} visual={!!cfg.visual} onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={shown} view={cfg.view(ctx)} rowTestID="row"
+        onEdit={open} onDelete={setDel} onDuplicate={(r) => duplicate([r])} itemMenu={itemMenu}
         onReorder={cfg.ordered && bulkEnabled && !query.trim() ? staged.drop : undefined}
         onMove={cfg.ordered && bulkEnabled && !query.trim() ? (r, d) => staged.move([r.id], d) : undefined}
-        onToggle={(r) => staged.update(r.id, { visible: r.visible === false } as any)} />
+        onToggle={(r) => staged.update(r.id, { visible: r.visible === false } as any)} /></RightClick>}
       {staged.dirty ? <Card className="p-2 mt-3 flex-row items-center gap-2"><Txt className="flex-1 text-[12px]">{t('improve.previewLabel')}</Txt><Button testID="crud-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={staged.discard} /><Button testID="crud-submit" size="sm" title={t('improve.submit')} onPress={staged.save} /></Card> : null}
       <View className="h-3" />
       <FormModal visible={!!editing} title={`${isNew ? t('admin.crud.addNew') : t('admin.crud.editItem')} · ${t(`admin.nav.${cfg.navKey}`)}`}

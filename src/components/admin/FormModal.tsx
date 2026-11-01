@@ -111,7 +111,8 @@ export function Field({ f, value, onChange, ctx, error, record }: { f: FieldDef;
           {list.map((c, i) => (
             <View key={i} className="flex-row items-start gap-2">
               <View className="flex-1"><ColorPicker value={c} onChange={(v) => onChange(list.map((x, j) => (j === i ? v : x)))} /></View>
-              <Pressable onPress={() => onChange(list.filter((_, j) => j !== i))} className="w-9 h-11 items-center justify-center"><Icon name="trash-can-outline" size={20} tone="danger" /></Pressable>
+              <Pressable testID={`color-dup-${i}`} accessibilityRole="button" accessibilityLabel={t('ax.duplicateColor')} onPress={() => onChange([...list.slice(0, i + 1), c, ...list.slice(i + 1)])} className="w-9 h-11 items-center justify-center"><Icon name="content-copy" size={18} /></Pressable>
+              <Pressable testID={`color-del-${i}`} accessibilityRole="button" accessibilityLabel={t('common.delete')} onPress={() => onChange(list.filter((_, j) => j !== i))} className="w-9 h-11 items-center justify-center"><Icon name="trash-can-outline" size={20} tone="danger" /></Pressable>
             </View>
           ))}
           <Button size="sm" variant="soft" icon="plus" title={t('common.add')} onPress={() => onChange([...list, '#CCCCCC'])} />

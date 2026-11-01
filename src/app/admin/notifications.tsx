@@ -8,6 +8,7 @@ import { Segmented } from '@/components/ui/Segmented';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
 import { PushNotifications } from '@/components/admin/PushNotifications';
 import { CampaignList } from '@/components/admin/campaigns/CampaignList';
 import { Composer } from '@/components/admin/campaigns/Composer';
@@ -69,7 +70,7 @@ export default function Notifications() {
           {campaignsLoaded || !backendEnabled ? (
             <CampaignList kind={tab === 'campaigns' ? 'campaign' : 'automation'} items={campaigns.filter(c => (tab === 'automations') === (c.kind === 'trigger'))}
               onOpen={c => setEditing({ mode: c.kind === 'trigger' ? 'automation' : 'campaign', campaign: c })} onCreate={() => setEditing({ mode: tab === 'campaigns' ? 'campaign' : 'automation', campaign: null })} />
-          ) : null}
+          ) : <AdminLoading testID="camp-loading" />}
         </View>
       ) : (
       <View testID="notif-panel-devices">
@@ -78,6 +79,7 @@ export default function Notifications() {
       {draft.notifyUsers === false ? <Txt testID="notify-users-paused" className="text-muted text-[12px] mb-2">{t('inbox.pausedNote')}</Txt> : null}
       <Card className="px-4">
         {failed ? <Txt className="text-muted py-4">{t('inbox.loadFailed')}</Txt>
+          : users === null ? <AdminLoading testID="subscribers-loading" />
           : users && !users.length ? <Txt testID="notify-empty" className="text-muted py-4">{t('inbox.subscribersNone')}</Txt>
           : (users ?? []).map((u, i) => (
             <View key={u.id} testID={`notify-user-${u.id}`} className={`flex-row items-center gap-3 py-3 ${i ? 'border-t border-line' : ''}`}>
