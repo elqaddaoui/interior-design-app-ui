@@ -9,6 +9,7 @@ import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
 import { useStore } from '@/store/useStore';
 import { BrandHeader } from '@/components/BrandHeader';
+import { useTabPreload } from '@/hooks/useTabPreload';
 
 const TABS = [
   { name: 'index', key: 'tabs.home', icon: 'home-variant-outline', on: 'home-variant' },
@@ -70,6 +71,8 @@ function TabBar({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
   const branding = useStore((s) => s.doc.branding);
   const style = useStore((s) => s.doc.settings.userNavStyle) ?? 'floating';
+  // Build the other tabs in the background (idle time only) so the first press on them is as fast as every later one.
+  useTabPreload(navigation, TABS.map((tab) => tab.name), state.routes[state.index]?.name);
   const Cmp = desktop ? DesktopItem : style === 'classic' ? ClassicItem : style === 'minimal' ? MinimalItem : FloatingItem;
   const items = TABS.map((tab) => {
     const idx = state.routes.findIndex((r: any) => r.name === tab.name);

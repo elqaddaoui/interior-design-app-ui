@@ -3,7 +3,6 @@ import React from 'react';
 import { Linking, Pressable, View } from 'react-native';
 import { router } from '@/hooks/useLeaveGuard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useStore } from '@/store/useStore';
 import { useT } from '@/i18n';
 import { Button } from '@/components/ui/Button';
@@ -25,12 +24,12 @@ export default function Assistant() {
   if (cfg.type === 'whatsapp') {
     return (
       <Screen max={520} scroll={false}>
-        <Animated.View entering={FadeInDown.duration(400)} className="flex-1 items-center justify-center px-4">
+        <View className="flex-1 items-center justify-center px-4">
           <View className="w-24 h-24 rounded-full bg-[#25D366] items-center justify-center mb-6"><Icon name="whatsapp" size={54} color="#fff" /></View>
           <Txt className="text-[24px] font-black text-center">{t('assistant.waTitle')}</Txt>
           <Txt className="text-muted text-[15px] text-center mt-2 mb-8">{t('assistant.waDesc')}</Txt>
           <Button testID="open-wa" icon="whatsapp" title={t('assistant.waOpen')} size="lg" full onPress={() => Linking.openURL(waLink(cfg.whatsappNumber, t('assistant.waDefaultMsg')))} />
-        </Animated.View>
+        </View>
       </Screen>
     );
   }

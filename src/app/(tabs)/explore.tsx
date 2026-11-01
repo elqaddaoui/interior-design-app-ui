@@ -1,7 +1,6 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
 import { router } from '@/hooks/useLeaveGuard';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { sorted, useStore } from '@/store/useStore';
 import { useL, useT } from '@/i18n';
 import { Card } from '@/components/ui/Card';
@@ -31,10 +30,10 @@ export default function Explore() {
 
   return (
     <Screen header={header} bottomInset={16}>
-      {sorted(sections).filter((s) => s.visible).map((sec, si) => {
+      {sorted(sections).filter((s) => s.visible).map((sec) => {
         const cats = sorted(categories).filter((c) => c.visible && c.sectionId === sec.id);
         return (
-          <Animated.View key={sec.id} entering={FadeInDown.delay(si * 100).duration(350)} className="mt-4 mb-4">
+          <View key={sec.id} className="mt-4 mb-4">
             <Card className={desktop ? "p-5 mb-4 rounded-3xl" : "p-3 mb-3"}><View className="flex-row items-center justify-between mb-4 gap-3">
               <View className="flex-row items-center gap-2 flex-1">
                 <Icon name={sec.icon} size={22} />
@@ -60,7 +59,7 @@ export default function Explore() {
                 );
               })}
             </Carousel></Card>
-          </Animated.View>
+          </View>
         );
       })}
     </Screen>
