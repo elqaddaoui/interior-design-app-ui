@@ -17,6 +17,7 @@ import { LangDots } from './LangField';
 import type { Lang } from '@/data/types';
 import type { LangState } from '@/lib/langStatus';
 import { holdPress, PRESS_HOLD } from '@/lib/noSelect';
+import { RightClick, type MenuItem } from './ContextMenu';
 
 const TONE: Record<NonNullable<Chip['tone']>, { box: string; text: string; icon: 'muted' | 'primary' | 'success' | 'danger' | 'fg' }> = {
   muted: { box: 'bg-surface2', text: 'text-muted', icon: 'muted' },
@@ -39,11 +40,15 @@ const Chips = ({ chips }: { chips?: Chip[] }) => chips?.length ? <View className
  * Admin collection view. Lists (rows with a leading visual) and grids (image tiles) are both built from the
  * entity's own `view(row)` description; reordering is always the drag handle, never arrow buttons.
  */
-export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, view, onEdit, onDelete, onReorder, onMove, onToggle, rowTestID, selected, onSelect, onLongPress, visual = false, langs }: {
+export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, view, onEdit, onDelete, onDuplicate, itemMenu, onReorder, onMove, onToggle, rowTestID, selected, onSelect, onLongPress, visual = false, langs }: {
   /** Translation state of a row (DAR / AR / FR); shown on the row only when something is not complete. */
   langs?: (r: T) => Record<Lang, LangState> | null;
   rows: T[]; view: (r: T, index: number) => RowView; visual?: boolean;
   onEdit?: (r: T) => void; onDelete?: (r: T) => void; onToggle?: (r: T) => void;
+  /** Duplicate button on each row. */
+  onDuplicate?: (r: T) => void;
+  /** Desktop right-click menu of a row. */
+  itemMenu?: (r: T) => MenuItem[];
   /** Drag-and-drop: `ids` (one row or the whole selection) were dropped on `targetId`. */
   onReorder?: (ids: string[], targetId: string) => void;
   /** Keyboard / screen-reader alternative to dragging (no visible arrows). */
@@ -84,6 +89,7 @@ export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, v
     <View className="flex-row items-center" style={{ flexShrink: 0 }}>
       {onToggle ? <Pressable testID={`toggle-${r.id}`} accessibilityLabel={t('admin.crud.showHide')} onPress={(event) => { event.stopPropagation(); onToggle(r); }} hitSlop={4} className="w-9 h-9 items-center justify-center"><Icon name={r.visible === false ? 'eye-off-outline' : 'eye-outline'} size={19} tone={r.visible === false ? 'muted' : 'fg'} /></Pressable> : null}
       {onEdit ? <Pressable testID={`edit-${r.id}`} accessibilityLabel={t('common.edit')} onPress={(event) => { event.stopPropagation(); onEdit(r); }} hitSlop={4} className="w-9 h-9 items-center justify-center"><Icon name="pencil-outline" size={19} /></Pressable> : null}
+      {onDuplicate ? <Pressable testID={`dup-${r.id}`} accessibilityLabel={t('ax.duplicate')} onPress={(event) => { event.stopPropagation(); onDuplicate(r); }} hitSlop={4} className="w-9 h-9 items-center justify-center"><Icon name="content-copy" size={18} /></Pressable> : null}
       {onDelete ? <Pressable testID={`del-${r.id}`} accessibilityLabel={t('common.delete')} onPress={(event) => { event.stopPropagation(); onDelete(r); }} hitSlop={4} className="w-9 h-9 items-center justify-center"><Icon name="trash-can-outline" size={19} tone="danger" /></Pressable> : null}
     </View>
   );
@@ -106,7 +112,7 @@ export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, v
       {visibleRows.map((r, i) => {
         const v = view(r, currentPage * pageSize + i);
         return <DragRow key={r.id} id={r.id} reorder={reorder} layout="grid" handleTone="light" onMove={onMove ? (d) => onMove(r, d) : undefined} style={{ width: `${100 / columns}%`, padding: 5, minWidth: 0 }}>{(handle) => (
-          <SearchTarget id={r.id}><RevealTarget id={r.id}>
+          <SearchTarget id={r.id}><RevealTarget id={r.id}><RightClick items={() => itemMenu?.(r)} disabled={!itemMenu}>
               <Card className={`overflow-hidden rounded-3xl ${isOn(r) ? 'border-primary' : ''}`} style={{ borderWidth: isOn(r) ? 2 : 1 }}>
                 <Pressable testID={rowTestID ? `${rowTestID}-${r.id}` : undefined} {...press(r)} className={r.visible === false ? 'opacity-60' : ''}>
                   <MediaView media={v.cover} style={{ height: desktop ? 140 : 116 }} />
@@ -122,7 +128,7 @@ export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, v
                 </View>
                 <View className="flex-row items-center justify-end px-1 pb-1 border-t border-line">{actions(r)}</View>
               </Card>
-          </RevealTarget></SearchTarget>
+          </RightClick></RevealTarget></SearchTarget>
         )}</DragRow>;
       })}
     </View>{pagination}</View>;
@@ -135,7 +141,7 @@ export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, v
           const v = view(r, currentPage * pageSize + i);
           return (
             <DragRow key={r.id} id={r.id} reorder={reorder} layout="list" onMove={onMove ? (d) => onMove(r, d) : undefined}>{(handle) => (
-              <SearchTarget id={r.id}><RevealTarget id={r.id}>
+              <SearchTarget id={r.id}><RevealTarget id={r.id}><RightClick items={() => itemMenu?.(r)} disabled={!itemMenu}>
                 <Card className={`rounded-3xl ${isOn(r) ? 'border-primary bg-soft' : ''}`} style={{ borderWidth: isOn(r) ? 2 : 1 }}>
                   <Pressable testID={rowTestID ? `${rowTestID}-${r.id}` : undefined} {...press(r)} className={`flex-row items-center gap-2 ps-1.5 pe-2 py-2.5 ${r.visible === false ? 'opacity-60' : ''}`}>
                     {handle}
@@ -154,7 +160,7 @@ export function CrudTable<T extends { id: string; visible?: boolean }>({ rows, v
                   </Pressable>
                   {!desktop ? <View className="flex-row items-center justify-between px-2 pb-1.5 -mt-1"><View className="flex-row items-center">{checkbox(r)}</View>{actions(r)}</View> : null}
                 </Card>
-              </RevealTarget></SearchTarget>
+              </RightClick></RevealTarget></SearchTarget>
             )}</DragRow>
           );
         })}

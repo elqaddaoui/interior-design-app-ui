@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card';
 import { Icon } from '@/components/ui/Icon';
 import { ConfirmSheet } from '@/components/ui/Sheet';
 import { Txt } from '@/components/ui/Txt';
+import { RightClick, sep, type MenuItem } from '@/components/admin/ContextMenu';
 import { StatusPill, useCampaignError } from '@/components/admin/campaigns/parts';
 import { useT, useL } from '@/i18n';
 import { formatWhen } from '@/lib/campaignTime';
@@ -48,8 +49,16 @@ export function CampaignList({ items, kind, onOpen, onCreate }: { items: Campaig
           const resumable = c.status === 'paused' || (c.kind !== 'once' && c.status === 'draft') || (c.kind === 'once' && c.status === 'draft');
           const when = c.nextAt && live ? `${t('camp.next')}: ${formatWhen(c.nextAt)}` : c.lastRunAt ? `${t('camp.last')}: ${formatWhen(c.lastRunAt)}` : '';
           const text = l(c.title) || l(c.body);
+          const menu = (): MenuItem[] => [
+            { key: 'edit', label: t('common.edit'), icon: 'pencil-outline', onPress: () => onOpen(c) },
+            { key: 'duplicate', label: t('camp.duplicate'), icon: 'content-copy', disabled: !!busy, onPress: () => { void act(c.id, () => store.duplicate(c.id), 'camp.duplicated'); } },
+            ...(live ? [{ key: 'pause', label: t('camp.pause'), icon: 'pause-circle-outline', disabled: !!busy, onPress: () => { void act(c.id, () => store.pause(c.id), 'camp.pausedOk'); } } as MenuItem]
+              : resumable ? [{ key: 'resume', label: t('camp.resume'), icon: 'play-circle-outline', disabled: !!busy, onPress: () => { void act(c.id, () => store.activate(c.id), 'camp.activated'); } } as MenuItem] : []),
+            sep('s1'),
+            { key: 'delete', label: t('camp.delete'), icon: 'trash-can-outline', danger: true, onPress: () => setDel(c) },
+          ];
           return (
-            <Card key={c.id} testID={`camp-row-${c.id}`} className="overflow-hidden">
+            <RightClick key={c.id} items={menu}><Card testID={`camp-row-${c.id}`} className="overflow-hidden">
               <Pressable testID={`camp-open-${c.id}`} accessibilityRole="button" onPress={() => onOpen(c)} className="p-3.5 gap-2 active:opacity-80">
                 <View className="flex-row items-center gap-3">
                   <View className="w-10 h-10 rounded-xl bg-soft items-center justify-center"><Icon name={KIND_ICON[c.kind]} size={20} tone="primary" /></View>
@@ -75,7 +84,7 @@ export function CampaignList({ items, kind, onOpen, onCreate }: { items: Campaig
                 <Button testID={`camp-dup-${c.id}`} size="sm" variant="ghost" icon="content-copy" title={t('camp.duplicate')} disabled={!!busy} onPress={() => { void act(c.id, () => store.duplicate(c.id), 'camp.duplicated'); }} />
                 <Pressable testID={`camp-del-${c.id}`} accessibilityRole="button" accessibilityLabel={t('camp.delete')} onPress={() => setDel(c)} hitSlop={6} className="w-9 h-9 rounded-full items-center justify-center active:opacity-70"><Icon name="trash-can-outline" size={18} tone="danger" /></Pressable>
               </View>
-            </Card>
+            </Card></RightClick>
           );
         })}
       </View>

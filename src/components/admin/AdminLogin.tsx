@@ -37,8 +37,8 @@ export function AdminLogin({ forbidden }: { forbidden?: boolean }) {
         <View className="w-14 h-14 rounded-2xl bg-primary items-center justify-center self-center mb-4"><Icon name="shield-lock-outline" size={28} tone="onprimary" /></View>
         <Txt className="text-[22px] font-extrabold text-center mb-1">{t('admin.login')}</Txt>
         <Txt className="text-muted text-center text-[13px] mb-5">{forbidden ? t('admin.forbidden') : t(backendEnabled ? 'push.loginHint' : 'admin.demoHint')}</Txt>
-        <Input testID="admin-email" label={t('admin.email')} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
-        <Input testID="admin-password" label={t('admin.password')} value={pw} onChangeText={setPw} secureTextEntry onSubmitEditing={submit} error={err} />
+        <Input testID="admin-email" label={t('admin.email')} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="username" />
+        <Input testID="admin-password" label={t('admin.password')} value={pw} onChangeText={setPw} secureTextEntry autoComplete="current-password" onSubmitEditing={submit} error={err} />
         <Button testID="admin-signin" title={t('admin.signIn')} onPress={submit} loading={busy} className="mt-1" />
         <Button title={t('admin.openApp')} variant="ghost" onPress={() => router.replace('/')} className="mt-2" />
       </Card>

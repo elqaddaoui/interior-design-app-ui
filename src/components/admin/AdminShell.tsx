@@ -17,6 +17,8 @@ import { RememberScroll, SearchTarget, useViewState } from '@/hooks/useViewState
 import { useSearchObstacle } from '@/hooks/useSearchInset';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import type { AdminNavMode } from '@/data/types';
+import { Platform } from 'react-native';
+import { RightClick, type MenuItem } from '@/components/admin/ContextMenu';
 
 import { ADMIN_GROUPS, type NavItem } from '@/lib/adminNav';
 export { ADMIN_NAV } from '@/lib/adminNav';
@@ -60,6 +62,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const measureDraft = useSearchObstacle(settingsDraft.dirty);
 
   const go = (href: string) => router.push(href as Href);
+  /** Right-click on a menu entry (desktop): open it here or in a new browser tab. */
+  const navMenu = (n: NavItem): MenuItem[] => [
+    { key: 'open', label: label(n.key), icon: n.icon, onPress: () => go(n.href) },
+    ...(Platform.OS === 'web' ? [{ key: 'newtab', label: t('ax.openNewTab'), icon: 'open-in-new', onPress: () => { (globalThis as any).window?.open?.(n.href, '_blank', 'noopener'); } } as MenuItem] : []),
+  ];
   const logout = () => requestLeave(() => {
     // Stop this device's admin notifications before the session is revoked, then leave the panel.
     void releaseDevice('admin').catch(() => {}).then(() => backendLogout()).catch(() => {});
@@ -81,12 +88,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const Row = ({ n }: { n: NavItem }) => {
     const on = active(n.href);
     return (
-      <SearchTarget id={`menu-${n.key}`}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
+      <SearchTarget id={`menu-${n.key}`}><RightClick items={() => navMenu(n)}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
         className={`flex-row items-center gap-3 px-3 h-11 rounded-xl ${on ? 'bg-primary' : 'active:bg-surface2'}`}>
         <Icon name={n.icon} size={20} tone={on ? 'onprimary' : 'fg'} />
         <Txt numberOfLines={1} className={`flex-1 font-semibold text-[14px] ${on ? 'text-onprimary' : ''}`}>{label(n.key)}</Txt>
         {n.key === 'requests' ? <Badge n={pending} /> : null}
-      </Pressable></SearchTarget>
+      </Pressable></RightClick></SearchTarget>
     );
   };
 
@@ -125,11 +132,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             {g.items.map((n) => {
               const on = active(n.href);
               return (
-                <SearchTarget key={n.key} id={`menu-${n.key}`}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
+                <SearchTarget key={n.key} id={`menu-${n.key}`}><RightClick items={() => navMenu(n)}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label(n.key)} onPress={() => go(n.href)}
                   className={`w-11 h-11 rounded-xl items-center justify-center ${on ? 'bg-primary' : 'active:bg-surface2'}`}>
                   <Icon name={n.icon} size={22} tone={on ? 'onprimary' : 'fg'} />
                   {n.key === 'requests' && pending > 0 ? <View className="absolute -top-0.5 -end-0.5 bg-danger rounded-full min-w-[16px] h-4 px-1 items-center justify-center"><Txt className="text-white text-[10px] font-bold">{pending}</Txt></View> : null}
-                </Pressable></SearchTarget>
+                </Pressable></RightClick></SearchTarget>
               );
             })}
           </View>
@@ -150,12 +157,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               {g.items.map((n) => {
                 const on = active(n.href);
                 return (
-                  <SearchTarget key={n.key} id={`menu-${n.key}`}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" onPress={() => go(n.href)}
+                  <SearchTarget key={n.key} id={`menu-${n.key}`}><RightClick items={() => navMenu(n)}><Pressable testID={`nav-${n.key}`} accessibilityRole="link" onPress={() => go(n.href)}
                     className={`flex-row items-center gap-2 px-3 h-9 rounded-full ${on ? 'bg-primary' : 'bg-surface2'}`}>
                     <Icon name={n.icon} size={17} tone={on ? 'onprimary' : 'fg'} />
                     <Txt className={`font-semibold text-[13px] ${on ? 'text-onprimary' : ''}`}>{label(n.key)}</Txt>
                     {n.key === 'requests' ? <Badge n={pending} /> : null}
-                  </Pressable></SearchTarget>
+                  </Pressable></RightClick></SearchTarget>
                 );
               })}
             </View>

@@ -10,6 +10,7 @@ import { api, backendEnabled } from '@/lib/backend';
 import { DEFAULT_MAX_MS, DEFAULT_MIN_MS } from '@/lib/chatPace';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
 import { Field, type Ctx } from '@/components/admin/FormModal';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
@@ -27,7 +28,8 @@ function Providers() {
   const [status, setStatus] = useState<Status | null>(null);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
-  const load = useCallback(() => { api<Status>('/admin/chat/status').then(setStatus).catch(() => setStatus(null)); }, []);
+  const [settled, setSettled] = useState(false);
+  const load = useCallback(() => { api<Status>('/admin/chat/status').then(setStatus).catch(() => setStatus(null)).finally(() => setSettled(true)); }, []);
   useEffect(() => { if (backendEnabled) load(); }, [load]);
   if (!backendEnabled) return null;
   const write = async (name: string, value: string) => {
@@ -45,8 +47,9 @@ function Providers() {
     <Card className="p-3 mt-3" testID="asst-providers">
       <Txt className="text-[15px] font-extrabold">{t('admin.assistant.providersTitle')}</Txt>
       <Txt className="text-[12px] text-muted mt-0.5 mb-3">{t('admin.assistant.providersHint')}</Txt>
+      {!settled ? <AdminLoading testID="asst-loading" /> : null}
       {!any ? <Txt testID="asst-no-provider" className="text-[12px] text-danger mb-3">{t('admin.assistant.noProvider')}</Txt> : null}
-      {KEYED.map((name) => {
+      {settled ? KEYED.map((name) => {
         const p = status?.[name];
         const state = !p?.configured ? 'provOff' : p.cooling ? 'provCooling' : 'provOn';
         return (
@@ -65,7 +68,7 @@ function Providers() {
             )}
           </View>
         );
-      })}
+      }) : null}
       <Txt className="text-[12px] text-muted">{t('admin.assistant.provPollinations')}: {t(status?.pollinations ? 'admin.assistant.provOn' : 'admin.assistant.provOff')}</Txt>
     </Card>
   );

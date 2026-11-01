@@ -20,6 +20,8 @@ npm run check:themes  # WCAG contrast report for the 20 theme presets
 - User app: `/` · Admin panel: `/admin`. Default login everywhere (real and demo mode): user `admin` / password `admin`. Custom server credentials (`ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH`) also work in addition.
 - Languages: Moroccan Darija (default, RTL), Arabic (RTL), French — Settings → Language.
 - Admin edits write to the same Zustand store the user app reads, so they apply instantly.
+- Admin panel shortcuts: **right-click** (mouse) on any row, tile, menu entry or the page background opens a context menu (edit, duplicate, show/hide, move first/last, select, delete; WhatsApp/call/copy on clients and requests; open in a new tab on menu entries). Touch long-press keeps selecting rows as before. Every collection row also has a **Duplicate** button (and a bulk Duplicate for the selection); campaigns, slideshow pictures and palette colours can be duplicated too. Each admin page shows the configured loading animation until its data has arrived from the database. Search/filter inputs and API-key fields are not auto-filled by the browser (`autoComplete` is off / `new-password`); saved keys stay on the server untouched.
+- Multiple-images popup (Tools > Edit > Multiple images): pick **several pictures at once** (computer file dialog or phone gallery), or drop files from the computer onto the area; **drag a picture onto another** (mouse, or touch after a short hold) to set the order.
 
 ## Architecture
 ```

@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Field';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
+import { AdminLoading } from '@/components/admin/AdminLoading';
 import { api, backendEnabled } from '@/lib/backend';
 import { useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
@@ -26,7 +27,8 @@ export function AiEnginePanel() {
   const [status, setStatus] = useState<Status | null>(null);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
-  const load = useCallback(() => { api<Status>('/admin/ai/status').then(setStatus).catch(() => setStatus(null)); }, []);
+  const [settled, setSettled] = useState(false);
+  const load = useCallback(() => { api<Status>('/admin/ai/status').then(setStatus).catch(() => setStatus(null)).finally(() => setSettled(true)); }, []);
   useEffect(() => { if (backendEnabled) load(); }, [load]);
   if (!backendEnabled) return null;
   const write = async (name: string, value: string) => {
@@ -43,8 +45,9 @@ export function AiEnginePanel() {
     <Card className="p-3 mb-3" testID="ai-engines">
       <Txt className="text-[15px] font-extrabold">{t('admin.ai.title')}</Txt>
       <Txt className="text-[12px] text-muted mt-0.5 mb-3">{t('admin.ai.hint')}</Txt>
+      {!settled ? <AdminLoading testID="ai-loading" /> : null}
       {status && !status.live ? <Txt testID="ai-no-engine" className="text-[12px] text-danger mb-3">{t('admin.ai.noEngine')}</Txt> : null}
-      {NAMES.map((name) => {
+      {settled ? NAMES.map((name) => {
         const e = status?.engines[name];
         return (
           <View key={name} className="mb-3">
@@ -62,7 +65,7 @@ export function AiEnginePanel() {
             )}
           </View>
         );
-      })}
+      }) : null}
       {status?.chainI2I.length ? <Txt className="text-[12px] text-muted mb-1">{t('admin.ai.chainPhoto')}: {status.chainI2I.join(' → ')}</Txt> : null}
       {status?.chainT2I.length ? <Txt className="text-[12px] text-muted mb-3">{t('admin.ai.chainText')}: {status.chainT2I.join(' → ')}</Txt> : null}
       <View className="flex-row items-center gap-3 pt-3 border-t border-line">

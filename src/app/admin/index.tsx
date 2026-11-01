@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
 import { BarChart, RankBars } from '@/components/admin/dashboard/Charts';
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
@@ -92,6 +93,7 @@ export default function Dashboard() {
   const pill = (on: boolean) => `px-3.5 h-9 rounded-full items-center justify-center ${on ? 'bg-ink' : 'bg-surface2'}`;
   const metricLabel = (m: Metric) => t(`admin.dash.m${m[0].toUpperCase()}${m.slice(1)}`);
 
+  if (!s.adminLoaded) return <AdminPage title={t('admin.dash.hello')} max={1200}><AdminLoading /></AdminPage>;
   return (
     <AdminPage title={t('admin.dash.hello')} max={1200}>
       <Txt className="text-muted text-[14px] -mt-3 mb-4">{t('admin.dash.subtitle')}</Txt>

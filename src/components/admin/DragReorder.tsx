@@ -126,8 +126,10 @@ export function useReorder(ids: string[], selected: string[], commit: (ids: stri
  * One draggable row/tile. `children` receives the handle element so each layout decides where it sits.
  * The handle is the ONLY drag surface: the rest of the row keeps scrolling, tapping and long-press selection.
  */
-export function DragRow({ id, reorder, layout = 'list', handleStyle, handleTone = 'muted', onMove, children, style }: {
+export function DragRow({ id, reorder, layout = 'list', handleStyle, handleTone = 'muted', bare, onMove, children, style }: {
   id: string; reorder: Reorder; layout?: 'list' | 'grid'; handleStyle?: StyleProp<ViewStyle>; handleTone?: 'muted' | 'light';
+  /** No icon: the handle is an invisible surface (sized by `handleStyle`) so a whole picture can be grabbed. */
+  bare?: boolean;
   onMove?: (direction: -1 | 1) => void; children: (handle: React.ReactNode) => React.ReactNode; style?: StyleProp<ViewStyle>;
 }) {
   const { t } = useT();
@@ -173,7 +175,7 @@ export function DragRow({ id, reorder, layout = 'list', handleStyle, handleTone 
       onAccessibilityAction={(e) => { if (e.nativeEvent.actionName === 'increment') onMove?.(-1); else if (e.nativeEvent.actionName === 'decrement') onMove?.(1); }}
       {...(keys as object)} {...NO_CONTEXT_MENU}
       style={[NO_SELECT, { width: 32, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 12, cursor: active ? 'grabbing' : 'grab', touchAction: 'none' } as unknown as ViewStyle, handleTone === 'light' ? { backgroundColor: 'rgba(0,0,0,0.45)', height: 32, borderRadius: 16 } : null, handleStyle]}>
-      <Icon name="drag" size={22} color={handleTone === 'light' ? '#fff' : undefined} tone="muted" />
+      {bare ? null : <Icon name="drag" size={22} color={handleTone === 'light' ? '#fff' : undefined} tone="muted" />}
     </View>
   );
   const handle = reorder.enabled ? (

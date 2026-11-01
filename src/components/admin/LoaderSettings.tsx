@@ -44,20 +44,22 @@ export function LoaderSettings({ settings, set }: { settings: AppSettings; set: 
 
       {cfg.enabled ? <>
         <Txt className="font-bold text-[14px] mb-2">{t('improve.loaderStyle')}</Txt>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+        <View testID="loader-style-grid" style={{ flexDirection: 'row', flexWrap: 'wrap', margin: -5 }}>
           {LOADER_STYLES.map((style) => {
             const active = cfg.style === style;
             return (
-              <Pressable key={style} testID={`loader-style-${style}`} accessibilityRole="radio" accessibilityState={{ selected: active }} onPress={() => set({ loaderStyle: style })}
-                className={`rounded-2xl border-2 p-2 items-center ${active ? 'border-primary bg-soft' : 'border-line bg-surface'}`} style={{ width: 118 }}>
-                <View className="rounded-xl items-center justify-center overflow-hidden" style={{ width: 98, height: 84, backgroundColor: cfg.bg }}>
+              <View key={style} style={{ width: '33.3333%', padding: 5, minWidth: 0 }}>
+              <Pressable testID={`loader-style-${style}`} accessibilityRole="radio" accessibilityState={{ selected: active }} onPress={() => set({ loaderStyle: style })}
+                className={`rounded-2xl border-2 p-2 items-center ${active ? 'border-primary bg-soft' : 'border-line bg-surface'}`} style={{ width: '100%' }}>
+                <View className="rounded-xl items-center justify-center overflow-hidden" style={{ width: '100%', height: 84, backgroundColor: cfg.bg }}>
                   {style === 'custom' && !cfg.uri ? <Icon name="image-plus" size={28} tone="muted" /> : <BootLoader config={{ ...cfg, style }} scale={0.75} />}
                 </View>
                 <View className="flex-row items-center gap-1 mt-2">
                   {active ? <Icon name="check-circle" size={14} tone="primary" /> : null}
-                  <Txt className="text-[12.5px] font-bold">{t(`improve.loader_${style}`)}</Txt>
+                  <Txt className="text-[12.5px] font-bold" numberOfLines={1} style={{ flexShrink: 1 }}>{t(`improve.loader_${style}`)}</Txt>
                 </View>
               </Pressable>
+              </View>
             );
           })}
         </View>

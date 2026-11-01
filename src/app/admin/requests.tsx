@@ -4,13 +4,14 @@ import { Linking, Pressable, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { ListSkeleton } from '@/components/ui/Skeleton';
 import { Icon } from '@/components/ui/Icon';
 import { MediaView } from '@/components/ui/MediaView';
 import { Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
+import { RightClick, sep, type MenuItem } from '@/components/admin/ContextMenu';
 import { ImageField } from '@/components/admin/ImageField';
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
@@ -104,6 +105,22 @@ export default function Requests() {
     if (requestedOpen && openedNotification.current !== requestedOpen && s.requests.some(row => row.id === requestedOpen)) { openedNotification.current = requestedOpen; setOpen(requestedOpen); }
   }, [requestedOpen, s.requests, setOpen]);
   const rows = [...s.requests].sort((a, b) => b.createdAt - a.createdAt).filter((r) => r.id === target || filter === 'all' || r.status === filter);
+  const menuOf = (r: RenderRequest): MenuItem[] => {
+    const mark = async (status: RequestStatus) => {
+      await s.update('requests', r.id, { status });
+      if (status === 'delivered') toast(t('admin.req.deliveredToast')); else toast(t('admin.crud.saved'));
+    };
+    const copy = () => { try { void (globalThis as any).navigator?.clipboard?.writeText(r.whatsapp); toast(t('ax.copied')); } catch { /* clipboard unavailable */ } };
+    return [
+      { key: 'open', label: t('admin.req.details'), icon: 'pencil-outline', onPress: () => setOpen(r.id) },
+      { key: 'processing', label: t('admin.req.markProcessing'), icon: 'progress-clock', disabled: r.status === 'processing', onPress: () => mark('processing') },
+      { key: 'delivered', label: t('admin.req.markDelivered'), icon: 'check-circle-outline', disabled: r.status === 'delivered', onPress: () => mark('delivered') },
+      sep('s1'),
+      { key: 'wa', label: t('admin.req.openWa'), icon: 'whatsapp', onPress: () => Linking.openURL(waLink(r.whatsapp, t('admin.req.waMsg', { name: r.name }))) },
+      { key: 'call', label: t('push.call'), icon: 'phone', onPress: () => Linking.openURL(`tel:${r.whatsapp.replace(/[^\d+]/g, '')}`) },
+      { key: 'copy', label: t('ax.copyNumber'), icon: 'content-copy', onPress: copy },
+    ];
+  };
   const { draft: settings, patch } = useDraftDoc('settings');
   const auto = settings.autoSendWhatsApp;
   return (
@@ -121,7 +138,7 @@ export default function Requests() {
           </Pressable>
         ))}
       </View>
-      {!s.adminLoaded && !rows.length ? <ListSkeleton rows={5} h={72} /> : !rows.length ? <EmptyState icon="inbox-outline" title={t('admin.crud.noItems')} /> : (
+      {!s.adminLoaded && !rows.length ? <AdminLoading /> : !rows.length ? <EmptyState icon="inbox-outline" title={t('admin.crud.noItems')} /> : (
         <Card className="overflow-hidden">
           {desktop ? (
             <View className="flex-row items-center px-4 h-10 bg-surface2">
@@ -130,7 +147,7 @@ export default function Requests() {
             </View>
           ) : null}
           {rows.map((r) => (
-            <SearchTarget key={r.id} id={r.id}><Pressable testID={`req-${r.id}`} onPress={() => setOpen(r.id)} className="px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3">
+            <SearchTarget key={r.id} id={r.id}><RightClick items={() => menuOf(r)}><Pressable testID={`req-${r.id}`} onPress={() => setOpen(r.id)} className="px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3">
               <MediaView uri={r.aiResult || r.photoUri} className="rounded-lg" style={{ width: 48, height: 48 }} />
               {desktop ? (<>
                 <Txt className="font-bold" style={{ flex: 1.2 }} numberOfLines={1}>{r.name}</Txt>
@@ -147,7 +164,7 @@ export default function Requests() {
                   <Choices r={r} />
                 </View>
               )}
-            </Pressable></SearchTarget>
+            </Pressable></RightClick></SearchTarget>
           ))}
         </Card>
       )}

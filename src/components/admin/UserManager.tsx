@@ -3,7 +3,6 @@ import { Pressable, ScrollView, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { ListSkeleton } from '@/components/ui/Skeleton';
 import { Icon } from '@/components/ui/Icon';
 import { Input } from '@/components/ui/Field';
 import { ConfirmSheet, Sheet } from '@/components/ui/Sheet';
@@ -11,6 +10,8 @@ import { Segmented } from '@/components/ui/Segmented';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AdminLoading } from '@/components/admin/AdminLoading';
+import { RightClick, sep, type MenuItem } from '@/components/admin/ContextMenu';
 import { SearchTarget, useViewState } from '@/hooks/useViewState';
 import { useBp } from '@/hooks/useBp';
 import { useT } from '@/i18n';
@@ -120,6 +121,24 @@ export function UserManager() {
     } catch { toast(t('admin.um.error')); } finally { setBusy(false); }
   };
 
+  const copyText = (text: string) => {
+    try { void (globalThis as any).navigator?.clipboard?.writeText(text); toast(t('ax.copied')); } catch { /* clipboard unavailable */ }
+  };
+  const menuOf = (u: AppUser): MenuItem[] => {
+    const group = selected.includes(u.id) && selected.length > 1;
+    const ids = group ? chosenOk.map((x) => x.id) : isProtected(u) ? [] : [u.id];
+    const skipped = group ? chosen.length - chosenOk.length : 0;
+    return [
+      { key: 'edit', label: t('common.edit'), icon: 'pencil-outline', onPress: () => setEditing(u) },
+      ...(u.whatsapp ? [{ key: 'copy', label: t('ax.copyNumber'), icon: 'content-copy', onPress: () => copyText(u.whatsapp) } as MenuItem] : []),
+      { key: 'select', label: selected.includes(u.id) ? t('ax.deselect') : t('common.select'), icon: selected.includes(u.id) ? 'select-off' : 'checkbox-marked-circle-outline', onPress: () => toggle(u.id) },
+      sep('s1'),
+      { key: 'block', label: u.blocked && !group ? t('admin.um.unblock') : t('admin.um.block'), icon: u.blocked && !group ? 'account-check-outline' : 'account-cancel-outline', disabled: !ids.length,
+        onPress: () => setConfirm({ kind: u.blocked && !group ? 'unblock' : 'block', ids, skipped }) },
+      { key: 'delete', label: group ? t('ax.deleteSelected', { count: ids.length }) : t('common.delete'), icon: 'trash-can-outline', danger: true, disabled: !ids.length, onPress: () => setConfirm({ kind: 'delete', ids, skipped }) },
+    ];
+  };
+
   const filterLabel: Record<Filter, string> = { all: t('common.all'), active: t('admin.um.active'), blocked: t('admin.um.blocked'), admin: t('admin.enums.admin') };
 
   const bar = selected.length ? (
@@ -157,7 +176,7 @@ export function UserManager() {
           {visible.map((u, i) => {
             const on = selected.includes(u.id);
             return (
-              <SearchTarget key={u.id} id={u.id}>
+              <SearchTarget key={u.id} id={u.id}><RightClick items={() => menuOf(u)}>
                 <Pressable testID={`user-${u.id}`} accessibilityRole="button" onPress={() => (selected.length ? toggle(u.id) : setEditing(u))} onLongPress={holdPress(() => toggle(u.id))} delayLongPress={350} {...PRESS_HOLD}
                   className={`flex-row items-center pe-2 ${i ? 'border-t border-line' : ''} ${on ? 'bg-soft' : ''} ${u.blocked ? 'opacity-70' : ''}`} style={{ minHeight: 68 }}>
                   <Checkbox testID={`select-${u.id}`} on={on} onPress={() => toggle(u.id)} label={t('common.select')} />
@@ -180,11 +199,11 @@ export function UserManager() {
                     <Icon name="pencil-outline" size={20} />
                   </Pressable>
                 </Pressable>
-              </SearchTarget>
+              </RightClick></SearchTarget>
             );
           })}
         </Card>
-      ) : !adminLoaded ? <ListSkeleton rows={6} h={68} /> : <EmptyState icon="account-search-outline" title={t('admin.um.none')} />}
+      ) : !adminLoaded ? <AdminLoading /> : <EmptyState icon="account-search-outline" title={t('admin.um.none')} />}
 
       {rows.length > shown ? <View className="items-center py-3"><Button testID="um-more" variant="soft" size="sm" title={`${t('admin.um.more')} (${rows.length - shown})`} onPress={() => setShown(shown + PAGE)} /></View> : null}
       <View className="h-3" />
