@@ -1,137 +1,247 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { Image } from 'expo-image';
-import { Easing, cancelAnimation, useDerivedValue, useFrameCallback, useSharedValue, withTiming } from 'react-native-reanimated';
-import { scheduleOnRN } from 'react-native-worklets';
-import { FX_FADE, FX_PING_PONG, TR_BASE, activeEffects, loopSeconds, timeline, type ResolvedFx } from '@/lib/toolCards';
-import { reportLowFps, useAnimSlot, useOnScreen, useSimpleMotion } from '@/lib/toolCardPerf';
-import { Effect, Photo, ownsBase, type FxCtx } from './effects';
+import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useStore } from '@/store/useStore';
+import { useTheme } from '@/theme/ThemeProvider';
+import { FADE_CFG, FX, FX_FADE, SLOW_LIMIT, TR_BASE, effectiveEffect, enabledIds, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
+import { availFromKey, availKey, requestedEffects, type ResolvedFx } from '@/lib/toolCards';
+import { fxLog, markLowEnd, useIsMostVisible, useLowEnd, useOnScreen } from '@/lib/toolCardPerf';
+import { RevealStack } from './RevealStack';
+import { useTransition, type PlayStats } from './useTransition';
 
-/** First effect id after `id` in the ascending `list` (wraps around). */
-const nextIn = (list: number[], id: number) => list.find((x) => x > id) ?? list[0] ?? 0;
+/** The effects a card really plays, in order, after availability / low-end rules. Empty = still image. */
+function effectList(fx: ResolvedFx, avail: FxAvail, lowEnd: boolean): number[] {
+  const requested = requestedEffects(fx, enabledIds(avail));
+  // Never edited and every effect disabled by the admin: the cross-fade (always available) plays.
+  if (fx.mode === 'multiple' && fx.effects === null && requested.length === 0) return [FX_FADE];
+  return requested.map((id) => effectiveEffect(id, avail, lowEnd));
+}
+
+type Size = { w: number; h: number };
+type Pair<T> = [T, T];
 
 /**
- * The image zone of a tools card (media type "slideshow"): BEFORE photo as base, AFTER photo as the animated top layer.
+ * Engine of one card: two identical layers, one shared progress value, ONE transition at a time.
  *
- * Loop (tr = 1.6s / speed): hold before (pause) -> reveal (tr) -> hold after (pause) -> reverse (tr), eased, repeating (exactly the reference file).
- * One shared value `phase` (0..1, linear) runs the whole loop on the UI thread; p (reveal) and b (sparkle bump) derive from it.
+ *   FRONT  fully visible, static.            BACK  hidden, holds the NEXT image (never more than two images per card).
+ *   hold -> [next image fully loaded?] -> BACK animates START -> FULL -> (same UI frame) roles swap -> the old FRONT, now hidden
+ *   underneath, receives the image after next and is reset to START. A visible layer never changes source, an image is never copied
+ *   between layers. If the next image is not loaded when the hold ends, the card keeps holding (no transition, no placeholder).
  *
- * Pictures:  1 = static picture.  2 = before / after, played forward and back.
- *            3+ = a chain: every loop is "hold, reveal" and the picture just revealed becomes the next BEFORE, so the slideshow never jumps.
- * At the end of every loop the next kept effect (Multiple mode) and the next picture take over, in a hold, so the change is seamless.
+ * Everything the engine mutates outside React lives in `S` (refs), so the callbacks are stable and never go stale.
+ */
+function Engine({ images, fx, rtl, run, force, lowEnd, avail, layout, onReady, onEffect }: {
+  images: string[]; fx: ResolvedFx; rtl: boolean; run: boolean; force: boolean; lowEnd: boolean; avail: FxAvail; layout: Size;
+  onReady?: () => void; onEffect?: (effect: number) => void;
+}) {
+  const { colors } = useTheme();
+  const drv = useTransition();
+  const pr = PixelRatio.get();
+  const lite = lowEnd && !force; // low-end: no extras (and the effect list is already reduced by effectList)
+  const list = useMemo(() => effectList(fx, avail, lowEnd && !force), [fx, avail, lowEnd, force]);
+  const animatable = images.length >= 2 && list.length > 0;
+  const listKey = `${list.join(',')}|${rtl ? 1 : 0}|${lite ? 1 : 0}|${animatable ? 1 : 0}`;
+
+  // Rendered state (only what the layers need to draw).
+  const [uris, setUris] = useState<Pair<string | null>>(() => [images[0] ?? null, null]);
+  const [cfgs, setCfgs] = useState<Pair<Cfg>>([FADE_CFG, FADE_CFG]);
+  const [back, setBack] = useState<0 | 1>(1);
+  const [phase, setPhase] = useState<'idle' | 'running'>('idle');
+  const [extra, setExtra] = useState<{ def: FxDef; cfg: Cfg } | null>(null);
+  // The size never changes during a transition: a new layout is applied once the layers are idle again.
+  const [size, setSize] = useState<Size>(layout);
+  if (phase !== 'running' && (size.w !== layout.w || size.h !== layout.h)) setSize(layout);
+
+  // Mutable engine state.
+  const S = useRef({
+    alive: false, running: false, front: 0 as 0 | 1, cur: 0, next: -1, effect: 0, cursor: 0,
+    uris: [images[0] ?? null, null] as Pair<string | null>, loaded: [null, null] as Pair<string | null>,
+    frontLoaded: false, prepared: false, backLoaded: false, holdDone: false, readyDone: false,
+    failed: new Set<string>(), timer: null as ReturnType<typeof setTimeout> | null,
+  });
+  // Latest props, read by the stable callbacks (written after each commit).
+  const P = useRef({ images, fx, rtl, run, force, lowEnd, avail, lite, onReady, onEffect, size });
+  useLayoutEffect(() => { P.current = { images, fx, rtl, run, force, lowEnd, avail, lite, onReady, onEffect, size }; });
+
+  const reportReady = useCallback(() => { if (!S.current.readyDone) { S.current.readyDone = true; P.current.onReady?.(); } }, []);
+
+  /** Index of the image shown after `from` (cyclic, failed images skipped); -1 when there is none. */
+  const pickNext = useCallback((from: number) => {
+    const { images: list2 } = P.current;
+    for (let k = 1; k < list2.length; k++) { const i = (from + k) % list2.length; if (!S.current.failed.has(list2[i])) return i; }
+    return -1;
+  }, []);
+
+  const tryStart = useCallback(() => {
+    const s = S.current;
+    if (!s.alive || s.running || !P.current.run) return;
+    // Start only when the next image is fully loaded; otherwise keep holding.
+    if (!s.holdDone || !s.prepared || !s.backLoaded || !s.frontLoaded) return;
+    const { size: sz } = P.current;
+    if (sz.w <= 0 || sz.h <= 0) return;
+    s.running = true;
+    setPhase('running');
+  }, []);
+
+  /** Loads the NEXT image into the hidden BACK layer and gives that layer the next effect. Never touches the visible layer. */
+  const prepare = useCallback(() => {
+    const s = S.current, p = P.current;
+    if (!s.alive || s.running || s.prepared || !p.run || !s.frontLoaded) return;
+    const list2 = effectList(p.fx, p.avail, p.lowEnd && !p.force);
+    const next = pickNext(s.cur);
+    if (p.images.length < 2 || list2.length === 0 || next < 0) return;
+    const e = list2[s.cursor % list2.length];
+    const def = FX[e] ?? FX[FX_FADE];
+    const cfg = makeCfg(def, p.rtl);
+    const b = (1 - s.front) as 0 | 1;
+    const uri = p.images[next];
+    s.next = next; s.effect = e; s.prepared = true;
+    // With 2 images the hidden layer already holds that very image (no reload, nothing to wait for).
+    if (s.uris[b] !== uri) { s.uris[b] = uri; s.loaded[b] = null; }
+    s.backLoaded = s.loaded[b] === uri;
+    drv.configure(b, cfg);
+    setUris([s.uris[0], s.uris[1]]);
+    setCfgs((old) => (b === 0 ? [cfg, old[1]] : [old[0], cfg]));
+    setBack(b);
+    setExtra(!p.lite && def.extra !== 'none' ? { def, cfg } : null);
+    fxLog(`prepare layer ${b} <- #${next} effect ${e} (${s.backLoaded ? 'already loaded' : 'loading'})`);
+    p.onEffect?.(e);
+    if (s.backLoaded) tryStart();
+  }, [drv, pickNext, tryStart]);
+
+  /** (Re)starts the hold timer. Pause = hold: while the card is not allowed to run, no timer runs and nothing starts. */
+  const startHold = useCallback(() => {
+    const s = S.current;
+    if (s.timer) clearTimeout(s.timer);
+    s.timer = null; s.holdDone = false;
+    if (!P.current.run || s.running) return;
+    s.timer = setTimeout(() => { s.timer = null; s.holdDone = true; tryStart(); }, P.current.fx.hold * 1000);
+  }, [tryStart]);
+
+  const onLoad = useCallback((idx: 0 | 1, uri: string) => {
+    const s = S.current;
+    if (s.uris[idx] !== uri) return; // a late event of a previous source
+    if (s.loaded[idx] !== uri) { s.loaded[idx] = uri; fxLog(`loaded layer ${idx}: ${uri.slice(-40)}`); }
+    if (idx === s.front) {
+      if (!s.frontLoaded) { s.frontLoaded = true; reportReady(); startHold(); }
+      prepare();
+    } else if (s.prepared && uri === P.current.images[s.next]) {
+      s.backLoaded = true;
+      tryStart();
+    }
+  }, [prepare, reportReady, startHold, tryStart]);
+
+  const onError = useCallback((idx: 0 | 1, uri: string) => {
+    const s = S.current;
+    if (s.uris[idx] !== uri) return;
+    fxLog(`image failed, skipped: ${uri.slice(-40)}`);
+    s.failed.add(uri);
+    if (idx === s.front) {
+      // The first picture cannot load: show the first one that can.
+      const imgs = P.current.images;
+      const n = imgs.findIndex((u) => !s.failed.has(u));
+      if (n < 0) { reportReady(); return; }
+      s.cur = n; s.uris[idx] = imgs[n]; s.loaded[idx] = null;
+      setUris([s.uris[0], s.uris[1]]);
+    } else if (!s.running) {
+      // The prepared image cannot load: skip it and prepare the next one.
+      s.prepared = false; s.backLoaded = false; s.loaded[idx] = null;
+      prepare();
+    }
+  }, [prepare, reportReady]);
+
+  /** The transition has finished and the UI thread has already swapped the roles. Only now the image after next is loaded. */
+  const onDone = useCallback((stats: PlayStats) => {
+    const s = S.current;
+    if (!s.alive) return;
+    s.running = false;
+    s.front = (1 - s.front) as 0 | 1;
+    s.cur = s.next; s.prepared = false; s.backLoaded = false; s.frontLoaded = true; s.cursor += 1;
+    setPhase('idle');
+    setBack((1 - s.front) as 0 | 1);
+    setExtra(null);
+    const avg = stats.frames ? stats.sumMs / stats.frames : 0;
+    fxLog(`transition effect ${s.effect}: ${stats.frames} frames, avg ${avg.toFixed(1)} ms, dropped ${stats.dropped}, slow(>32ms) ${stats.slow}`);
+    // Runtime guard: a device that janks is treated as low-end from now on (persisted). The admin preview never trips it.
+    if (!P.current.force && stats.slow > SLOW_LIMIT) markLowEnd(`${stats.slow} slow frames in effect ${s.effect}`);
+    startHold();
+    prepare();
+  }, [prepare, startHold]);
+
+  // Start the UI-thread transition once the layers have been committed with raster hints on.
+  useEffect(() => {
+    if (phase !== 'running') return;
+    drv.play(Math.round((TR_BASE / P.current.fx.speed) * 1000), onDone);
+  }, [phase, drv, onDone]);
+
+  useEffect(() => {
+    const s = S.current;
+    s.alive = true;
+    return () => { s.alive = false; if (s.timer) clearTimeout(s.timer); s.timer = null; };
+  }, []);
+
+  // Pause / resume (off-screen, other tab, app in background, not the most visible card): a fresh hold starts when the card may run again.
+  useEffect(() => {
+    if (!run) { const s = S.current; if (s.timer) clearTimeout(s.timer); s.timer = null; s.holdDone = false; return; }
+    startHold();
+    prepare();
+  }, [run, fx.hold, startHold, prepare]);
+
+  // The effect list changed (admin edit, availability, low-end, RTL): re-prepare the hidden layer. A running transition is never touched.
+  useEffect(() => {
+    const s = S.current;
+    if (!animatable) onEffect?.(-1);
+    if (s.running) return;
+    s.prepared = false; s.backLoaded = false;
+    prepare();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- listKey is the signature of everything that matters here
+  }, [listKey]);
+
+  if (size.w <= 0 || size.h <= 0) return null;
+  const extraNow = phase === 'running' || extra ? extra : null;
+  return (
+    <RevealStack W={size.w} H={size.h} pr={pr} v={drv.v} uris={uris} cfgs={cfgs} back={back} raster={phase === 'running'}
+      extra={extraNow} accent={colors.primary} onLoad={onLoad} onError={onError} />
+  );
+}
+
+/**
+ * The image zone of a tools card (media type "slideshow"): before / after reveal between 2 or more images.
+ * It owns the box (size from onLayout, rounded to whole physical pixels), visibility and device rules; the Engine owns the transitions.
  *
- * Only the loop's own inputs restart it (effects, pause, speed, pictures, visibility). The stage size lives in shared values:
- * resizing the card (global height) never restarts the loop and never reloads an image.
+ *  - Only the most visible card animates; the others show a still image. Off-screen cards, other tabs and a backgrounded app pause.
+ *  - Low-end devices (and reduce-motion) play only the effects the admin allowed for them, else the cross-fade, and no extras.
+ *  - Admin availability: a disabled effect is replaced by the nearest enabled Safe effect, or the cross-fade.
  */
 export function CardStage({ id, images, fx, rtl, force, onReady, onEffect, style }: {
   id: string; images: string[]; fx: ResolvedFx; rtl: boolean;
-  /** Admin preview: always animates and does not use one of the 2 animation slots. */
+  /** Admin preview: always animates (does not compete for "most visible card") and ignores the low-end demotion. */
   force?: boolean; onReady?: () => void;
-  /** Reports the effect now playing (0 = static AFTER image); the admin status line shows it. */
+  /** Reports the effect prepared / playing (0 = cross-fade, -1 = still image); the admin status line shows it. */
   onEffect?: (effect: number) => void; style?: StyleProp<ViewStyle>;
 }) {
   const box = useRef<View>(null);
-  const { near, visible } = useOnScreen(box);
-  const slot = useAnimSlot(id, visible, force);
-  // The admin preview always shows the configured effects, so it ignores the low-end / low-FPS fallback (the app's cards obey it).
-  const lowMotion = useSimpleMotion();
-  const simple = lowMotion && !force;
+  const { visible, near } = useOnScreen(box, id, !force);
+  const most = useIsMostVisible(id);
+  const lowEnd = useLowEnd();
+  const key = useStore((s) => availKey(s.doc.settings.toolCards));
+  const avail = useMemo(() => availFromKey(key), [key]);
+  const [layout, setLayout] = useState<Size>({ w: 0, h: 0 });
+  const run = visible && (force || most);
 
-  // Effects played: the kept ones (Multiple), the chosen one (Single), or only the plain fade (reduced motion / low-end / low FPS).
-  const list = useMemo(() => (simple ? [FX_FADE] : activeEffects(fx)), [simple, fx]);
-  const listKey = list.join(',');
-  const [fxId, setFxId] = useState(0);
-  const [pairIdx, setPairIdx] = useState(0);
-  const [tick, setTick] = useState(0);
-  const cur = list.length ? (list.includes(fxId) ? fxId : nextIn(list, fxId)) : 0;
-  const count = images.length;
-  const ping = cur === FX_PING_PONG;
-  // 3+ pictures play as a chain (see above), except the ping-pong effect, which returns to its start and so steps to the next pair instead.
-  const chain = count >= 3 && !ping;
-  // 2 pictures: always (first, second). 3+: (n, n+1) stepping one picture per loop.
-  const at = count < 2 ? 0 : count === 2 ? 0 : pairIdx % count;
-  const before = images[at];
-  const after = images[count < 2 ? 0 : count === 2 ? 1 : (at + 1) % count];
-  const pair = useMemo(() => (count === 0 ? undefined : { before, after }), [count, before, after]);
-  // Static pictures (no effect, off-screen, beyond the 2 animation slots): the AFTER picture.
-  const still = images[Math.min(1, Math.max(0, count - 1))];
+  // Whole physical pixels: the layers, the photos and the maths all use exactly this size.
+  const onLayout = useCallback((e: { nativeEvent: { layout: { width: number; height: number } } }) => {
+    const w = PixelRatio.roundToNearestPixel(e.nativeEvent.layout.width);
+    const h = PixelRatio.roundToNearestPixel(e.nativeEvent.layout.height);
+    setLayout((old) => (old.w === w && old.h === h ? old : { w, h }));
+  }, []);
 
-  const W = useSharedValue(0);
-  const H = useSharedValue(0);
-  const phase = useSharedValue(0);
-  const tr = TR_BASE / fx.speed;
-  const pause = fx.pause;
-  const loopMs = Math.round(loopSeconds(tr, pause, ping, chain) * 1000);
-  const pb = useDerivedValue(() => timeline(phase.value, tr, pause, ping, chain), [tr, pause, ping, chain]);
-  const p = useDerivedValue(() => pb.value[0], []);
-  const b = useDerivedValue(() => pb.value[1], []);
-
-  // Nothing kept = static AFTER image. Cards beyond the 2 animation slots (or off-screen) also show the static AFTER image.
-  const animate = slot && cur > 0 && count > 1;
-
-  const shown = animate ? cur : 0;
-  useEffect(() => { onEffect?.(shown); }, [shown, onEffect]);
-
-  // End of a loop: next kept effect + next pair. Read through a ref (set after render) so the running timing callback never goes stale.
-  const nextLoop = useRef<() => void>(() => {});
-  useLayoutEffect(() => { nextLoop.current = () => { setFxId(nextIn(list, cur)); setPairIdx((i) => i + 1); setTick((t) => t + 1); }; });
-  const advance = useCallback(() => nextLoop.current(), []);
-  useEffect(() => {
-    if (!animate) { cancelAnimation(phase); phase.set(0); return; }
-    phase.set(0);
-    phase.set(withTiming(1, { duration: loopMs, easing: Easing.linear }, (done) => { if (done) scheduleOnRN(advance); }));
-    return () => cancelAnimation(phase);
-  }, [animate, cur, loopMs, tick, listKey, phase, advance]);
-
-  // Preload the pictures that come next while this loop plays (and all of them once, for a short slideshow).
-  useEffect(() => {
-    if (count < 2) return;
-    const upcoming = [1, 2].map((k) => images[(pairIdx + k) % count]);
-    void Image.prefetch(upcoming, 'memory-disk').catch(() => {});
-  }, [pairIdx, count, images]);
-
-  // Frame-rate watchdog: three consecutive windows of 60 frames under 30 FPS switch every card to the simple fade.
-  const acc = useSharedValue(0);
-  const frames = useSharedValue(0);
-  const slow = useSharedValue(0);
-  const watchdog = useFrameCallback((info) => {
-    const dt = info.timeSincePreviousFrame;
-    if (dt == null || dt > 500) return; // first frame / a stall (tab hidden): not a measurement
-    acc.value += dt; frames.value += 1;
-    if (frames.value < 60) return;
-    slow.value = acc.value / frames.value > 1000 / 30 ? slow.value + 1 : 0;
-    acc.value = 0; frames.value = 0;
-    if (slow.value >= 3) scheduleOnRN(reportLowFps);
-  }, false);
-  const measuring = animate && !force && !simple;
-  useEffect(() => { watchdog.setActive(measuring); }, [measuring, watchdog]);
-
-  // The first picture on screen reports "painted" once (the startup loader waits for the first cards).
-  const ready = useRef(onReady);
-  useLayoutEffect(() => { ready.current = onReady; });
-  const painted = useRef(false);
-  const reportReady = useCallback(() => { if (!painted.current) { painted.current = true; ready.current?.(); } }, []);
-  useEffect(() => { if (!pair) reportReady(); }, [pair, reportReady]);
-
-  const ctx: FxCtx | null = pair ? { W, H, p, b, rtl, before: pair.before, after: pair.after, flash: !simple } : null;
-
+  // A different picture set is a different engine (fresh state); a settings change never remounts it.
+  const sig = images.join('\n');
   return (
-    <View ref={box} style={[styles.box, style]} onLayout={(e) => { W.set(e.nativeEvent.layout.width); H.set(e.nativeEvent.layout.height); }}>
-      {/* Mirrored in RTL as one piece (wipes, stars, lines); every photo un-mirrors itself. */}
-      {near && pair && ctx ? (
-        <View pointerEvents="none" style={[StyleSheet.absoluteFill, rtl ? { transform: [{ scaleX: -1 }] } : null]}>
-          {animate ? (
-            <>
-              {ownsBase(cur) ? null : <Photo uri={pair.before} rtl={rtl} onLoad={reportReady} />}
-              <Effect id={cur} c={ctx} onBaseLoad={reportReady} />
-            </>
-          ) : (
-            <Photo uri={still} rtl={rtl} onLoad={reportReady} />
-          )}
-        </View>
+    <View ref={box} style={[{ overflow: 'hidden' }, style]} onLayout={onLayout}>
+      {near && images.length > 0 && layout.w > 0 ? (
+        <Engine key={sig} images={images} fx={fx} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
       ) : null}
     </View>
   );
 }
-
-const styles = StyleSheet.create({ box: { overflow: 'hidden' } });

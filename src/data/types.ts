@@ -4,7 +4,7 @@ export type LText = Record<Lang, string>;
 export type Id = string;
 
 /**
- * A tool's media. `slideshow` = several images played with the 20 before/after effects (see ToolCardFx):
+ * A tool's media. `slideshow` = several images revealed one over the other with the before/after transitions (see ToolCardFx):
  * `images` holds the pictures in order, `uri` mirrors the first one (so every screen that only knows image / video still shows a picture),
  * `fx` holds this card's animation settings.
  */
@@ -24,16 +24,22 @@ export interface ToolCardsGlobal {
   height?: number;
   /** Where the text zone sits on every card. */
   textZone?: 'top' | 'bottom';
+  /** Transition availability (ids 1-30). Enabled = can be chosen and played anywhere; missing = Safe + Medium. */
+  fxEnabled?: number[];
+  /** Subset of the enabled ids that low-end devices may play (the others play the cross-fade); missing = Safe only. */
+  fxLowEnd?: number[];
 }
 export type ToolCardGradient = 'soft' | 'medium' | 'strong';
 /** PER-CARD animation settings (Tool.media.fx, slideshow only). Every key is optional: missing keys use the defaults in lib/toolCards.ts. */
 export interface ToolCardFx {
   mode?: 'single' | 'multiple';
-  /** Multiple mode: kept effect ids (1-20), played one after another. Empty = static AFTER image. */
+  /** Multiple mode: kept effect ids (1-30), played one after another. Missing = every enabled effect. Empty = still image. */
   effects?: number[];
   /** Single mode: the chosen effect id. */
   effect?: number;
-  /** Pause between transitions, seconds. */
+  /** Hold between two transitions, seconds (default 0.9). */
+  hold?: number;
+  /** @deprecated Old name of `hold`; still read when `hold` is missing. */
   pause?: number;
   /** Animation speed multiplier. */
   speed?: number;

@@ -18,11 +18,11 @@ import { toast } from '@/store/useToast';
 const MAX_IMAGES = 30;
 
 /**
- * Picked picture -> compressed WebP (max ~600px) -> media storage (R2 / database).
+ * Picked picture -> centered crop to the card's aspect ratio -> compressed WebP (max 800px wide) -> media storage (R2 / database).
  * Resolves '' when it could not be stored. `uploadDataUrl` is tracked, so a save waits for pending uploads.
  */
-async function storeCardImage(uri: string): Promise<string> {
-  const webp = await toCardWebp(uri);
+async function storeCardImage(uri: string, ratio?: number): Promise<string> {
+  const webp = await toCardWebp(uri, ratio);
   if (!mediaUploadsEnabled || !webp.startsWith('data:')) return webp;
   try { return await uploadDataUrl(webp); } catch { return ''; }
 }
@@ -33,7 +33,7 @@ async function storeCardImage(uri: string): Promise<string> {
  *  - Drag a picture (mouse, or touch after a short hold) onto another to set the new order; arrows stay as a keyboard / screen-reader alternative.
  *  - Right click (desktop): duplicate, move first / last, remove.
  */
-export function SlideshowImages({ images, onChange }: { images: string[]; onChange: (next: string[]) => void }) {
+export function SlideshowImages({ images, onChange, ratio }: { images: string[]; onChange: (next: string[]) => void; ratio?: number }) {
   const { t } = useT();
   const [busy, setBusy] = useState<{ done: number; total: number } | null>(null);
   const [over, setOver] = useState(false);
@@ -74,7 +74,7 @@ export function SlideshowImages({ images, onChange }: { images: string[]; onChan
     setBusy({ done: 0, total: list.length });
     try {
       for (let i = 0; i < list.length; i++) {
-        const stored = await storeCardImage(list[i]);
+        const stored = await storeCardImage(list[i], ratio);
         if (stored) done.push(stored); else failed++;
         setBusy({ done: i + 1, total: list.length });
       }
@@ -121,6 +121,7 @@ export function SlideshowImages({ images, onChange }: { images: string[]; onChan
     <GestureRoot style={{ width: '100%' }}>
       <View ref={area} testID="slide-area" className={`gap-2 rounded-xl ${over ? 'border-2 border-dashed border-primary bg-soft p-2' : ''}`}>
         <Txt className="text-muted text-[12px]">{hint}</Txt>
+         {ratio ? <Txt testID="slide-ratio" className="text-muted text-[12px]">{t('tc.imageRatio', { ratio: ratio.toFixed(2) })}</Txt> : null}
         <Txt testID="slide-drag-hint" className="text-muted text-[12px]">{over ? t('ax.dropHere') : t('ax.dragHint')}</Txt>
         <View testID="slide-grid" className="flex-row flex-wrap gap-2">
           {rows.map((row, i) => (
