@@ -2,8 +2,9 @@
  * Runtime guards of the animated home cards.
  *  - VISIBILITY: every card reports how much of it is on screen; only the MOST visible card animates, the others show a still image.
  *    Off-screen cards, other tabs (screen not focused) and a backgrounded app report 0 and therefore pause (pause = hold).
- *  - LOW-END: low memory, an old device year class (expo-device), reduce-motion, or a device that janked during a transition
- *    (runtime guard, persisted) -> only effects allowed on low-end devices are played, else the cross-fade; extras are skipped.
+ *  - LOW-END: see lib/deviceTier.ts. Preferences (reduce-motion, data saver) + hardware facts (RAM, 32-bit, old Android, web cores) +
+ *    frame times measured on this very device (several transitions, warm-up excluded, expires after a week). A low-end device only plays
+ *    the effects the admin allowed for it, else the cross-fade, and no extras.
  *  - DEV LOG: image load state and dropped frames (development builds only).
  */
 import { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
@@ -12,6 +13,7 @@ import { useIsFocused } from 'expo-router';
 import { useReducedMotion } from 'react-native-reanimated';
 import * as Device from 'expo-device';
 import { storage } from '@/data/mock/storage';
+import { addOutcome, classifyDevice, judgeTransition, measuredVerdict, type DeviceClass, type DeviceSignals, type Evidence, type FrameStats, type Measured, type Outcome } from './deviceTier';
 
 /** Development-only log (image load state, dropped frames). Silent in production. */
 export function fxLog(...args: unknown[]) {
@@ -109,59 +111,83 @@ export function useOnScreen(ref: RefObject<View | null>, id: string, register = 
   return { visible: ratio > 0, near: state.near };
 }
 
-/* ------------------------------ low-end detection ------------------------------ */
-const GB = 1024 * 1024 * 1024;
-/** Device year class at or below this = an old phone (Android only: expo-device returns null elsewhere). */
-const OLD_YEAR_CLASS = 2017;
-/** Total RAM at or below this = a low-memory phone (a "4 GB" phone reports ~3.7 GB, a "3 GB" phone ~2.8 GB). */
-const LOW_MEMORY = 3.5 * GB;
-
-/** Static signals, read once: low memory or an old device year class (web: few cores / little memory). */
-const lowEndDevice = (() => {
+/* ------------------------------ device capability ------------------------------ */
+/** Static hardware / browser facts, read once (they do not change while the app runs). `reducedMotion` is added live by the hook. */
+function readSignals(): Omit<DeviceSignals, 'reducedMotion'> {
   if (Platform.OS === 'web') {
-    if (typeof navigator === 'undefined') return false;
-    const n = navigator as Navigator & { deviceMemory?: number };
-    return (n.deviceMemory !== undefined && n.deviceMemory <= 2) || (n.hardwareConcurrency !== undefined && n.hardwareConcurrency <= 2);
+    const n = (typeof navigator === 'undefined' ? {} : navigator) as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
+    return {
+      platform: 'web',
+      memoryBytes: typeof n.deviceMemory === 'number' ? n.deviceMemory * GB : null,
+      cores: typeof n.hardwareConcurrency === 'number' ? n.hardwareConcurrency : null,
+      apiLevel: null, is64bit: null, saveData: n.connection?.saveData === true,
+    };
   }
-  const memory = Device.totalMemory;
-  const year = Device.deviceYearClass;
-  return (memory != null && memory <= LOW_MEMORY) || (year != null && year <= OLD_YEAR_CLASS);
-})();
+  const archs = Device.supportedCpuArchitectures;
+  return {
+    platform: Platform.OS === 'ios' ? 'ios' : 'android',
+    memoryBytes: Device.totalMemory ?? null,
+    cores: null,
+    apiLevel: Platform.OS === 'android' ? Device.platformApiLevel ?? null : null,
+    // Every iPhone that runs this app is 64-bit; on Android a phone that lists no 64-bit ABI is a 2013-2017 device.
+    is64bit: Platform.OS === 'ios' ? true : archs && archs.length ? archs.some((a) => /64/.test(a)) : null,
+    saveData: false,
+  };
+}
+const GB = 1024 * 1024 * 1024;
+const staticSignals = readSignals();
 
-const STORE_KEY = 'fxLowEnd';
-let sessionLowEnd = false;
+const STORE_KEY = 'fxEvidence';
+let evidence: Evidence | null = null;
 const lowListeners = new Set<() => void>();
-/** The runtime verdict of an earlier session is restored at startup (persisted by markLowEnd). */
-void storage.read<boolean>(STORE_KEY).then((v) => { if (v && !sessionLowEnd) { sessionLowEnd = true; lowListeners.forEach((fn) => fn()); } });
+const notify = () => lowListeners.forEach((fn) => fn());
+/** Evidence of an earlier session is restored at startup; it is only used while it is less than a week old. */
+void storage.read<Evidence>(STORE_KEY).then((v) => {
+  if (v && Array.isArray(v.runs) && typeof v.at === 'number' && !evidence) { evidence = { at: v.at, runs: v.runs.filter((r) => typeof r === 'boolean') }; notify(); }
+});
+// The previous version stored a permanent boolean verdict that wrongly condemned healthy phones: forget it.
+void storage.write('fxLowEnd', false);
 
-/** Runtime guard: this device janked during a transition. Persisted, so the next launch starts in low-end mode. */
-export function markLowEnd(reason = 'slow frames') {
-  if (sessionLowEnd) return;
-  sessionLowEnd = true;
-  fxLog('device marked low-end:', reason);
-  void storage.write(STORE_KEY, true);
-  lowListeners.forEach((fn) => fn());
+/** Verdict of the measurements (a primitive: safe as a useSyncExternalStore snapshot). */
+const measuredNow = (): Measured => measuredVerdict(evidence, Date.now());
+
+/** Records the frame times of one transition played on this device (never the admin preview; see `shouldRecord`). */
+export function recordTransition(stats: FrameStats): Outcome {
+  const outcome = judgeTransition(stats);
+  if (outcome === 'skip') return outcome;
+  const before = measuredNow();
+  evidence = addOutcome(evidence, outcome, Date.now());
+  void storage.write(STORE_KEY, evidence);
+  fxLog(`transition judged ${outcome} (${stats.frames} frames, avg ${(stats.sumMs / Math.max(1, stats.frames)).toFixed(1)} ms, ${stats.slow} slow) -> device ${measuredNow()}`);
+  if (measuredNow() !== before) notify();
+  return outcome;
 }
 
-/** Forget the runtime verdict (admin "reset detection"). */
+/** Forget what was measured (admin "reset detection"): the device is classified from its hardware again. */
 export function resetLowEnd() {
-  sessionLowEnd = false;
-  void storage.write(STORE_KEY, false);
-  lowListeners.forEach((fn) => fn());
+  evidence = null;
+  void storage.write(STORE_KEY, null);
+  notify();
 }
 
-/** Why this phone is (or is not) treated as low-end. */
-export function lowEndReason(reduced: boolean): 'reduceMotion' | 'device' | 'measured' | null {
-  return reduced ? 'reduceMotion' : lowEndDevice ? 'device' : sessionLowEnd ? 'measured' : null;
-}
-
-/** True when this device must play low-end rules: low memory / old device / reduce-motion / measured jank. */
-export function useLowEnd(): boolean {
+/** Full classification of this device: verdict, reason, whether measurement can still change it, measured state. */
+export function useDeviceClass(): DeviceClass {
   const reduced = useReducedMotion();
   const measured = useSyncExternalStore(
     (fn) => { lowListeners.add(fn); return () => { lowListeners.delete(fn); }; },
-    () => sessionLowEnd,
-    () => false,
+    measuredNow,
+    () => 'unknown' as Measured,
   );
-  return reduced || lowEndDevice || measured;
+  return classifyDevice({ ...staticSignals, reducedMotion: reduced }, measured);
 }
+
+/** True when this device must play the low-end rules. */
+export const useLowEnd = (): boolean => useDeviceClass().low;
+
+/** Raw facts shown to the admin on the "device" line. */
+export const deviceFacts = () => ({
+  platform: staticSignals.platform,
+  memoryGB: staticSignals.memoryBytes == null ? null : Math.round((staticSignals.memoryBytes / GB) * 10) / 10,
+  api: staticSignals.apiLevel,
+  cores: staticSignals.cores,
+});

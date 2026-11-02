@@ -17,9 +17,9 @@ const ZONE_GUESS = 72;
 
 /**
  * Home tool card: full-width rounded card with an image zone and a text zone.
- *  - Total height and text-zone side (top / bottom) are GLOBAL (`settings.toolCards`): every card reads the same values.
+ *  - Total height, text-zone side (top / bottom) and text placement (inside / outside the picture) are GLOBAL (`settings.toolCards`): every card reads the same values.
  *  - Media = image | video | slideshow (several images played with the 20 before/after effects). A slideshow keeps its own
- *    animation, text placement and gradient settings in `tool.media.fx`; image and video cards use the defaults.
+ *    animation and gradient settings in `tool.media.fx`; image and video cards use the defaults.
  *  - Text = the tool's own title and subtitle + the app's own "Try" button (`common.try`). Nothing is added, nothing is hardcoded.
  *  - Direction and theme follow the app (language / theme). `lang` and `preview` exist only for the admin preview and never touch app state.
  */
@@ -41,9 +41,11 @@ export function ToolCard({ tool, onPress, index = 0, onReady, lang, preview, onE
   // GLOBAL layout (primitives, so a change of anything else never re-renders the card).
   const height = useStore((s) => resolveGlobal(s.doc.settings.toolCards).height);
   const zone = useStore((s) => resolveGlobal(s.doc.settings.toolCards).textZone);
+  // Text placement is GLOBAL too (same optimized selector as height and zone: a primitive, so only a real change re-renders the card).
+  const placement = useStore((s) => resolveGlobal(s.doc.settings.toolCards).textPlacement);
   const fx = React.useMemo(() => mediaFx(tool.media), [tool.media]);
   const images = React.useMemo(() => slideshowImages(tool.media), [tool.media]);
-  const inside = fx.textPlacement === 'inside';
+  const inside = placement === 'inside';
   const [zoneH, setZoneH] = useState(ZONE_GUESS);
   const measure = useCallback((h: number) => setZoneH((old) => (Math.abs(old - h) < 0.5 ? old : h)), []);
   const imgH = imageHeight(height, inside, zoneH);

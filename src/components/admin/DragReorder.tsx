@@ -13,6 +13,7 @@ type DragState = { id: string; hover: string | null; after: boolean; count: numb
 
 const EDGE = 96;   // px from the top/bottom of the window where the list starts scrolling
 const SPEED = 14;  // px per tick (about 30 ms)
+const SETTLE_MS = 300; // longer than the 120 ms lift animation that eases a released row back to the identity
 
 export interface Reorder {
   enabled: boolean;
@@ -156,6 +157,18 @@ export function DragRow({ id, reorder, layout = 'list', handleStyle, handleTone 
   const reset = useCallback(() => { tx.set(0); ty.set(0); lift.set(withTiming(0, { duration: 120 })); }, [tx, ty, lift]);
   useEffect(() => { latest.reorder = reorder; });
 
+  // BUG FIX (tiles left displaced / lifted after a drop): the animated style used to be detached the moment the drag ended. On the web
+  // Reanimated writes the transform as an inline style and never clears it when the style is detached, so whatever value was written last
+  // (a translate, or the 1.03 lift scale that `reset` was still easing back to 1) stayed on the tile. The style now stays attached for a
+  // short settling window, until `tx`, `ty` and `lift` are back at the identity, and only then is it detached.
+  const moving = active || follower;
+  const [settling, setSettling] = useState(false);
+  if (moving && !settling) setSettling(true); // derived during render (React's recommended pattern), not from an effect
+  useEffect(() => {
+    if (moving) return;
+    const timer = setTimeout(() => setSettling(false), SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [moving]);
   const motion = useAnimatedStyle(() => ({
     transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: 1 + 0.03 * lift.value }],
     opacity: 1 - 0.06 * lift.value,
@@ -186,7 +199,7 @@ export function DragRow({ id, reorder, layout = 'list', handleStyle, handleTone 
 
   return (
     <Animated.View ref={ref as never} collapsable={false}
-      style={[{ position: 'relative', zIndex: active ? 100 : follower ? 99 : hovered ? 2 : 0 }, active ? { boxShadow: '0 16px 36px rgba(0,0,0,0.28)', borderRadius: 18 } as ViewStyle : follower ? { boxShadow: '0 10px 24px rgba(0,0,0,0.2)', borderRadius: 18 } as ViewStyle : null, active || follower ? motion : null, style]}>
+      style={[{ position: 'relative', zIndex: active ? 100 : follower ? 99 : hovered ? 2 : 0 }, active ? { boxShadow: '0 16px 36px rgba(0,0,0,0.28)', borderRadius: 18 } as ViewStyle : follower ? { boxShadow: '0 10px 24px rgba(0,0,0,0.2)', borderRadius: 18 } as ViewStyle : null, moving || settling ? motion : null, style]}>
       {children(handle)}
       {active && count > 1 ? <View pointerEvents="none" style={{ position: 'absolute', top: -8, end: -8, minWidth: 24, height: 24, borderRadius: 12, paddingHorizontal: 6, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' }}><DragCount n={count} /></View> : null}
       {hovered ? <DropMark layout={layout} after={after} /> : null}

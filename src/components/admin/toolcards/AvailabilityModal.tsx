@@ -9,8 +9,7 @@ import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useT } from '@/i18n';
 import { DEFAULT_ENABLED, DEFAULT_LOW_END, TIERS, TIER_ORDER, availToStored, resolveAvail, type FxAvail } from '@/lib/toolCardFx';
-import { lowEndReason, resetLowEnd, useLowEnd } from '@/lib/toolCardPerf';
-import { useReducedMotion } from 'react-native-reanimated';
+import { deviceFacts, resetLowEnd, useDeviceClass } from '@/lib/toolCardPerf';
 import { resolveGlobal } from '@/lib/toolCards';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -31,9 +30,11 @@ export function AvailabilityModal({ images, onClose }: { images: string[]; onClo
   const { style: themeStyle, colors } = useTheme();
   const settings = useDraftDoc('settings');
   const avail = resolveAvail(settings.draft.toolCards);
-  const lowEnd = useLowEnd();
-  const reduced = useReducedMotion();
-  const reason = lowEndReason(reduced);
+  const device = useDeviceClass();
+  const lowEnd = device.low;
+  const reason = device.reason;
+  const facts = deviceFacts();
+  const factsText = [facts.platform, facts.memoryGB != null ? `${facts.memoryGB} GB` : null, facts.cores != null ? `${facts.cores} cores` : null, facts.api != null ? `API ${facts.api}` : null].filter(Boolean).join(' · ');
 
   /** Writes a new availability into the shared store (live), keeping the other global settings (height, text zone). */
   const apply = useCallback((next: FxAvail) => settings.patch({ toolCards: { ...resolveGlobal(useStore.getState().doc.settings.toolCards), ...availToStored(next) } }), [settings]);
@@ -120,8 +121,9 @@ export function AvailabilityModal({ images, onClose }: { images: string[]; onClo
               <View className="flex-row items-center gap-2 mb-3 flex-wrap">
                 <Icon name={lowEnd ? 'speedometer-slow' : 'speedometer'} size={18} tone={lowEnd ? 'danger' : 'muted'} />
                 <Txt testID="avail-device" className="text-[12px] flex-1">{lowEnd ? t('tc.devLow', { why: reason ? t(`tc.why.${reason}`) : '' }) : t('tc.devOk')}</Txt>
-                {reason === 'measured' ? <Button testID="avail-reset-detection" size="sm" variant="soft" title={t('tc.resetDetection')} onPress={resetLowEnd} /> : null}
+                {device.measured !== 'unknown' ? <Button testID="avail-reset-detection" size="sm" variant="soft" title={t('tc.resetDetection')} onPress={resetLowEnd} /> : null}
               </View>
+              <Txt testID="avail-device-facts" className="text-muted text-[11px] mb-3">{factsText}{device.measured !== 'unknown' ? ` · ${t(`tc.measured.${device.measured}`)}` : ''}</Txt>
               <View className="rounded-xl px-3 py-2 mb-2 flex-row items-center gap-2" style={{ backgroundColor: colors.surface2 }}>
                 <Txt className="w-6 text-muted text-[12px] font-bold">0</Txt>
                 <Txt className="flex-1 text-[14px] font-semibold">{t('tc.fx.0')}</Txt>
