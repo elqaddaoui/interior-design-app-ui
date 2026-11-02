@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useDerivedValue } from 'react-native-reanimated';
 import { Icon } from '@/components/ui/Icon';
-import { MIN_SCALE, circleDiameter, ease, extraRamp, layerFrame, layerGeometry, originPx, wipePivot, wipeR, type Cfg, type FxDef } from '@/lib/toolCardFx';
+import { MIN_SCALE, circleDiameter, decoAt, decoColor, decoCount, ease, extraRamp, layerFrame, layerGeometry, originPx, wipePivot, wipeR, withAlpha, type Cfg, type Deco, type Extra, type FxDef, type Shape as DecoShape } from '@/lib/toolCardFx';
 import type { FxValues } from './useTransition';
 
 /**
@@ -61,7 +61,7 @@ const EXTRA_Z = 5;
 void WILL_CHANGE;
 
 /** A small view riding the wipe edge: same container geometry and transform as the wipe window, no clipping, no photo. */
-function WipeRider({ v, cfg, W, H, pr, def, accent }: { v: FxValues; cfg: Cfg; W: number; H: number; pr: number; def: FxDef; accent: string }) {
+function WipeRider({ v, cfg, W, H, pr, x, accent }: { v: FxValues; cfg: Cfg; W: number; H: number; pr: number; x: Extra; accent: string }) {
   const L = 2 * wipeR(W, H);
   const { x: px, y: py } = wipePivot(W, H);
   const st = useAnimatedStyle(() => {
@@ -69,13 +69,15 @@ function WipeRider({ v, cfg, W, H, pr, def, accent }: { v: FxValues; cfg: Cfg; W
     return { opacity: v.active.value, transform: f.ct as never };
   }, [cfg, W, H, pr]);
   const sparkle = useAnimatedStyle(() => ({ opacity: Math.sin(Math.PI * Math.min(1, Math.max(0, v.p.value))) }));
-  const x = def.extra;
   const edge = (w: number, more: object) => ({ position: 'absolute', left: L - w, top: 0, width: w, height: 2 * L, ...more }) as const;
   return (
     <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: px - L, top: py - L, width: L, height: 2 * L, transformOrigin: '100% 50%', zIndex: EXTRA_Z }, st]}>
-      {x === 'line' || x === 'knob' || x === 'sparkle' ? <View style={{ position: 'absolute', left: L - 1, top: 0, width: 2, height: 2 * L, backgroundColor: WHITE }} /> : null}
+      {x === 'line' || x === 'knob' || x === 'sparkle' || x === 'ribbon' ? <View style={{ position: 'absolute', left: L - 1, top: 0, width: 2, height: 2 * L, backgroundColor: WHITE }} /> : null}
       {x === 'knob' ? <View style={{ position: 'absolute', left: L - 15, top: L - 15, width: 30, height: 30, borderRadius: 15, backgroundColor: WHITE }} /> : null}
       {x === 'glow' ? <LinearGradient colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={edge(32, {})} /> : null}
+      {x === 'ribbon' ? (
+        <LinearGradient colors={[withAlpha(accent, 0), withAlpha(accent, 0.55), WHITE]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={edge(64, {})} />
+      ) : null}
       {x === 'colorbar' ? <View style={edge(16, { backgroundColor: accent })} /> : null}
       {x === 'shine' ? (
         <LinearGradient colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.7)', 'rgba(255,255,255,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
@@ -116,7 +118,9 @@ function Frame({ v, cfg, W, H }: { v: FxValues; cfg: Cfg; W: number; H: number }
   const { x, y } = originPx(cfg, W, H);
   const st = useAnimatedStyle(() => {
     const { e, s } = grow(cfg, v.p.value);
-    return { opacity: v.active.value * extraRamp(e), transform: [{ scaleX: s }, { scaleY: s }] };
+    // A spinning window (kind 4) turns its frame with it: same rotate-then-scale order as the window's own transform.
+    const turn = cfg.k === 4 ? [{ rotate: `${cfg.a0 * (1 - e)}deg` }] : [];
+    return { opacity: v.active.value * extraRamp(e), transform: [...turn, { scaleX: s }, { scaleY: s }] };
   }, [cfg]);
   return <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: W, height: H, borderWidth: 2, borderColor: WHITE, transformOrigin: `${x}px ${y}px`, zIndex: EXTRA_Z }, st]} />;
 }
@@ -138,18 +142,59 @@ function Flash({ v }: { v: FxValues }) {
   return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: WHITE, zIndex: EXTRA_Z }, st]} />;
 }
 
+/** The six clean flat shapes of the Creative tier, drawn with plain views (no images, no icon font). */
+function Shape({ shape, size, color }: { shape: DecoShape; size: number; color: string }) {
+  const t = Math.max(2, Math.round(size / 7));
+  switch (shape) {
+    case 'ring': return <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: t, borderColor: color }} />;
+    case 'diamond': { const d = size * 0.72; return <View style={{ width: d, height: d, backgroundColor: color, borderRadius: 2, transform: [{ rotate: '45deg' }] }} />; }
+    case 'plus': return (
+      <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ position: 'absolute', width: size, height: t + 1, borderRadius: 2, backgroundColor: color }} />
+        <View style={{ position: 'absolute', width: t + 1, height: size, borderRadius: 2, backgroundColor: color }} />
+      </View>
+    );
+    case 'bar': return <View style={{ width: size * 0.34, height: size * 1.5, borderRadius: size * 0.17, backgroundColor: color }} />;
+    case 'tri': return <View style={{ width: 0, height: 0, borderLeftWidth: size * 0.5, borderRightWidth: size * 0.5, borderBottomWidth: size * 0.86, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: color }} />;
+    default: return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }} />;
+  }
+}
+
+/**
+ * One Creative piece (dot, ring, diamond, plus, bar, triangle) riding the effect: position / scale / opacity / turn come from `decoAt`, the same
+ * maths as the window it decorates. One derived worklet per piece, transform + opacity only, nothing allocated outside it.
+ */
+function DecoView({ v, cfg, deco, W, H, i, accent }: { v: FxValues; cfg: Cfg; deco: Deco; W: number; H: number; i: number; accent: string }) {
+  const half = Math.ceil(deco.size * 0.75);
+  const st = useAnimatedStyle(() => {
+    const b = decoAt(deco, cfg, W, H, v.p.value, i);
+    return { opacity: v.active.value * b.o, transform: [{ translateX: b.x - half }, { translateY: b.y - half }, { rotate: `${b.r}deg` }, { scale: b.s }] };
+  }, [deco, cfg, W, H, i]);
+  return (
+    <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: 2 * half, height: 2 * half, alignItems: 'center', justifyContent: 'center', zIndex: EXTRA_Z }, st]}>
+      <Shape shape={deco.shape} size={deco.size} color={decoColor(deco, i, accent)} />
+    </Animated.View>
+  );
+}
+
+const PIECES = Array.from({ length: 12 }, (_, i) => i);
+
 /** The extras of one effect. They only use transform / opacity and ride the same progress `p`. Rendered only when allowed (never on low-end devices). */
 export function Extras({ v, cfg, def, W, H, pr, accent }: { v: FxValues; cfg: Cfg; def: FxDef; W: number; H: number; pr: number; accent: string }) {
+  const n = decoCount(def);
+  const pieces = def.deco && n ? PIECES.slice(0, n).map((i) => <DecoView key={i} v={v} cfg={cfg} deco={def.deco as Deco} W={W} H={H} i={i} accent={accent} />) : null;
+  let core: React.ReactNode = null;
   switch (def.extra) {
-    case 'line': case 'knob': case 'glow': case 'colorbar': case 'sparkle': case 'shine':
-      return <WipeRider v={v} cfg={cfg} W={W} H={H} pr={pr} def={def} accent={accent} />;
-    case 'doorsH': return <><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={1} /></>;
-    case 'doorsV': return <><Door v={v} cfg={cfg} W={W} H={H} vertical sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical sign={1} /></>;
-    case 'frame': return <Frame v={v} cfg={cfg} W={W} H={H} />;
-    case 'ring': return <Ring v={v} cfg={cfg} W={W} H={H} />;
-    case 'flash': return <Flash v={v} />;
-    default: return null;
+    case 'line': case 'knob': case 'glow': case 'colorbar': case 'sparkle': case 'shine': case 'ribbon':
+      core = <WipeRider v={v} cfg={cfg} W={W} H={H} pr={pr} x={def.extra} accent={accent} />; break;
+    case 'doorsH': core = <><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={1} /></>; break;
+    case 'doorsV': core = <><Door v={v} cfg={cfg} W={W} H={H} vertical sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical sign={1} /></>; break;
+    case 'frame': core = <Frame v={v} cfg={cfg} W={W} H={H} />; break;
+    case 'ring': core = <Ring v={v} cfg={cfg} W={W} H={H} />; break;
+    case 'flash': core = <Flash v={v} />; break;
+    default: break;
   }
+  return <>{core}{pieces}</>;
 }
 
 /** The stage content: exactly W x H, always LTR (RTL is handled by the effects' maths; a photo is never mirrored). */

@@ -60,6 +60,27 @@ export async function api<T>(path: string, options: { method?: string; body?: un
     throw new BackendError(503, 'BACKEND_UNAVAILABLE');
   } finally { clearTimeout(timeout); }
 }
+/**
+ * Authenticated GET of a binary response (web only: used by the admin video renderer to read a picture the browser may not read directly).
+ * Same session cookie as `api`; resolves the bytes, or rejects with a BackendError whose code is the server's error code.
+ */
+export async function apiBlob(path: string, timeoutMs = 30000): Promise<Blob> {
+  if (!backendEnabled) throw new BackendError(503, 'BACKEND_UNAVAILABLE');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${BASE}${path}`, { credentials: 'include', signal: controller.signal });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({} as { error?: string }));
+      throw new BackendError(response.status, body.error);
+    }
+    if (response.headers.get('content-type')?.toLowerCase().includes('text/html')) throw new BackendError(503, 'BACKEND_UNAVAILABLE');
+    return await response.blob();
+  } catch (error) {
+    if (error instanceof BackendError) throw error;
+    throw new BackendError(503, 'BACKEND_UNAVAILABLE');
+  } finally { clearTimeout(timeout); }
+}
 /** Built-in default admin login. It must always open the admin panel, even if the API is unreachable or outdated. */
 export const isDefaultAdmin = (email: string, password: string) => email.trim().toLowerCase() === 'admin' && password === 'admin';
 export async function backendLogin(email: string, password: string) {

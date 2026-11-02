@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 import { api, backendEnabled, BackendError } from '@/lib/backend';
+import { optimizeDataUrl, optimizeImage, type ImagePurpose } from '@/lib/imageOptimize';
 
 /**
  * Admin media uploads. Every file ends up in the server's media storage (Cloudflare R2, or the database fallback when R2 is
@@ -41,8 +42,16 @@ export const trackUpload = track;
 
 type Presigned = { id: string; uploadUrl: string; method: 'PUT'; headers: Record<string, string>; url: string; maxBytes: number };
 
-/** A data URL (from the image picker) -> /api/media URL. */
-export const uploadDataUrl = (dataUrl: string): Promise<string> => track(async () => (await api<{ url: string }>('/admin/media', { method: 'POST', body: { data: dataUrl }, timeoutMs: UPLOAD_TIMEOUT })).url);
+/**
+ * A data URL (from the image picker) -> /api/media URL.
+ * EVERY image goes through the optimiser first (longest side capped, WebP / JPEG, see lib/imageOptimizeCore.ts); a picture that is already
+ * optimised, an SVG and a GIF pass through untouched. `purpose` picks the size cap (default: admin pictures, 1600 px, transparency kept).
+ * The only images that never come through here are the AI-rendered results: the server stores those itself.
+ */
+export const uploadDataUrl = (dataUrl: string, purpose: ImagePurpose = 'asset'): Promise<string> => track(async () => {
+  const data = await optimizeDataUrl(dataUrl, purpose);
+  return (await api<{ url: string }>('/admin/media', { method: 'POST', body: { data }, timeoutMs: UPLOAD_TIMEOUT })).url;
+});
 
 /** Copies an external https image into storage (admins pasting Unsplash or CDN links). */
 export const importMediaUrl = (url: string): Promise<string> => track(async () => (await api<{ url: string }>('/admin/media/import', { method: 'POST', body: { url }, timeoutMs: 30000 })).url);
@@ -84,9 +93,13 @@ async function directUploadNow(size: number, contentType: string, put: (target: 
 }
 
 /** Web: a File/Blob from an <input type=file>. Small images go inline; videos and large files go straight to R2. */
-export async function uploadBlob(file: Blob): Promise<string> {
+export async function uploadBlob(file: Blob, purpose: ImagePurpose = 'asset'): Promise<string> {
   const type = (file.type || '').toLowerCase();
-  if (type.startsWith('image/') && type !== 'image/svg+xml' && file.size <= INLINE_MAX) return uploadDataUrl(await blobToDataUrl(file));
+  // Raster pictures are optimised first (even large ones: they become small enough for the inline path). GIF (maybe animated) is kept as it is.
+  if (type.startsWith('image/') && type !== 'image/svg+xml' && type !== 'image/gif') {
+    try { return await uploadDataUrl(await optimizeImage(file, purpose), purpose); } catch { /* undecodable: fall through to the original file */ }
+  }
+  if (type.startsWith('image/') && type !== 'image/svg+xml' && file.size <= INLINE_MAX) return uploadDataUrl(await blobToDataUrl(file), purpose);
   if (type === 'image/svg+xml') {
     if (file.size > INLINE_MAX) throw new Error('MEDIA_TOO_LARGE');
     return uploadDataUrl(await blobToDataUrl(file));

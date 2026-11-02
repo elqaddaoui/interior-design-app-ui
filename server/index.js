@@ -521,6 +521,17 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           for await (const chunk of req) { size += chunk.length; if (size > max) throw fail(413, 'MEDIA_TOO_LARGE'); chunks.push(chunk); }
           return json(200, { url: await media.storeRaw(Buffer.concat(chunks), type) });
         }
+        // Admin card-video renderer: the bytes of one picture (ours, or an external https one) so the browser can draw it without CORS.
+        if (url.pathname === '/api/admin/media/fetch' && req.method === 'GET') {
+          admin();
+          const source = url.searchParams.get('url') || '';
+          if (!source || source.length > 2048) throw fail(400, 'INVALID_URL');
+          let file;
+          try { file = await media.fetchBytes(source); }
+          catch (error) { throw error.status ? error : fail(error.policy ? 400 : 502, `MEDIA_URL_${error.code || 'FAILED'}`); }
+          res.writeHead(200, { 'Content-Type': file.mime, 'Content-Length': file.body.length, 'Cache-Control': 'private, no-store' });
+          return res.end(file.body);
+        }
         // External image URL -> downloaded once into storage (https, public hosts, 10 s, 10 MB, image/* only).
         if (url.pathname === '/api/admin/media/import' && req.method === 'POST') {
           admin();

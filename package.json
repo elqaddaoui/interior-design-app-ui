@@ -33,6 +33,7 @@
     "expo-system-ui": "~57.0.4",
     "expo-video": "~57.0.5",
     "i18next": "^26.4.2",
+    "mediabunny": "^1.65.0",
     "nativewind": "^4.2.7",
     "pg": "^8.23.1",
     "react": "19.2.3",

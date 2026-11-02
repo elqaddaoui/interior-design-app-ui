@@ -307,6 +307,7 @@ const fr = {
       branding: 'Marque',
       theme: 'Thème',
       interface: 'Interface & menus',
+      performance: 'Performance',
       chats: 'Conversations',
       notifications: 'Notifications',
     },

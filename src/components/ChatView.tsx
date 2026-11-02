@@ -70,7 +70,7 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
 
   const pick = async (src: 'camera' | 'gallery') => {
     setAttach(false);
-    const r = await pickPhoto(src);
+    const r = await pickPhoto(src, { purpose: 'chat' });
     if ('uri' in r) setImage(r.uri); else if (r.error === 'permission') toast(t('wizard.permission')); else if (r.error === 'failed') toast(t('wizard.photoFailed'));
   };
 

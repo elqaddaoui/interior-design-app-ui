@@ -148,7 +148,7 @@ function SlideshowSummary({ m, onChange, record }: { m: any; onChange: (v: any) 
   const images = slideshowImages(m);
   return <View className="mb-3">
     <View className="flex-row flex-wrap gap-2 mb-2">
-      {images.slice(0, 6).map((uri, i) => <Thumb key={`${i}-${uri}`} uri={uri} className="rounded-lg" style={{ width: 56, height: 56 }} />)}
+      {images.slice(0, 6).map((uri, i) => <Thumb key={`${i}-${uri}`} uri={uri} fit="contain" className="rounded-lg" style={{ width: 56, height: 56 }} />)}
       {images.length > 6 ? <View className="rounded-lg bg-surface2 items-center justify-center" style={{ width: 56, height: 56 }}><Txt className="text-muted font-bold">+{images.length - 6}</Txt></View> : null}
     </View>
     <Txt className="text-muted text-[12px] mb-2">{t('tc.imagesCount', { n: images.length })}</Txt>

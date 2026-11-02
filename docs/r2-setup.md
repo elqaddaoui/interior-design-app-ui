@@ -36,7 +36,7 @@ JPEG, WebP, GIF, AVIF, SVG (admin inline uploads only), MP4, WebM and QuickTime.
    - connect a **custom domain** (recommended, e.g. `media.example.com`; it is cached by Cloudflare's CDN), or
    - enable the **r2.dev subdomain** (rate-limited; fine for testing).
    That public URL is `R2_PUBLIC_BASE_URL`, with no trailing slash.
-3. Bucket → **Settings** → **CORS policy**. This is needed for direct (presigned) uploads from the browser:
+3. Bucket → **Settings** → **CORS policy**. This is needed for direct (presigned) uploads from the browser. `GET` is optional: it lets the admin's **Performance > Video preview** read the card pictures straight from R2 when rendering the MP4 loops. Without it the admin falls back automatically to the signed-in proxy `GET /api/admin/media/fetch` of your own server (slower, but nothing to configure), so the old "the browser cannot read the pictures (CORS)" error no longer blocks rendering:
 
 ```json
 [
@@ -98,6 +98,7 @@ node scripts/migrate-media-to-r2.js --videos               # optional: external 
 ## Troubleshooting
 
 - **Images 404 after enabling R2:** run the migration (step 4). Rows still stored in the database keep being served until then.
+- **Video preview: "cannot read the pictures (CORS)":** fixed by the proxy fallback. It is only shown now when the server could not fetch the picture either (not signed in as admin, API unreachable). Adding `GET` to the bucket CORS policy makes rendering a little faster.
 - **Video upload fails in the browser:** check the bucket CORS policy (origin, `PUT`, `content-type` header). The admin now
   shows a dedicated message when R2 refuses the direct upload; files up to 4 MB are then sent through the API instead.
 - **Presigned upload answers 400/403 (`x-amz-checksum-crc32`):** recent `@aws-sdk/client-s3` versions add a CRC32 of an
