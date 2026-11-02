@@ -9,12 +9,14 @@ import { Slider } from '@/components/ui/Slider';
 import { Txt } from '@/components/ui/Txt';
 import { ToolCard } from '@/components/ToolCard';
 import { AnimationPicker } from '@/components/admin/toolcards/AnimationPicker';
+import { AvailabilityModal } from '@/components/admin/toolcards/AvailabilityModal';
 import { SlideshowImages } from '@/components/admin/toolcards/SlideshowImages';
 import { useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { LANGS, useL, useT } from '@/i18n';
-import { FX_IDS, HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, PAUSES, SPEEDS, cleanFx, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
+import { HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, HOLDS, SPEEDS, cleanFx, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
+import { FX_FADE, effectiveEffect, enabledIds, resolveAvail } from '@/lib/toolCardFx';
 import { useStore } from '@/store/useStore';
 import { useTheme, ThemeScope } from '@/theme/ThemeProvider';
 import { PRESETS } from '@/theme/presets';
@@ -64,6 +66,10 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const global = resolveGlobal(settings.draft.toolCards);
   const fx = mediaFx(media);
   const images = slideshowImages(media);
+  // Only ENABLED effects can be chosen. A card that still holds a disabled one plays its fallback (see effectiveEffect) and shows it here.
+  const avail = resolveAvail(settings.draft.toolCards);
+  const enabled = enabledIds(avail);
+  const kept = fx.effects ?? enabled;
 
   const setGlobal = (patch: Partial<typeof global>) => settings.patch({ toolCards: { ...resolveGlobal(useStore.getState().doc.settings.toolCards), ...patch } });
   const setFx = (patch: ToolCardFx) => onChange({ ...media, fx: cleanFx({ ...(media.fx ?? {}), ...patch }) });
@@ -79,23 +85,28 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const [simTheme, setSimTheme] = useState<string>(APP);
   const themeCfg = useMemo(() => ({ active: simTheme, custom: {} }), [simTheme]);
   const [popup, setPopup] = useState(false);
-  const [effectNow, setEffectNow] = useState(0);
+  const [availOpen, setAvailOpen] = useState(false);
+  // Aspect ratio (width / height) of the image zone, measured from the live preview: uploaded pictures are cropped to it.
+  const [previewW, setPreviewW] = useState(360);
+  const ratio = previewW / Math.max(1, imageHeight(global.height, fx.textPlacement === 'inside', 72));
+  const [effectNow, setEffectNow] = useState(-1);
   const onEffect = useCallback((e: number) => setEffectNow(e), []);
 
   // The card shown in the preview: the tool being edited, with the form's current texts and media.
   const previewTool = { id: 'slideshow-preview', title: title ?? { dar: '', ar: '', fr: '' }, subtitle: subtitle ?? { dar: '', ar: '', fr: '' }, media, tabId: '', steps: [], modelIds: [], roomGroup: 'interior', order: 0, visible: true } as Tool;
 
-  const toggleFx = (id: number) => setFx({ effects: (fx.effects.includes(id) ? fx.effects.filter((x) => x !== id) : [...fx.effects, id]).sort((a, b) => a - b) });
-  const pauseOpts: Opt<string>[] = PAUSES.map((p) => ({ key: String(p), label: p === 0 ? t('tc.none') : `${p}s` }));
+  const toggleFx = (id: number) => setFx({ effects: (kept.includes(id) ? kept.filter((x) => x !== id) : [...kept, id]).sort((a, b) => a - b) });
+  const holdOpts: Opt<string>[] = HOLDS.map((h) => ({ key: String(h), label: `${h}s` }));
   const speedOpts: Opt<string>[] = SPEEDS.map((s) => ({ key: String(s), label: `${s}x` }));
   const gradOpts: Opt<ToolCardGradient>[] = [{ key: 'soft', label: t('tc.soft') }, { key: 'medium', label: t('tc.medium') }, { key: 'strong', label: t('tc.strong') }];
-  const animLabel = fx.mode === 'multiple' ? t('tc.choose', { n: fx.effects.length }) : t(`tc.fx.${fx.effect}`);
-  const status = effectNow > 0 && images.length > 1
-    ? t('tc.status', { fx: t(`tc.fx.${effectNow}`), pause: fx.pause === 0 ? t('tc.none') : `${fx.pause}s`, h: global.height })
+  const single = effectiveEffect(fx.effect, avail, false);
+  const animLabel = fx.mode === 'multiple' ? t('tc.choose', { n: kept.length }) : t(`tc.fx.${single}`);
+  const status = effectNow >= 0 && images.length > 1
+    ? t('tc.status', { fx: t(`tc.fx.${effectNow}`), pause: `${fx.hold}s`, h: global.height })
     : `${t('tc.staticStatus')} · ${global.height} px`;
 
   const card = (
-    <View style={{ width: '100%', maxWidth: 560, alignSelf: 'center' }}>
+    <View style={{ width: '100%', maxWidth: 560, alignSelf: 'center' }} onLayout={(e) => setPreviewW(Math.round(e.nativeEvent.layout.width))}>
       <ToolCard tool={previewTool} preview lang={simLang === APP ? undefined : (simLang as Lang)} onPress={() => {}} onEffect={onEffect} />
     </View>
   );
@@ -121,7 +132,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
                 <Txt className="text-muted text-[12px] mb-3">{t('tc.liveNote')}</Txt>
 
                 <Group title={t('tc.imagesLabel')}>
-                  <SlideshowImages images={images} onChange={setImages} />
+                  <SlideshowImages images={images} onChange={setImages} ratio={ratio} />
                 </Group>
 
                 <Group title={t('tc.global')} global>
@@ -131,20 +142,27 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
                   <Row label={t('tc.textZone')} hint={t('tc.global')}>
                     <Segmented testID="tc-zone" value={global.textZone} options={[{ key: 'top', label: t('tc.top') }, { key: 'bottom', label: t('tc.bottom') }]} onChange={(textZone) => setGlobal({ textZone })} />
                   </Row>
+                  <Row label={t('tc.availTitle')} hint={t('tc.global')}>
+                    <Pressable testID="tc-availability" accessibilityRole="button" onPress={() => setAvailOpen(true)} className="flex-row items-center gap-2 px-4 h-11 rounded-xl bg-surface2">
+                      <Icon name="tune-variant" size={18} tone="primary" />
+                      <Txt className="flex-1 font-semibold text-[14px]" numberOfLines={1}>{t('tc.availOpen')}</Txt>
+                      <Txt className="text-muted text-[12px] font-bold">{t('tc.availCount', { on: avail.enabled.size, total: 30 })}</Txt>
+                    </Pressable>
+                  </Row>
                 </Group>
 
                 <Group title={t('tc.thisCard')}>
                   <Row label={t('tc.animType')}>
                     <Segmented testID="tc-mode" value={fx.mode} options={[{ key: 'single', label: t('tc.single') }, { key: 'multiple', label: t('tc.multiple') }]} onChange={(mode) => setFx({ mode })} />
                   </Row>
-                  <Row label={t('tc.animations')} hint={fx.mode === 'multiple' && fx.effects.length === 0 ? t('tc.noneSelected') : undefined}>
+                  <Row label={t('tc.animations')} hint={fx.mode === 'multiple' && kept.length === 0 ? t('tc.noneSelected') : undefined}>
                     <Pressable testID="tc-animations" accessibilityRole="button" onPress={() => setPopup(true)} className="flex-row items-center gap-2 px-4 h-11 rounded-xl bg-surface2">
                       <Txt className="flex-1 font-semibold text-[14px]" numberOfLines={1}>{animLabel}</Txt>
                       <Icon name="chevron-down" size={20} tone="muted" />
                     </Pressable>
                   </Row>
                   <Row label={t('tc.pause')}>
-                    <Segmented testID="tc-pause" value={String(fx.pause)} options={pauseOpts} onChange={(v) => setFx({ pause: Number(v) })} compact />
+                    <Segmented testID="tc-pause" value={String(fx.hold)} options={holdOpts} onChange={(v) => setFx({ hold: Number(v), pause: undefined })} compact />
                   </Row>
                   <Row label={t('tc.speed')}>
                     <Segmented testID="tc-speed" value={String(fx.speed)} options={speedOpts} onChange={(v) => setFx({ speed: Number(v) })} compact />
@@ -178,8 +196,8 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
               </ScrollView>
 
               {popup ? (
-                <AnimationPicker mode={fx.mode} effects={fx.effects} effect={fx.effect}
-                  onToggle={toggleFx} onAll={() => setFx({ effects: [...FX_IDS] })} onClear={() => setFx({ effects: [] })}
+                <AnimationPicker mode={fx.mode} effects={kept} effect={single} enabled={enabled}
+                  onToggle={toggleFx} onAll={() => setFx({ effects: [FX_FADE, ...enabled] })} onClear={() => setFx({ effects: [] })}
                   onPick={(effect) => setFx({ effect })} onClose={() => setPopup(false)} />
               ) : null}
             </View>
@@ -190,6 +208,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
           </Pressable>
         </Pressable>
       </View>
+      {availOpen ? <AvailabilityModal images={images} onClose={() => setAvailOpen(false)} /> : null}
     </Modal>
   );
 }

@@ -2,20 +2,19 @@
  * Home "tools card" settings and maths. Pure functions only (no React): the card, the admin preview and the tests share them.
  *
  * Where the settings live
- *  - GLOBAL (one value for every card): `settings.toolCards` = { height, textZone }  (content_docs "settings" row).
- *  - PER CARD: `tool.media.fx` (content_items "tools" row, media of type "slideshow"): animation type / effects / pause / speed / text placement / gradient.
+ *  - GLOBAL (one value for every card): `settings.toolCards` = { height, textZone, fxEnabled, fxLowEnd }  (content_docs "settings" row).
+ *    fxEnabled / fxLowEnd = the admin's "Transition availability" (see lib/toolCardFx.ts).
+ *  - PER CARD: `tool.media.fx` (content_items "tools" row, media of type "slideshow"): animation type / effects / hold / speed / text placement / gradient.
  *    The pictures themselves are `tool.media.images`.
  * Card height and text zone are never read from a card; any old per-card `height` / `textZone` key is ignored.
+ * The transition engine itself (catalogue, geometry, easing, timing) lives in lib/toolCardFx.ts.
  */
 import type { Media, ToolCardFx, ToolCardGradient, ToolCardsGlobal } from '@/data/types';
+import { DEFAULT_ENABLED, DEFAULT_LOW_END, HOLDS, HOLD_DEFAULT, SPEEDS, resolveAvail, type FxAvail } from './toolCardFx';
+
+export { FX_IDS, HOLDS, SPEEDS } from './toolCardFx';
 
 /* ------------------------------ constants ------------------------------ */
-export const FX_IDS = Array.from({ length: 20 }, (_, i) => i + 1);
-/** Effect 20 moves back and forth with no holds. */
-export const FX_PING_PONG = 20;
-/** Effect 14 (camera flash) is the low-end / reduced-motion fallback, played without its flash. */
-export const FX_FADE = 14;
-
 export const HEIGHT_MIN = 140;
 export const HEIGHT_MAX = 420;
 export const HEIGHT_STEP = 2;
@@ -27,23 +26,20 @@ export const GRADIENT_PAD = 44;
 /** Corner radius used when the app has no other card radius (the existing tool card is `rounded-2xl` = 16). */
 export const CARD_RADIUS = 16;
 
-export const PAUSES = [0, 0.4, 0.7, 1.2, 2] as const;
-export const SPEEDS = [0.5, 1, 1.5, 2] as const;
-/** One move (reveal or reverse) lasts TR_BASE / speed seconds. */
-export const TR_BASE = 1.6;
 export const GRADIENT_STRENGTH: Record<ToolCardGradient, number> = { soft: 0.55, medium: 0.75, strong: 0.9 };
 /** The middle colour stop is always this share of the chosen strength. */
 export const GRADIENT_MID = 0.55;
-
-export const FX_COLORS = { coral: '#F0997B', teal: '#1D9E75', purple: '#7F77DD', amber: '#EF9F27', gold: '#FAC775', pink: '#ED93B1', blue: '#378ADD', white: '#FFFFFF' } as const;
 
 /* ------------------------------ resolved settings ------------------------------ */
 export interface CardGlobal { height: number; textZone: 'top' | 'bottom' }
 export interface ResolvedFx {
   mode: 'single' | 'multiple';
-  effects: number[];
+  /** Multiple mode: the kept effect ids (0 = cross-fade). `null` = never edited = every ENABLED effect. */
+  effects: number[] | null;
+  /** Single mode: the chosen effect id (0 = cross-fade). */
   effect: number;
-  pause: number;
+  /** Hold time between two transitions, seconds. */
+  hold: number;
   speed: number;
   textPlacement: 'inside' | 'outside';
   gradient: ToolCardGradient;
@@ -60,32 +56,60 @@ export function resolveGlobal(g?: ToolCardsGlobal): CardGlobal {
   return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom' };
 }
 
-const validFx = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 20;
-const nearest = <T extends number>(list: readonly T[], v: unknown, fallback: T): T =>
-  typeof v === 'number' && list.includes(v as T) ? (v as T) : fallback;
+/**
+ * Stable string of the availability settings. A component that selects THIS from the store re-renders only when the
+ * availability really changes (not when the height slider moves).
+ */
+export const availKey = (g?: ToolCardsGlobal): string => {
+  const a = resolveAvail(g);
+  return `${[...a.enabled].sort((x, y) => x - y).join(',')}|${[...a.lowEnd].sort((x, y) => x - y).join(',')}`;
+};
+/** Inverse of availKey. */
+export function availFromKey(key: string): FxAvail {
+  const [en, lo] = key.split('|');
+  const ids = (s: string) => (s ? s.split(',').map(Number) : []);
+  return { enabled: new Set(ids(en)), lowEnd: new Set(ids(lo)) };
+}
+/** Keep the defaults reachable for callers that only import this module. */
+export { DEFAULT_ENABLED, DEFAULT_LOW_END };
 
-/** Per-card settings with defaults. A card that was never edited plays all 20 effects, pause 0.7s, 1x, text inside, Medium gradient. */
+const validFx = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 30;
+const nearestOf = <T extends number>(list: readonly T[], v: unknown, fallback: T): T => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+  return list.reduce((best, x) => (Math.abs(x - v) < Math.abs(best - v) ? x : best), list[0]);
+};
+
+/**
+ * Per-card settings with defaults. A card that was never edited plays every enabled effect, hold 0.9s, 1x, text inside, Medium gradient.
+ * The old key `pause` is still read (nearest hold value) when `hold` is missing.
+ */
 export function resolveFx(fx?: ToolCardFx): ResolvedFx {
   return {
     mode: fx?.mode === 'single' ? 'single' : 'multiple',
-    // undefined = default (all 20); an explicit empty list = nothing kept (static AFTER image).
-    effects: fx?.effects ? [...new Set(fx.effects.filter(validFx))].sort((a, b) => a - b) : [...FX_IDS],
+    // undefined = default (every enabled effect); an explicit empty list = nothing kept (still image).
+    effects: fx?.effects ? [...new Set(fx.effects.filter(validFx))].sort((a, b) => a - b) : null,
     effect: validFx(fx?.effect) ? fx!.effect! : 1,
-    pause: nearest(PAUSES, fx?.pause, 0.7),
-    speed: nearest(SPEEDS, fx?.speed, 1),
+    hold: nearestOf(HOLDS, fx?.hold ?? fx?.pause, HOLD_DEFAULT),
+    speed: nearestOf(SPEEDS, fx?.speed, 1),
     textPlacement: fx?.textPlacement === 'outside' ? 'outside' : 'inside',
     gradient: fx?.gradient === 'soft' || fx?.gradient === 'strong' ? fx.gradient : 'medium',
   };
 }
 
-/** The effects the card cycles through: one in Single mode, the kept ones (ascending) in Multiple mode. */
-export const activeEffects = (fx: ResolvedFx): number[] => (fx.mode === 'single' ? [fx.effect] : fx.effects);
+/**
+ * The effect ids a card asks for, before availability is applied: one in Single mode, the kept ones in Multiple mode
+ * (or every enabled one when the card was never edited).
+ */
+export const requestedEffects = (fx: ResolvedFx, enabled: number[]): number[] => (fx.mode === 'single' ? [fx.effect] : fx.effects ?? enabled);
 
-/** Stored shape for a card: drops any legacy per-card height / text zone (those are global now). */
+/** Stored shape for a card: drops any legacy per-card height / text zone / pause (those are global or renamed) and undefined keys. */
 export function cleanFx(fx: ToolCardFx): ToolCardFx {
-  const { height: _h, textZone: _z, ...rest } = fx as ToolCardFx & { height?: unknown; textZone?: unknown };
+  const { height: _h, textZone: _z, pause, ...rest } = fx as ToolCardFx & { height?: unknown; textZone?: unknown };
   void _h; void _z;
-  return rest;
+  const out: ToolCardFx = { ...rest };
+  if (out.hold === undefined && pause !== undefined) out.hold = resolveFx({ pause }).hold;
+  (Object.keys(out) as (keyof ToolCardFx)[]).forEach((k) => { if (out[k] === undefined) delete out[k]; });
+  return out;
 }
 
 /** The pictures of a slideshow media (empty strings dropped). Any other media type has none. */
@@ -110,60 +134,4 @@ export function gradientFor(strength: ToolCardGradient, zone: 'top' | 'bottom') 
   const a = (v: number) => `rgba(0,0,0,${+v.toFixed(4)})`;
   const stops: [string, string, string] = [a(0), a(s * GRADIENT_MID), a(s)];
   return { colors: zone === 'bottom' ? stops : ([stops[2], stops[1], stops[0]] as [string, string, string]), locations: [0, 0.5, 1] as const, start: { x: 0.5, y: 0 }, end: { x: 0.5, y: 1 } };
-}
-
-/* ------------------------------ animation timeline ------------------------------ */
-/**
- * Seconds of one loop.
- *  - Normal (2 images): hold before, reveal, hold after, reverse  = 2 x pause + 2 x tr.
- *  - Ping-pong (effect 20): no holds, the pause is added once   = 2 x tr + pause (exactly the reference HTML).
- *  - Chain (3+ images): hold, reveal. The next loop starts on the image just revealed, so the picture never jumps = pause + tr.
- */
-export function loopSeconds(tr: number, pause: number, ping: boolean, chain = false) {
-  'worklet';
-  if (chain) return pause + tr;
-  return ping ? 2 * tr + pause : 2 * pause + 2 * tr;
-}
-
-/** CSS `ease-in-out` = cubic-bezier(.42, 0, .58, 1), solved with a few Newton steps (the same curve as the reference HTML). */
-export function easeInOut(u: number): number {
-  'worklet';
-  if (u <= 0) return 0;
-  if (u >= 1) return 1;
-  let t = u;
-  for (let i = 0; i < 8; i++) {
-    const x = 3 * (1 - t) * (1 - t) * t * 0.42 + 3 * (1 - t) * t * t * 0.58 + t * t * t - u;
-    const dx = 3 * (1 - t) * (1 - t) * 0.42 + 6 * (1 - t) * t * 0.16 + 3 * t * t * 0.42;
-    if (Math.abs(dx) < 1e-6) break;
-    t = Math.min(1, Math.max(0, t - x / dx));
-  }
-  return 3 * (1 - t) * t * t + t * t * t;
-}
-
-/**
- * Progress of a loop. Returns [p, b], the two animated values of the reference HTML:
- *  p = reveal progress 0..1 (ease-in-out on each move).
- *  b = sparkle bump: 0 -> 1 -> 0 over the reveal, 0 -> 0.6 -> 0 over the reverse, 0 in the holds (each half eased, peak in the middle of the move).
- *  Ping-pong: p goes 0 -> 1 -> 0 in two equal eased halves, no holds, b stays 0.
- *  Chain: hold (p = 0), then the reveal; the loop ends on p = 1 (the next loop starts from that picture).
- */
-export function timeline(phase: number, tr: number, pause: number, ping: boolean, chain = false): [number, number] {
-  'worklet';
-  const bump = (u: number, peak: number) => peak * (u < 0.5 ? easeInOut(u * 2) : 1 - easeInOut(u * 2 - 1));
-  if (chain) {
-    const t = phase * (pause + tr);
-    if (t < pause) return [0, 0];
-    const u = Math.min(1, (t - pause) / tr);
-    return [easeInOut(u), bump(u, 1)];
-  }
-  if (ping) {
-    const u = phase * 2;
-    return [u < 1 ? easeInOut(u) : 1 - easeInOut(u - 1), 0];
-  }
-  const t = phase * (2 * pause + 2 * tr);
-  if (t < pause) return [0, 0];
-  if (t < pause + tr) { const u = (t - pause) / tr; return [easeInOut(u), bump(u, 1)]; }
-  if (t < pause + tr + pause) return [1, 0];
-  const u = Math.min(1, (t - pause - tr - pause) / tr);
-  return [1 - easeInOut(u), bump(u, 0.6)];
 }
