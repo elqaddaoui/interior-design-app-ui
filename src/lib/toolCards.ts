@@ -9,8 +9,9 @@
  * Card height, text zone and text placement are never read from a card; any old per-card `height` / `textZone` / `textPlacement` key is ignored.
  * The transition engine itself (catalogue, geometry, easing, timing) lives in lib/toolCardFx.ts.
  */
-import type { Media, ToolCardFx, ToolCardGradient, ToolCardsGlobal } from '@/data/types';
-import { DEFAULT_ENABLED, DEFAULT_LOW_END, clampHold, clampSpeed, resolveAvail, type FxAvail } from './toolCardFx';
+import type { Media, ToolCardFx, ToolCardGradient, ToolCardsGlobal, VideoMode, VideoQuality } from '@/data/types';
+import { cleanVideoQuality } from './cardVideoPlan';
+import { DEFAULT_ENABLED, DEFAULT_LOW_END, FX_FADE, FX_MAX, clampHold, clampSpeed, effectiveEffect, enabledIds, resolveAvail, type FxAvail } from './toolCardFx';
 
 export { FX_IDS, HOLD_MAX, HOLD_MIN, HOLD_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP, clampHold, clampSpeed } from './toolCardFx';
 
@@ -31,7 +32,7 @@ export const GRADIENT_STRENGTH: Record<ToolCardGradient, number> = { soft: 0.55,
 export const GRADIENT_MID = 0.55;
 
 /* ------------------------------ resolved settings ------------------------------ */
-export interface CardGlobal { height: number; textZone: 'top' | 'bottom'; textPlacement: 'inside' | 'outside' }
+export interface CardGlobal { height: number; textZone: 'top' | 'bottom'; textPlacement: 'inside' | 'outside'; videoMode: VideoMode; videoExtras: boolean; videoQuality: VideoQuality }
 export interface ResolvedFx {
   mode: 'single' | 'multiple';
   /** Multiple mode: the kept effect ids (0 = cross-fade). `null` = never edited = every ENABLED effect. */
@@ -52,7 +53,7 @@ export const clampHeight = (v: unknown) => {
 
 /** The one global layout. Missing or invalid values fall back to 220px / bottom / text inside the picture. */
 export function resolveGlobal(g?: ToolCardsGlobal): CardGlobal {
-  return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom', textPlacement: g?.textPlacement === 'outside' ? 'outside' : 'inside' };
+  return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom', textPlacement: g?.textPlacement === 'outside' ? 'outside' : 'inside', videoMode: g?.videoMode === 'always' || g?.videoMode === 'off' ? g.videoMode : 'lowEnd', videoExtras: g?.videoExtras === true, videoQuality: cleanVideoQuality(g?.videoQuality) };
 }
 
 /**
@@ -72,7 +73,7 @@ export function availFromKey(key: string): FxAvail {
 /** Keep the defaults reachable for callers that only import this module. */
 export { DEFAULT_ENABLED, DEFAULT_LOW_END };
 
-const validFx = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 30;
+const validFx = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= FX_MAX;
 
 /**
  * Per-card settings with defaults. A card that was never edited plays every enabled effect, hold 0.9s, 1x, Medium gradient.
@@ -96,6 +97,17 @@ export function resolveFx(fx?: ToolCardFx): ResolvedFx {
  * (or every enabled one when the card was never edited).
  */
 export const requestedEffects = (fx: ResolvedFx, enabled: number[]): number[] => (fx.mode === 'single' ? [fx.effect] : fx.effects ?? enabled);
+
+/**
+ * The effects a card really plays, in order, after the availability rules (and, on a low-end phone, the low-end rules). Empty = still image.
+ * Shared by the live engine and by the video renderer (which renders with `lowEnd = false`: a video costs the phone nothing, so it carries the full animation).
+ */
+export function cardEffectList(fx: ResolvedFx, avail: FxAvail, lowEnd: boolean): number[] {
+  const requested = requestedEffects(fx, enabledIds(avail));
+  // Never edited and every effect disabled by the admin: the cross-fade (always available) plays.
+  if (fx.mode === 'multiple' && fx.effects === null && requested.length === 0) return [FX_FADE];
+  return requested.map((id) => effectiveEffect(id, avail, lowEnd));
+}
 
 /** Stored shape for a card: drops any legacy per-card height / text zone / text placement / pause (those are global or renamed) and undefined keys. */
 export function cleanFx(fx: ToolCardFx): ToolCardFx {

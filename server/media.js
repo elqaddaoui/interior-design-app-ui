@@ -24,6 +24,8 @@ const EXT = {
 const MIME = Object.fromEntries(Object.entries(EXT).map(([mime, ext]) => [ext, mime]));
 const NAME = /^([a-f0-9]{32})\.(png|jpg|webp|gif|avif|svg|mp4|webm|mov)$/;
 /** Native clients receive absolute media URLs; store them host-independent again. */
+/** A file of ours, written as a path or as an absolute URL (native clients). */
+const LOCAL_MEDIA = /^(?:https?:\/\/[^/]+)?\/api\/media\/([a-f0-9]{32}\.[a-z0-9]+)(?:[?#].*)?$/;
 const ABSOLUTE = /^https?:\/\/[^/]+(\/api\/media\/[a-f0-9]{32}\.[a-z0-9]+)$/;
 /** Object keys whose string value is a picture shown by the app (external https URLs there are copied into storage). */
 const MEDIA_KEYS = new Set(['image', 'cover', 'poster', 'logoUri', 'loaderCustomUri', 'photoUri', 'aiResult', 'finalResult', 'before', 'after', 'uri', 'images']);
@@ -89,6 +91,11 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
         if (error?.name === 'NotFound' || error?.$metadata?.httpStatusCode === 404) return null;
         throw error;
       }
+    },
+    /** The whole object (admin card-video renderer: pictures that the browser cannot read cross-origin are read through the server). */
+    async get(key) {
+      const out = await connection().send(new (s3().GetObjectCommand)({ Bucket: bucket, Key: key }));
+      return Buffer.from(await out.Body.transformToByteArray());
     },
     /** First `length` bytes, used to check the real type of a direct upload. */
     async getRange(key, length) {
@@ -198,6 +205,29 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
       remoteCache.set(cacheKey, job);
     }
     return remoteCache.get(cacheKey);
+  }
+
+  /**
+   * The bytes of a picture for the admin's card-video renderer. A browser can only draw a picture into a canvas it will encode when the
+   * picture is served with CORS headers; /api/media redirects to R2 (CORS only when the bucket allows the admin's origin) and external
+   * pictures usually have none. So the renderer falls back to this: a file of ours is read from storage, an external https picture is
+   * downloaded with the same SSRF rules as every import (https, public hosts, 10 s, 10 MB, image/* only). Nothing is stored.
+   */
+  async function fetchBytes(input) {
+    const text = String(input || '');
+    const local = LOCAL_MEDIA.exec(text);
+    if (local) {
+      const name = local[1];
+      const file = await readMedia(name);
+      if (!file) throw fail(404, 'NOT_FOUND');
+      if (file.redirect) {
+        if (!storage || !storage.get) throw fail(502, 'MEDIA_UNREADABLE');
+        return { body: await storage.get(keyOf(name)), mime: file.mime };
+      }
+      return { body: file.body, mime: file.mime };
+    }
+    const file = await download(text, { kind: 'image', maxBytes: Math.min(limits.image, 10 * 1024 * 1024) });
+    return { body: file.body, mime: file.mime };
   }
 
   /**
@@ -330,7 +360,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     return true;
   }
 
-  return { storeMedia, storeRaw, rawLimit, readMedia, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, stats, mode: storage ? 'r2' : 'database' };
+  return { storeMedia, storeRaw, rawLimit, readMedia, fetchBytes, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, stats, mode: storage ? 'r2' : 'database' };
 }
 
 module.exports = { createMedia, createR2Storage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };

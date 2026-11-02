@@ -36,6 +36,7 @@ function fakeR2() {
     head: async key => (objects.has(key) ? { size: objects.get(key).body.length, mime: objects.get(key).mime } : null),
     getRange: async (key, length) => objects.get(key).body.subarray(0, length),
     remove: async key => { objects.delete(key); },
+    get: async key => { if (!objects.has(key)) throw new Error('NoSuchKey'); return Buffer.from(objects.get(key).body); },
     presignPut: async (key, mime, size) => `https://acct.r2.cloudflarestorage.com/bucket/${key}?X-Amz-Expires=300&type=${encodeURIComponent(mime)}&size=${size}`,
   };
 }
@@ -368,6 +369,33 @@ test('real R2 adapter: presigned PUT URLs carry no SDK checksum for an empty bod
  *   R2_TEST_ENDPOINT=http://127.0.0.1:5055 R2_TEST_BUCKET=dwira-media node --test scripts/check-media-server.js
  * Admin image upload -> R2 object, presign -> browser-style PUT -> complete -> saved in content -> public content -> 302 -> bytes.
  */
+test('card-video renderer: pictures are readable through the admin-only /admin/media/fetch (no bucket CORS needed)', async () => {
+  const outside = 'https://images.example.org/pic.png';
+  const { backend, admin } = await setup({ r2: true, files: { [outside]: { body: pngBytes(40), mime: 'image/png' } } });
+  try {
+    const up = await call(backend, '/api/admin/media', { method: 'POST', headers: admin, body: { data: bigPng } });
+    assert.equal(up.status, 200);
+    const q = u => `/api/admin/media/fetch?url=${encodeURIComponent(u)}`;
+    // anonymous: refused
+    assert.equal((await call(backend, q(up.body.url))).status, 401);
+    // our own file stored in R2 (the public /api/media URL only redirects): the bytes come back
+    const mine = await call(backend, q(up.body.url), { headers: admin });
+    assert.equal(mine.status, 200); assert.equal(mine.headers['content-type'], 'image/png');
+    assert.equal(Buffer.from(mine.raw).toString('base64'), bigPng.split(',')[1]);
+    assert.match(mine.headers['cache-control'], /no-store/);
+    // the absolute form native clients use
+    assert.equal((await call(backend, q(`https://app.example.com${up.body.url}`), { headers: admin })).status, 200);
+    // an external picture goes through the SSRF-safe downloader
+    const ext = await call(backend, q(outside), { headers: admin });
+    assert.equal(ext.status, 200); assert.equal(ext.headers['content-type'], 'image/png');
+    // unknown local file, blocked external URL, missing / oversized parameter
+    assert.equal((await call(backend, q('/api/media/' + '0'.repeat(32) + '.png'), { headers: admin })).status, 404);
+    assert.equal((await call(backend, q('https://unknown.example.org/x.png'), { headers: admin })).status, 400);
+    assert.equal((await call(backend, '/api/admin/media/fetch', { headers: admin })).status, 400);
+    assert.equal((await call(backend, q('x'.repeat(3000)), { headers: admin })).status, 400);
+  } finally { backend.server.emit('close'); }
+});
+
 test('end to end with a real S3-compatible endpoint (skipped unless R2_TEST_ENDPOINT is set)', { skip: !process.env.R2_TEST_ENDPOINT }, async () => {
   const env = { ...R2_ENV, R2_ENDPOINT: process.env.R2_TEST_ENDPOINT, R2_BUCKET: process.env.R2_TEST_BUCKET || 'dwira-media', R2_PUBLIC_BASE_URL: `${process.env.R2_TEST_ENDPOINT}/${process.env.R2_TEST_BUCKET || 'dwira-media'}`, R2_ACCESS_KEY_ID: process.env.R2_TEST_KEY || 'test', R2_SECRET_ACCESS_KEY: process.env.R2_TEST_SECRET || 'test' };
   const storage = createR2Storage(env);

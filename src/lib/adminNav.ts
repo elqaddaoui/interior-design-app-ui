@@ -32,6 +32,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { key: 'branding', icon: 'flag-outline', href: '/admin/branding' },
     { key: 'theme', icon: 'palette-outline', href: '/admin/theme' },
     { key: 'interface', icon: 'page-layout-footer', href: '/admin/interface' },
+    { key: 'performance', icon: 'speedometer', href: '/admin/performance' },
   ] },
 ];
 export const ADMIN_NAV = ADMIN_GROUPS.flatMap((g) => g.items);

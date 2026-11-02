@@ -51,7 +51,7 @@ export function ToolCard({ tool, onPress, index = 0, onReady, lang, preview, onE
   const imgH = imageHeight(height, inside, zoneH);
 
   const media = images.length > 0
-    ? <CardStage id={tool.id} images={images} fx={fx} rtl={rtl} force={preview} onReady={onReady} onEffect={onEffect} style={{ height: imgH }} />
+    ? <CardStage images={images} fx={fx} rtl={rtl} force={preview} video={tool.media.video ? { uri: tool.media.video, sig: tool.media.videoSig } : undefined} onReady={onReady} onEffect={onEffect} style={{ height: imgH }} />
     // Image / video (or a slideshow with no picture yet): shown exactly as before.
     : <MediaView media={tool.media.type === 'slideshow' ? { type: 'image', uri: tool.media.uri } : tool.media} style={{ height: imgH }} priority={index < 2 ? 'high' : undefined} onReady={onReady} />;
 

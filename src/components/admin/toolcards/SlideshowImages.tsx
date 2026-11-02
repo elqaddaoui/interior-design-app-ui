@@ -16,15 +16,18 @@ import { moveTo } from '@/lib/reorder';
 import { toast } from '@/store/useToast';
 
 const MAX_IMAGES = 30;
+/** Pictures per row: always 4 (every phone width, and larger screens too). */
+export const GRID_COLUMNS = 4;
+const GAP = 6;
 
 /**
- * Picked picture -> centered crop to the card's aspect ratio -> compressed WebP (max 800px wide) -> media storage (R2 / database).
+ * Picked picture (original aspect ratio, never cropped) -> compressed WebP (max 800px wide) -> media storage (R2 / database).
  * Resolves '' when it could not be stored. `uploadDataUrl` is tracked, so a save waits for pending uploads.
  */
-async function storeCardImage(uri: string, ratio?: number): Promise<string> {
-  const webp = await toCardWebp(uri, ratio);
+async function storeCardImage(uri: string): Promise<string> {
+  const webp = await toCardWebp(uri);
   if (!mediaUploadsEnabled || !webp.startsWith('data:')) return webp;
-  try { return await uploadDataUrl(webp); } catch { return ''; }
+  try { return await uploadDataUrl(webp, 'card'); } catch { return ''; }
 }
 
 /**
@@ -45,6 +48,11 @@ export function SlideshowImages({ images, onChange, ratio }: { images: string[];
   const latest = useRef(images);
   useEffect(() => { latest.current = images; });
   const area = useRef<View>(null);
+  // Tile width = (row width - gaps) / 4, measured, so exactly four tiles fit one row whatever the screen width.
+  const [rowW, setRowW] = useState(0);
+  const tileW = rowW > 0 ? Math.floor((rowW - GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS) : 0;
+  const compact = tileW < 92;
+  const imgH = Math.round(tileW * 0.72);
 
   const reorder = useReorder(rows.map((r) => r.id), [], (ids, target) => onChange(moveTo(rows, ids, target).map((r) => r.uri)), true);
 
@@ -74,7 +82,7 @@ export function SlideshowImages({ images, onChange, ratio }: { images: string[];
     setBusy({ done: 0, total: list.length });
     try {
       for (let i = 0; i < list.length; i++) {
-        const stored = await storeCardImage(list[i], ratio);
+        const stored = await storeCardImage(list[i]);
         if (stored) done.push(stored); else failed++;
         setBusy({ done: i + 1, total: list.length });
       }
@@ -123,28 +131,29 @@ export function SlideshowImages({ images, onChange, ratio }: { images: string[];
         <Txt className="text-muted text-[12px]">{hint}</Txt>
          {ratio ? <Txt testID="slide-ratio" className="text-muted text-[12px]">{t('tc.imageRatio', { ratio: ratio.toFixed(2) })}</Txt> : null}
         <Txt testID="slide-drag-hint" className="text-muted text-[12px]">{over ? t('ax.dropHere') : t('ax.dragHint')}</Txt>
-        <View testID="slide-grid" className="flex-row flex-wrap gap-2">
-          {rows.map((row, i) => (
-            <DragRow key={row.id} id={row.id} reorder={reorder} layout="grid" bare handleStyle={cover} onMove={(d) => move(i, i + d)} style={{ width: 104 }}>{(handle) => (
+        <View testID="slide-grid" onLayout={(e) => setRowW(Math.floor(e.nativeEvent.layout.width))} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: GAP }}>
+          {tileW > 0 ? rows.map((row, i) => (
+            <DragRow key={row.id} id={row.id} reorder={reorder} layout="grid" bare handleStyle={cover} onMove={(d) => move(i, i + d)} style={{ width: tileW }}>{(handle) => (
               <RightClick items={() => menuOf(i)}>
-                <View testID={`slide-${i}`} className="rounded-xl border border-line p-1.5 gap-1" style={{ width: 104 }}>
-                  <View style={{ width: '100%', height: 72 }}>
-                    <MediaView uri={row.uri} className="rounded-lg" style={{ width: '100%', height: 72 }} />
+                <View testID={`slide-${i}`} className="rounded-xl border border-line" style={{ width: tileW, padding: 3, gap: 3 }}>
+                  <View style={{ width: '100%', height: imgH }}>
+                    <MediaView uri={row.uri} fit="contain" className="rounded-lg" style={{ width: '100%', height: imgH }} />
                     {handle}
-                  </View>
-                  <View className="flex-row items-center justify-between">
-                    <Txt className="text-muted text-[12px] font-bold">{i + 1}</Txt>
-                    <View className="flex-row items-center gap-1">
-                      {i > 0 ? <Pressable testID={`slide-left-${i}`} accessibilityRole="button" accessibilityLabel={t('tc.moveStart')} hitSlop={6} onPress={() => move(i, i - 1)}><Icon name="chevron-left" size={20} flip /></Pressable> : null}
-                      {i < images.length - 1 ? <Pressable testID={`slide-right-${i}`} accessibilityRole="button" accessibilityLabel={t('tc.moveEnd')} hitSlop={6} onPress={() => move(i, i + 1)}><Icon name="chevron-right" size={20} flip /></Pressable> : null}
-                      <Pressable testID={`slide-dup-${i}`} accessibilityRole="button" accessibilityLabel={t('ax.duplicate')} hitSlop={6} disabled={images.length >= MAX_IMAGES} onPress={() => duplicate(i)}><Icon name="content-copy" size={17} /></Pressable>
-                      <Pressable testID={`slide-remove-${i}`} accessibilityRole="button" accessibilityLabel={t('common.delete')} hitSlop={6} onPress={() => remove(i)}><Icon name="trash-can-outline" size={18} tone="danger" /></Pressable>
+                    <View pointerEvents="none" style={{ position: 'absolute', top: 3, start: 3, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' }}>
+                      <Txt className="text-[11px] font-extrabold" style={{ color: '#fff' }}>{i + 1}</Txt>
                     </View>
+                  </View>
+                  {/* Compact controls: reorder arrows only on a wide tile (dragging is the main way), duplicate and delete always. */}
+                  <View className="flex-row items-center justify-around" style={{ height: 24 }}>
+                    {!compact && i > 0 ? <Pressable testID={`slide-left-${i}`} accessibilityRole="button" accessibilityLabel={t('tc.moveStart')} hitSlop={6} onPress={() => move(i, i - 1)}><Icon name="chevron-left" size={18} flip /></Pressable> : null}
+                    {!compact && i < images.length - 1 ? <Pressable testID={`slide-right-${i}`} accessibilityRole="button" accessibilityLabel={t('tc.moveEnd')} hitSlop={6} onPress={() => move(i, i + 1)}><Icon name="chevron-right" size={18} flip /></Pressable> : null}
+                    <Pressable testID={`slide-dup-${i}`} accessibilityRole="button" accessibilityLabel={t('ax.duplicate')} hitSlop={8} disabled={images.length >= MAX_IMAGES} onPress={() => duplicate(i)}><Icon name="content-copy" size={compact ? 16 : 17} /></Pressable>
+                    <Pressable testID={`slide-remove-${i}`} accessibilityRole="button" accessibilityLabel={t('common.delete')} hitSlop={8} onPress={() => remove(i)}><Icon name="trash-can-outline" size={compact ? 17 : 18} tone="danger" /></Pressable>
                   </View>
                 </View>
               </RightClick>
             )}</DragRow>
-          ))}
+          )) : null}
         </View>
         <View className="flex-row items-center gap-3">
           <Button testID="slide-add" size="sm" variant="soft" icon="plus" title={t('ax.addImagesMulti')} onPress={add} loading={!!busy} disabled={images.length >= MAX_IMAGES} />

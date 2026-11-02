@@ -2,20 +2,16 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
-import { FADE_CFG, FX, FX_FADE, TR_BASE, effectiveEffect, enabledIds, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
-import { availFromKey, availKey, requestedEffects, type ResolvedFx } from '@/lib/toolCards';
+import { FADE_CFG, FX, FX_FADE, TR_BASE, hasExtras, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
+import { availFromKey, availKey, cardEffectList, resolveGlobal, type ResolvedFx } from '@/lib/toolCards';
+import { VIDEO_RTL, shouldPlayVideo, videoSignature, videoStatus } from '@/lib/cardVideoPlan';
+import { CardVideo } from './CardVideo';
 import { shouldRecord, type DeviceClass } from '@/lib/deviceTier';
-import { fxLog, recordTransition, useDeviceClass, useIsMostVisible, useOnScreen } from '@/lib/toolCardPerf';
+import { fxLog, recordTransition, useDeviceClass, useOnScreen } from '@/lib/toolCardPerf';
 import { RevealStack } from './RevealStack';
 import { useTransition, type PlayStats } from './useTransition';
 
-/** The effects a card really plays, in order, after availability / low-end rules. Empty = still image. */
-function effectList(fx: ResolvedFx, avail: FxAvail, lowEnd: boolean): number[] {
-  const requested = requestedEffects(fx, enabledIds(avail));
-  // Never edited and every effect disabled by the admin: the cross-fade (always available) plays.
-  if (fx.mode === 'multiple' && fx.effects === null && requested.length === 0) return [FX_FADE];
-  return requested.map((id) => effectiveEffect(id, avail, lowEnd));
-}
+const effectList = cardEffectList;
 
 type Size = { w: number; h: number };
 type Pair<T> = [T, T];
@@ -103,7 +99,7 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
     setUris([s.uris[0], s.uris[1]]);
     setCfgs((old) => (b === 0 ? [cfg, old[1]] : [old[0], cfg]));
     setBack(b);
-    setExtra(!p.lite && def.extra !== 'none' ? { def, cfg } : null);
+    setExtra(!p.lite && hasExtras(def) ? { def, cfg } : null);
     fxLog(`prepare layer ${b} <- #${next} effect ${e} (${s.backLoaded ? 'already loaded' : 'loading'})`);
     p.onEffect?.(e);
     if (s.backLoaded) tryStart();
@@ -210,27 +206,38 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
  * The image zone of a tools card (media type "slideshow"): before / after reveal between 2 or more images.
  * It owns the box (size from onLayout, rounded to whole physical pixels), visibility and device rules; the Engine owns the transitions.
  *
- *  - Only the most visible card animates; the others show a still image. Off-screen cards, other tabs and a backgrounded app pause.
+ *  - Every card with any part on screen animates (even a few pixels); cards outside the viewport, other tabs and a backgrounded app pause (they keep a still image).
+ *  - A valid pre-rendered video replaces the live engine on low-end phones (or everywhere, per Admin > Performance); it too plays only while visible.
  *  - Low-end devices (and reduce-motion) play only the effects the admin allowed for them, else the cross-fade, and no extras.
  *  - Admin availability: a disabled effect is replaced by the nearest enabled Safe effect, or the cross-fade.
  */
-export function CardStage({ id, images, fx, rtl, force, onReady, onEffect, style }: {
-  id: string; images: string[]; fx: ResolvedFx; rtl: boolean;
-  /** Admin preview: always animates (does not compete for "most visible card") and ignores the low-end demotion. */
+export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, style }: {
+  images: string[]; fx: ResolvedFx; rtl: boolean;
+  /** The card's pre-rendered video (Admin > Performance) and the signature it was rendered for. Played instead of the live engine when the rules allow it. */
+  video?: { uri: string; sig?: string };
+  /** Admin preview: always animates (even when scrolled out of view) and ignores the low-end demotion. */
   force?: boolean; onReady?: () => void;
   /** Reports the effect prepared / playing (0 = cross-fade, -1 = still image); the admin status line shows it. */
   onEffect?: (effect: number) => void; style?: StyleProp<ViewStyle>;
 }) {
   const box = useRef<View>(null);
-  const { visible, near } = useOnScreen(box, id, !force);
-  const most = useIsMostVisible(id);
+  const { visible, near } = useOnScreen(box);
   const device: DeviceClass = useDeviceClass();
   const lowEnd = device.low;
   const record = shouldRecord(device);
   const key = useStore((s) => availKey(s.doc.settings.toolCards));
   const avail = useMemo(() => availFromKey(key), [key]);
   const [layout, setLayout] = useState<Size>({ w: 0, h: 0 });
-  const run = visible && (force || most);
+  const run = visible || !!force;
+  // Pre-rendered video: only when it matches the card's CURRENT pictures / effects / timing (else the live animation runs), the admin's mode
+  // allows it on this phone, and it has not failed. The admin preview always shows the live engine.
+  const videoMode = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoMode);
+  const videoExtras = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoExtras);
+  const videoQuality = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoQuality);
+  const [videoFailed, setVideoFailed] = useState<string | null>(null);
+  const status = videoStatus(video?.uri, video?.sig, videoSignature(images, cardEffectList(fx, avail, false), fx.hold, fx.speed, VIDEO_RTL, videoExtras, videoQuality));
+  const playVideo = !force && !!video?.uri && videoFailed !== video.uri && shouldPlayVideo(videoMode, lowEnd, status === 'ready');
+  const failVideo = useCallback(() => setVideoFailed(video?.uri ?? null), [video?.uri]);
 
   // Whole physical pixels: the layers, the photos and the maths all use exactly this size.
   const onLayout = useCallback((e: { nativeEvent: { layout: { width: number; height: number } } }) => {
@@ -243,7 +250,9 @@ export function CardStage({ id, images, fx, rtl, force, onReady, onEffect, style
   const sig = images.join('\n');
   return (
     <View ref={box} style={[{ overflow: 'hidden' }, style]} onLayout={onLayout}>
-      {near && images.length > 0 && layout.w > 0 ? (
+      {near && playVideo && video ? (
+        <CardVideo uri={video.uri} poster={images[0]} run={run} onReady={onReady} onFail={failVideo} />
+      ) : near && images.length > 0 && layout.w > 0 ? (
         <Engine key={sig} images={images} fx={fx} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} record={record} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
       ) : null}
     </View>

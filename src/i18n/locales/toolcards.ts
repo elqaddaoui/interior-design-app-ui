@@ -1,9 +1,9 @@
 /** Admin texts of the home tools-card dashboard (Admin > Tools cards). The cards themselves reuse the tools' own texts and `common.try`. */
 const names = {
-  // Index 0 = cross-fade (always on), 1-30 = the transitions. Directions are written for LTR; the app mirrors them in RTL.
-  fr: ['Fondu enchaîné', 'Volet curseur (début → fin)', 'Volet curseur (fin → début)', 'Balayage vers le bas', 'Balayage vers le haut', 'Diagonale', 'Diagonale inversée', 'Tranche oblique', 'Curseur à poignée', 'Bord lumineux', 'Barre colorée', 'Bord étincelant', 'Reflet diagonal', 'Volet pivotant', 'Volet élastique', 'Volet fouet', 'Portes horizontales', 'Portes verticales', 'Fenêtre qui s’ouvre', 'Zoom cadre', 'Coin bas-gauche', 'Coin haut-droite', 'Iris depuis le centre', 'Iris + anneau', 'Iris + flash', 'Iris coin haut-gauche', 'Iris coin bas-droite', 'Iris côté gauche', 'Iris côté droit', 'Iris depuis le haut', 'Iris depuis le bas'],
-  ar: ['تلاشٍ متقاطع', 'شريط منزلق (بداية ← نهاية)', 'شريط منزلق (نهاية ← بداية)', 'مسح للأسفل', 'مسح للأعلى', 'قطري', 'قطري معكوس', 'شريحة مائلة', 'شريط بمقبض', 'حافة متوهجة', 'شريط ملون', 'حافة متلألئة', 'لمعان قطري', 'مسح متأرجح', 'مسح مرن', 'مسح خاطف', 'أبواب أفقية', 'أبواب عمودية', 'نافذة تتسع', 'تكبير الإطار', 'زاوية أسفل اليسار', 'زاوية أعلى اليمين', 'قزحية من الوسط', 'قزحية + حلقة', 'قزحية + وميض', 'قزحية أعلى اليسار', 'قزحية أسفل اليمين', 'قزحية من الجانب الأيسر', 'قزحية من الجانب الأيمن', 'قزحية من الأعلى', 'قزحية من الأسفل'],
-  dar: ['تلاشي متقاطع', 'شريط منزلق (البداية ← النهاية)', 'شريط منزلق (النهاية ← البداية)', 'مسح لتحت', 'مسح لفوق', 'قطري', 'قطري معكوس', 'شريحة مايلة', 'شريط بمقبض', 'حافة مضوية', 'شريط ملون', 'حافة لامعة', 'لمعان قطري', 'مسح متأرجح', 'مسح مرن', 'مسح بسرعة', 'بيبان أفقية', 'بيبان عمودية', 'نافذة كتوسع', 'زوم الإطار', 'ركن لتحت اليسار', 'ركن لفوق اليمين', 'قزحية من الوسط', 'قزحية + حلقة', 'قزحية + فلاش', 'قزحية فوق اليسار', 'قزحية تحت اليمين', 'قزحية من اليسار', 'قزحية من اليمين', 'قزحية من فوق', 'قزحية من تحت'],
+  // Index 0 = cross-fade (always on), 1-60 = the transitions (31-60: the creative ones, with animated pieces). Directions are written for LTR; the app mirrors them in RTL.
+  fr: ['Fondu enchaîné', 'Volet curseur (début → fin)', 'Volet curseur (fin → début)', 'Balayage vers le bas', 'Balayage vers le haut', 'Diagonale', 'Diagonale inversée', 'Tranche oblique', 'Curseur à poignée', 'Bord lumineux', 'Barre colorée', 'Bord étincelant', 'Reflet diagonal', 'Volet pivotant', 'Volet élastique', 'Volet fouet', 'Portes horizontales', 'Portes verticales', 'Fenêtre qui s’ouvre', 'Zoom cadre', 'Coin bas-gauche', 'Coin haut-droite', 'Iris depuis le centre', 'Iris + anneau', 'Iris + flash', 'Iris coin haut-gauche', 'Iris coin bas-droite', 'Iris côté gauche', 'Iris côté droit', 'Iris depuis le haut', 'Iris depuis le bas', 'Curseur comète', 'Comète descendante', 'Comète diagonale à anneaux', 'Perles glissantes', 'Rideau de perles', 'Losanges montants', 'Scanner horizontal', 'Scanner vertical', 'Vague de points', 'Vague lumineuse diagonale', 'Ruban à barres', 'Ruban triangulaire', 'Élastique à anneaux', 'Élastique lumineux vertical', 'Rebond barre colorée', 'Rebond ruban diagonal', 'Reflet pivotant', 'Éclair de losanges', 'Tourbillon cadre', 'Tourbillon inverse', 'Rotation coin haut-gauche', 'Rotation coin bas-droit', 'Demi-tour', 'Rideau levant', 'Iris perlé', 'Iris orbite', 'Iris explosion', 'Iris orbite côté gauche', 'Iris perlé coin haut-droit', 'Iris bulles coin bas-gauche'],
+  ar: ['تلاشٍ متقاطع', 'شريط منزلق (بداية ← نهاية)', 'شريط منزلق (نهاية ← بداية)', 'مسح للأسفل', 'مسح للأعلى', 'قطري', 'قطري معكوس', 'شريحة مائلة', 'شريط بمقبض', 'حافة متوهجة', 'شريط ملون', 'حافة متلألئة', 'لمعان قطري', 'مسح متأرجح', 'مسح مرن', 'مسح خاطف', 'أبواب أفقية', 'أبواب عمودية', 'نافذة تتسع', 'تكبير الإطار', 'زاوية أسفل اليسار', 'زاوية أعلى اليمين', 'قزحية من الوسط', 'قزحية + حلقة', 'قزحية + وميض', 'قزحية أعلى اليسار', 'قزحية أسفل اليمين', 'قزحية من الجانب الأيسر', 'قزحية من الجانب الأيمن', 'قزحية من الأعلى', 'قزحية من الأسفل', 'شريط المذنّب', 'مذنّب نازل', 'مذنّب قطري بحلقات', 'لآلئ منزلقة', 'ستارة اللآلئ', 'معينات صاعدة', 'ماسح أفقي', 'ماسح عمودي', 'موجة النقاط', 'موجة متوهجة قطرية', 'شريط الأعمدة', 'شريط المثلثات', 'مسح مرن بحلقات', 'مسح مرن متوهج عمودي', 'ارتداد الشريط الملون', 'ارتداد الشريط القطري', 'لمعان دوّار', 'وميض المعينات', 'دوّامة الإطار', 'دوّامة معكوسة', 'دوران من أعلى اليسار', 'دوران من أسفل اليمين', 'نصف دورة', 'ستارة صاعدة', 'قزحية اللآلئ', 'قزحية مدارية', 'قزحية متفجرة', 'قزحية مدارية من اليسار', 'قزحية لؤلؤية من أعلى اليمين', 'قزحية فقاعات من أسفل اليسار'],
+  dar: ['تلاشي متقاطع', 'شريط منزلق (البداية ← النهاية)', 'شريط منزلق (النهاية ← البداية)', 'مسح لتحت', 'مسح لفوق', 'قطري', 'قطري معكوس', 'شريحة مايلة', 'شريط بمقبض', 'حافة مضوية', 'شريط ملون', 'حافة لامعة', 'لمعان قطري', 'مسح متأرجح', 'مسح مرن', 'مسح بسرعة', 'بيبان أفقية', 'بيبان عمودية', 'نافذة كتوسع', 'زوم الإطار', 'ركن لتحت اليسار', 'ركن لفوق اليمين', 'قزحية من الوسط', 'قزحية + حلقة', 'قزحية + فلاش', 'قزحية فوق اليسار', 'قزحية تحت اليمين', 'قزحية من اليسار', 'قزحية من اليمين', 'قزحية من فوق', 'قزحية من تحت', 'شريط المذنب', 'مذنب نازل', 'مذنب مايل بحلقات', 'لولي منزلق', 'ستارة د اللولي', 'معينات طالعة', 'سكانير أفقي', 'سكانير عمودي', 'موجة د النقاط', 'موجة مضوية مايلة', 'شريط د الأعمدة', 'شريط د المثلثات', 'مسح مرن بحلقات', 'مسح مرن مضوي عمودي', 'ارتداد الشريط الملون', 'ارتداد الشريط المايل', 'لمعان كيدور', 'فلاش د المعينات', 'دوامة الإطار', 'دوامة معكوسة', 'دوران من فوق اليسار', 'دوران من تحت اليمين', 'نص دورة', 'ستارة طالعة', 'قزحية باللولي', 'قزحية كتدور', 'قزحية كتفرقع', 'قزحية كتدور من اليسار', 'قزحية باللولي من فوق اليمين', 'قزحية فقاقع من تحت اليسار'],
 };
 const fx = (l: keyof typeof names) => Object.fromEntries(names[l].map((n, i) => [String(i), n]));
 
@@ -23,7 +23,7 @@ export const toolCardTexts = {
     status: '{{fx}} · maintien {{pause}} · hauteur {{h}} px', staticStatus: 'Image fixe',
     simulated: 'Application simulée (aperçu uniquement, jamais enregistré)', simLang: 'Langue', simTheme: 'Thème', simApp: 'Réglage de l’application',
     live: 'Aperçu en direct', liveNote: 'Chaque changement apparaît tout de suite. « Terminé » enregistre les réglages communs à toutes les cartes ; « Enregistrer » du formulaire enregistre cette carte.',
-    tier: { safe: 'Sûres (tous les appareils)', medium: 'Moyennes', heavy: 'Lourdes (désactivées par défaut)' },
+    tier: { safe: 'Sûres (tous les appareils)', medium: 'Moyennes', heavy: 'Lourdes (désactivées par défaut)', creative: 'Créatives (animées, désactivées par défaut)' },
     availOpen: 'Disponibilité des transitions', availTitle: 'Disponibilité des transitions', availCount: '{{on}}/{{total}} activées',
     availIntro: 'Choisissez les transitions qui existent dans l’application et celles qui peuvent tourner sur un téléphone d’entrée de gamme. Une transition désactivée est remplacée par la transition sûre activée la plus proche, ou par le fondu enchaîné.',
     enabledSw: 'Activée', lowEndSw: 'Entrée de gamme', safeOnly: 'Sûres uniquement', enableAll: 'Tout activer', resetDefaults: 'Valeurs par défaut',
@@ -32,7 +32,7 @@ export const toolCardTexts = {
     devLow: 'Cet appareil est traité comme d’entrée de gamme ({{why}}).', devOk: 'Cet appareil n’est pas d’entrée de gamme.',
     why: { reduceMotion: 'animations réduites', saveData: 'économiseur de données', memory: 'peu de mémoire', cores: 'processeur modeste', oldDevice: 'appareil ancien', measured: 'plusieurs transitions saccadées mesurées' }, measured: { janky: 'mesuré : saccadé', smooth: 'mesuré : fluide' }, resetDetection: 'Réinitialiser la détection',
     pickerNote: 'Seules les transitions activées sont proposées. Les sens sont décrits pour LTR et s’inversent automatiquement en RTL.',
-    imageRatio: 'Les images sont recadrées au format de la carte ({{ratio}}) et converties en WebP (800 px max).',
+    imageRatio: 'Les images gardent leur format d’origine (jamais recadrées) et sont converties en WebP (800 px max). La carte ({{ratio}}) les remplit au centre à l’affichage.',
     fx: fx('fr'),
   },
   ar: {
@@ -50,7 +50,7 @@ export const toolCardTexts = {
     status: '{{fx}} · توقف {{pause}} · ارتفاع {{h}} px', staticStatus: 'صورة ثابتة',
     simulated: 'تطبيق محاكى (للمعاينة فقط، لا يُحفظ)', simLang: 'اللغة', simTheme: 'السمة', simApp: 'إعداد التطبيق',
     live: 'معاينة مباشرة', liveNote: 'كل تغيير يظهر فوراً. زر «تم» يحفظ الإعدادات المشتركة لكل البطاقات، وزر «حفظ» في النموذج يحفظ هذه البطاقة.',
-    tier: { safe: 'آمنة (لكل الأجهزة)', medium: 'متوسطة', heavy: 'ثقيلة (معطّلة افتراضياً)' },
+    tier: { safe: 'آمنة (لكل الأجهزة)', medium: 'متوسطة', heavy: 'ثقيلة (معطّلة افتراضياً)', creative: 'إبداعية (متحركة، معطّلة افتراضياً)' },
     availOpen: 'توفر الانتقالات', availTitle: 'توفر الانتقالات', availCount: '{{on}}/{{total}} مفعّلة',
     availIntro: 'اختر الانتقالات المتاحة في التطبيق وتلك المسموح بها على الهواتف الضعيفة. الانتقال المعطّل يُستبدل بأقرب انتقال آمن مفعّل، أو بالتلاشي المتقاطع.',
     enabledSw: 'مفعّل', lowEndSw: 'الأجهزة الضعيفة', safeOnly: 'الآمنة فقط', enableAll: 'تفعيل الكل', resetDefaults: 'القيم الافتراضية',
@@ -59,7 +59,7 @@ export const toolCardTexts = {
     devLow: 'يُعامل هذا الجهاز كجهاز ضعيف ({{why}}).', devOk: 'هذا الجهاز ليس ضعيفاً.',
     why: { reduceMotion: 'تقليل الحركة', saveData: 'موفّر البيانات', memory: 'ذاكرة قليلة', cores: 'معالج متواضع', oldDevice: 'جهاز قديم', measured: 'قياس عدة انتقالات متقطعة' }, measured: { janky: 'القياس: متقطع', smooth: 'القياس: سلس' }, resetDetection: 'إعادة ضبط الاكتشاف',
     pickerNote: 'تظهر الانتقالات المفعّلة فقط. الاتجاهات مكتوبة للغات من اليسار إلى اليمين وتنعكس تلقائياً في RTL.',
-    imageRatio: 'تُقصّ الصور على نسبة البطاقة ({{ratio}}) وتُحوَّل إلى WebP (800 بكسل كحد أقصى).',
+    imageRatio: 'تحتفظ الصور بنسبتها الأصلية (لا تُقصّ أبداً) وتُحوَّل إلى WebP (800 بكسل كحد أقصى). تملؤها البطاقة ({{ratio}}) من المنتصف عند العرض فقط.',
     fx: fx('ar'),
   },
   dar: {
@@ -77,7 +77,7 @@ export const toolCardTexts = {
     status: '{{fx}} · وقفة {{pause}} · علو {{h}} px', staticStatus: 'تصويرة ثابتة',
     simulated: 'تطبيق مُحاكى (للمعاينة غير، ما كيتسجلش)', simLang: 'اللغة', simTheme: 'الثيم', simApp: 'إعداد التطبيق',
     live: 'معاينة مباشرة', liveNote: 'كل تغيير كيبان دغيا. زر «تم» كيسجل الإعدادات المشتركة د جميع الكارطات، وزر «حفظ» د الفورم كيسجل هاد الكارطة.',
-    tier: { safe: 'آمنة (لكل التيليفونات)', medium: 'متوسطة', heavy: 'تقيلة (موقفة بالأصل)' },
+    tier: { safe: 'آمنة (لكل التيليفونات)', medium: 'متوسطة', heavy: 'تقيلة (موقفة بالأصل)', creative: 'إبداعية (متحركة، موقفة بالأصل)' },
     availOpen: 'شنو متاح من الانتقالات', availTitle: 'شنو متاح من الانتقالات', availCount: '{{on}}/{{total}} خدامة',
     availIntro: 'ختار الانتقالات اللي كاينين فالتطبيق واللي يقدرو يخدمو فالتيليفونات الضعيفة. الانتقال الموقف كيتبدل بأقرب انتقال آمن خدام، ولا بالتلاشي المتقاطع.',
     enabledSw: 'خدام', lowEndSw: 'التيليفونات الضعيفة', safeOnly: 'غير الآمنة', enableAll: 'خدم الكل', resetDefaults: 'القيم الأصلية',
@@ -86,7 +86,7 @@ export const toolCardTexts = {
     devLow: 'هاد الجهاز كيتعامل معاه بحال جهاز ضعيف ({{why}}).', devOk: 'هاد الجهاز ماشي ضعيف.',
     why: { reduceMotion: 'تقليل الحركة', saveData: 'موفّر الداتا', memory: 'ميموار قليلة', cores: 'بروسيسور ضعيف', oldDevice: 'جهاز قديم', measured: 'تقاس بزاف د الانتقالات كتقطع' }, measured: { janky: 'القياس: كيتقطع', smooth: 'القياس: سلس' }, resetDetection: 'عاود ضبط الاكتشاف',
     pickerNote: 'كتبان غير الانتقالات الخدامين. الاتجاهات مكتوبة للـ LTR وكتتعكس وحدها فـ RTL.',
-    imageRatio: 'التصاور كيتقصو على قياس الكارطة ({{ratio}}) وكيتحولو لـ WebP (800 بكسل ماكس).',
+    imageRatio: 'التصاور كيبقاو بالقياس الأصلي ديالهم (عمرهم كيتقصو) وكيتحولو لـ WebP (800 بكسل ماكس). الكارطة ({{ratio}}) كتعمرهم من الوسط غير فالعرض.',
     fx: fx('dar'),
   },
 };

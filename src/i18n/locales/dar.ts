@@ -308,6 +308,7 @@ const dar: Dict = {
       branding: 'الهوية',
       theme: 'الثيم',
       interface: 'الواجهة والمينيو',
+      performance: 'الأداء',
       chats: 'المحادثات',
       notifications: 'الإشعارات',
     },

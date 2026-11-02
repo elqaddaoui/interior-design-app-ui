@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PixelRatio, View } from 'react-native';
-import { FX, TR_BASE, makeCfg, verdictOf, type Verdict } from '@/lib/toolCardFx';
+import { FX, TR_BASE, hasExtras, makeCfg, verdictOf, type Verdict } from '@/lib/toolCardFx';
 import { useT } from '@/i18n';
 import { useTheme } from '@/theme/ThemeProvider';
 import { RevealStack } from '@/components/toolcard/RevealStack';
@@ -74,7 +74,7 @@ export function BenchStage({ effect, images, onProgress, onDone }: {
 
   return (
     <View testID={`bench-stage-${effect}`} style={{ width: W, height: H, alignSelf: 'center', borderRadius: 12, overflow: 'hidden' }}>
-      <RevealStack W={W} H={H} pr={pr} v={drv.v} uris={uris} cfgs={[cfg, cfg]} back={back} raster={running} extra={def.extra !== 'none' ? { def, cfg } : null}
+      <RevealStack W={W} H={H} pr={pr} v={drv.v} uris={uris} cfgs={[cfg, cfg]} back={back} raster={running} extra={hasExtras(def) ? { def, cfg } : null}
         accent={colors.primary} onLoad={onLoad} onError={onError} />
     </View>
   );
