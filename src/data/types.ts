@@ -8,7 +8,13 @@ export type Id = string;
  * `images` holds the pictures in order, `uri` mirrors the first one (so every screen that only knows image / video still shows a picture),
  * `fx` holds this card's animation settings.
  */
-export type Media = { type: 'image' | 'video' | 'slideshow'; uri: string; poster?: string; images?: string[]; fx?: ToolCardFx };
+export type Media = {
+  type: 'image' | 'video' | 'slideshow'; uri: string; poster?: string; images?: string[]; fx?: ToolCardFx;
+  /** Slideshow only: a pre-rendered looping MP4 of the card's animation (Admin > Performance). Low-end phones play it instead of the live animation. */
+  video?: string;
+  /** Signature of what the video was rendered from (images, effects, timing, size): the Performance page flags a video whose signature no longer matches as outdated. */
+  videoSig?: string;
+};
 /** Optional wizard steps. The AI model is NEVER a user step: it is resolved from the admin config. */
 export type StepKey = 'room' | 'style' | 'mode';
 export type Group = 'interior' | 'exterior';
@@ -26,16 +32,21 @@ export interface ToolCardsGlobal {
   textZone?: 'top' | 'bottom';
   /** Text over the picture (gradient) or under / beside it; the same for every card. */
   textPlacement?: 'inside' | 'outside';
-  /** Transition availability (ids 1-30). Enabled = can be chosen and played anywhere; missing = Safe + Medium. */
+  /** Transition availability (ids 1-39). Enabled = can be chosen and played anywhere; missing = Safe + Medium. */
   fxEnabled?: number[];
   /** Subset of the enabled ids that low-end devices may play (the others play the cross-fade); missing = Safe only. */
   fxLowEnd?: number[];
+  /** Pre-rendered card videos: 'lowEnd' (default) = only low-end phones play them, 'always' = every phone, 'off' = never (live animation only). */
+  videoMode?: VideoMode;
+  /** Pre-rendered videos also draw every animated element of the transitions (edge line, knob, doors, ring, star badges ...). Default false. */
+  videoExtras?: boolean;
 }
+export type VideoMode = 'lowEnd' | 'always' | 'off';
 export type ToolCardGradient = 'soft' | 'medium' | 'strong';
 /** PER-CARD animation settings (Tool.media.fx, slideshow only). Every key is optional: missing keys use the defaults in lib/toolCards.ts. */
 export interface ToolCardFx {
   mode?: 'single' | 'multiple';
-  /** Multiple mode: kept effect ids (1-30), played one after another. Missing = every enabled effect. Empty = still image. */
+  /** Multiple mode: kept effect ids (1-39), played one after another. Missing = every enabled effect. Empty = still image. */
   effects?: number[];
   /** Single mode: the chosen effect id. */
   effect?: number;

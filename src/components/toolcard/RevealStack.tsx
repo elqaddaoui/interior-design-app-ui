@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useDerivedValue } from 'react-native-reanimated';
 import { Icon } from '@/components/ui/Icon';
-import { MIN_SCALE, circleDiameter, ease, extraRamp, layerFrame, layerGeometry, originPx, wipePivot, wipeR, type Cfg, type FxDef } from '@/lib/toolCardFx';
+import { BADGE_D, MIN_SCALE, badgeAt, badgeCount, circleDiameter, ease, extraBase, extraRamp, layerFrame, layerGeometry, originPx, wipePivot, wipeR, type Cfg, type Extra, type FxDef } from '@/lib/toolCardFx';
 import type { FxValues } from './useTransition';
 
 /**
@@ -61,7 +61,7 @@ const EXTRA_Z = 5;
 void WILL_CHANGE;
 
 /** A small view riding the wipe edge: same container geometry and transform as the wipe window, no clipping, no photo. */
-function WipeRider({ v, cfg, W, H, pr, def, accent }: { v: FxValues; cfg: Cfg; W: number; H: number; pr: number; def: FxDef; accent: string }) {
+function WipeRider({ v, cfg, W, H, pr, x, accent }: { v: FxValues; cfg: Cfg; W: number; H: number; pr: number; x: Extra; accent: string }) {
   const L = 2 * wipeR(W, H);
   const { x: px, y: py } = wipePivot(W, H);
   const st = useAnimatedStyle(() => {
@@ -69,7 +69,6 @@ function WipeRider({ v, cfg, W, H, pr, def, accent }: { v: FxValues; cfg: Cfg; W
     return { opacity: v.active.value, transform: f.ct as never };
   }, [cfg, W, H, pr]);
   const sparkle = useAnimatedStyle(() => ({ opacity: Math.sin(Math.PI * Math.min(1, Math.max(0, v.p.value))) }));
-  const x = def.extra;
   const edge = (w: number, more: object) => ({ position: 'absolute', left: L - w, top: 0, width: w, height: 2 * L, ...more }) as const;
   return (
     <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: px - L, top: py - L, width: L, height: 2 * L, transformOrigin: '100% 50%', zIndex: EXTRA_Z }, st]}>
@@ -138,18 +137,44 @@ function Flash({ v }: { v: FxValues }) {
   return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: WHITE, zIndex: EXTRA_Z }, st]} />;
 }
 
+/**
+ * Creative badge: a small white disc with an accent star, riding the effect (position / scale / opacity / turn from `badgeAt`, the same
+ * maths as the window it decorates). One derived worklet per badge, transform + opacity only, nothing allocated outside it.
+ */
+function BadgeView({ v, cfg, W, H, x, i, accent }: { v: FxValues; cfg: Cfg; W: number; H: number; x: Extra; i: number; accent: string }) {
+  const st = useAnimatedStyle(() => {
+    const b = badgeAt(x, cfg, W, H, v.p.value, i);
+    return {
+      opacity: v.active.value * b.o,
+      transform: [{ translateX: b.x - BADGE_D / 2 }, { translateY: b.y - BADGE_D / 2 }, { scale: b.s }, { rotate: `${b.r}deg` }],
+    };
+  }, [x, cfg, W, H, i]);
+  return (
+    <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0, width: BADGE_D, height: BADGE_D, borderRadius: BADGE_D / 2, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center', zIndex: EXTRA_Z }, st]}>
+      <Icon name="star" size={18} color={accent} />
+    </Animated.View>
+  );
+}
+
+const BADGE_IDX = [0, 1, 2, 3] as const;
+
 /** The extras of one effect. They only use transform / opacity and ride the same progress `p`. Rendered only when allowed (never on low-end devices). */
 export function Extras({ v, cfg, def, W, H, pr, accent }: { v: FxValues; cfg: Cfg; def: FxDef; W: number; H: number; pr: number; accent: string }) {
-  switch (def.extra) {
+  const base = extraBase(def.extra);
+  const n = badgeCount(def.extra);
+  const badges = n ? BADGE_IDX.slice(0, n).map((i) => <BadgeView key={i} v={v} cfg={cfg} W={W} H={H} x={def.extra} i={i} accent={accent} />) : null;
+  let core: React.ReactNode = null;
+  switch (base) {
     case 'line': case 'knob': case 'glow': case 'colorbar': case 'sparkle': case 'shine':
-      return <WipeRider v={v} cfg={cfg} W={W} H={H} pr={pr} def={def} accent={accent} />;
-    case 'doorsH': return <><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={1} /></>;
-    case 'doorsV': return <><Door v={v} cfg={cfg} W={W} H={H} vertical sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical sign={1} /></>;
-    case 'frame': return <Frame v={v} cfg={cfg} W={W} H={H} />;
-    case 'ring': return <Ring v={v} cfg={cfg} W={W} H={H} />;
-    case 'flash': return <Flash v={v} />;
-    default: return null;
+      core = <WipeRider v={v} cfg={cfg} W={W} H={H} pr={pr} x={base} accent={accent} />; break;
+    case 'doorsH': core = <><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical={false} sign={1} /></>; break;
+    case 'doorsV': core = <><Door v={v} cfg={cfg} W={W} H={H} vertical sign={-1} /><Door v={v} cfg={cfg} W={W} H={H} vertical sign={1} /></>; break;
+    case 'frame': core = <Frame v={v} cfg={cfg} W={W} H={H} />; break;
+    case 'ring': core = <Ring v={v} cfg={cfg} W={W} H={H} />; break;
+    case 'flash': core = <Flash v={v} />; break;
+    default: break;
   }
+  return <>{core}{badges}</>;
 }
 
 /** The stage content: exactly W x H, always LTR (RTL is handled by the effects' maths; a photo is never mirrored). */

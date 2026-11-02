@@ -29,7 +29,7 @@ function captureFrame(src: string): Promise<string> {
 /** First frame of a video file or URL -> stored image URL (`/api/media/...`), or '' when it cannot be captured. Never throws. */
 export async function posterForVideo(source: string | Blob): Promise<string> {
   const url = typeof source === 'string' ? source : URL.createObjectURL(source);
-  try { return await uploadDataUrl(await captureFrame(url)); }
+  try { return await uploadDataUrl(await captureFrame(url), 'poster'); }
   catch { return ''; }
   finally { if (typeof source !== 'string') URL.revokeObjectURL(url); }
 }

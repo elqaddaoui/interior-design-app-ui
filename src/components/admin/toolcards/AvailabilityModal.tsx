@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { Modal, Pressable, ScrollView, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { Icon } from '@/components/ui/Icon';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
@@ -8,7 +9,7 @@ import { useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useT } from '@/i18n';
-import { DEFAULT_ENABLED, DEFAULT_LOW_END, TIERS, TIER_ORDER, availToStored, resolveAvail, type FxAvail } from '@/lib/toolCardFx';
+import { FX_IDS, TIERS, TIER_ORDER, availToStored, resolveAvail, tierState, toggleTier, type FxAvail, type Tier } from '@/lib/toolCardFx';
 import { deviceFacts, resetLowEnd, useDeviceClass } from '@/lib/toolCardPerf';
 import { resolveGlobal } from '@/lib/toolCards';
 import { useStore } from '@/store/useStore';
@@ -46,9 +47,10 @@ export function AvailabilityModal({ images, onClose }: { images: string[]; onClo
     if (key === 'enabled' && !on) low.delete(id);
     apply({ enabled, lowEnd: low });
   };
-  const safeOnly = () => apply({ enabled: new Set(TIERS.safe), lowEnd: new Set(TIERS.safe) });
-  const enableAll = () => { const all = new Set([...TIERS.safe, ...TIERS.medium, ...TIERS.heavy]); apply({ enabled: all, lowEnd: new Set(avail.lowEnd) }); };
-  const reset = () => apply({ enabled: new Set(DEFAULT_ENABLED), lowEnd: new Set(DEFAULT_LOW_END) });
+  /** A tier checkbox turns every effect of its tier on (none / some) or off (all); see toggleTier. */
+  const tapTier = (tier: Tier) => apply(toggleTier(tier, avail));
+  const TIER_ICON: Record<Tier, string> = { safe: 'shield-check-outline', medium: 'gauge', heavy: 'fire', creative: 'star-four-points' };
+  const TIER_TONE: Record<Tier, string> = { safe: '#1D9E75', medium: '#EF9F27', heavy: '#E24B4A', creative: '#8B5CF6' };
 
   const done = async () => { if (!settings.dirty || (await settings.save())) onClose(); };
   const cancel = () => { settings.discard(); onClose(); };
@@ -107,13 +109,28 @@ export function AvailabilityModal({ images, onClose }: { images: string[]; onClo
             <View className="px-3 pt-2 pb-2 border-b border-line">
               <View className="flex-row items-center gap-2 mb-1">
                 <Txt className="text-[16px] font-extrabold flex-1" accessibilityRole="header" numberOfLines={1}>{t('tc.availTitle')}</Txt>
-                <Txt testID="avail-count" className="text-muted text-[12px] font-bold">{t('tc.availCount', { on: enabledCount, total: 30 })}</Txt>
+                <Txt testID="avail-count" className="text-muted text-[12px] font-bold">{t('tc.availCount', { on: enabledCount, total: FX_IDS.length })}</Txt>
                 <Pressable testID="avail-close" accessibilityRole="button" accessibilityLabel={t('common.close')} onPress={cancel} hitSlop={8} className="w-8 h-8 rounded-full bg-surface2 items-center justify-center"><Icon name="close" size={18} /></Pressable>
               </View>
-              <View className="flex-row items-center gap-2 flex-wrap mt-1">
-                <Button testID="avail-safe" size="sm" variant="soft" title={t('tc.safeOnly')} onPress={safeOnly} />
-                <Button testID="avail-all" size="sm" variant="soft" title={t('tc.enableAll')} onPress={enableAll} />
-                <Button testID="avail-reset" size="sm" variant="soft" title={t('tc.resetDefaults')} onPress={reset} />
+              {/* One checkbox per type of animation: it checks / unchecks every animation of the type (a dash = only some are on). */}
+              <View testID="avail-tiers" className="rounded-xl bg-surface2 mt-1 overflow-hidden">
+                {TIER_ORDER.map((tier, i) => {
+                  const st = tierState(tier, avail);
+                  const total = TIERS[tier].length;
+                  const n = TIERS[tier].filter((id) => avail.enabled.has(id)).length;
+                  return (
+                    <Pressable key={tier} testID={`avail-tier-check-${tier}`} accessibilityRole="checkbox" accessibilityLabel={t(`tc.tier.${tier}`)} accessibilityState={{ checked: st === 'all' ? true : st === 'some' ? 'mixed' : false }} onPress={() => tapTier(tier)}
+                      className={`flex-row items-center gap-3 px-3 ${i > 0 ? 'border-t border-line' : ''}`} style={{ minHeight: 46 }}>
+                      <Checkbox testID={`avail-tier-box-${tier}`} label={t(`tc.tier.${tier}`)} state={st === 'all' ? true : st === 'some' ? 'mixed' : false} onPress={() => tapTier(tier)} />
+                      <Icon name={TIER_ICON[tier]} size={18} color={TIER_TONE[tier]} />
+                      <Txt className="flex-1 text-[14px] font-bold" numberOfLines={2}>{t(`tc.tier.${tier}`)}</Txt>
+                      <View style={{ width: 38, height: 5, borderRadius: 3, backgroundColor: colors.line, overflow: 'hidden' }}>
+                        <View style={{ width: `${(n / total) * 100}%`, height: 5, backgroundColor: TIER_TONE[tier] }} />
+                      </View>
+                      <Txt testID={`avail-tier-count-${tier}`} className="text-muted text-[12px] font-bold" style={{ minWidth: 38, textAlign: 'center' }}>{n}/{total}</Txt>
+                    </Pressable>
+                  );
+                })}
               </View>
             </View>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, paddingBottom: 24 }} keyboardShouldPersistTaps="handled">

@@ -2,6 +2,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Manipulator from 'expo-image-manipulator';
 import { services } from '@/data/repositories';
 import { backendEnabled } from '@/lib/backend';
+import { optimizeImage } from './imageOptimize';
 import type { PickManyOptions, PickManyResult, PickOptions, PickResult } from './photoTypes';
 
 export type { PickManyOptions, PickManyResult, PickOptions, PickResult } from './photoTypes';
@@ -17,27 +18,17 @@ async function cameraAllowed(): Promise<boolean> {
   return (await ImagePicker.requestCameraPermissionsAsync()).granted;
 }
 
-/** Downscale one picked asset and turn it into what the app stores (a data URL with the backend, an uploaded URL otherwise). */
+/** Optimise one picked asset and turn it into what the app stores (an optimised data URL with the backend, an uploaded URL otherwise). */
 async function processAsset(asset: ImagePicker.ImagePickerAsset, options: PickOptions): Promise<string> {
+  const purpose = options.purpose ?? (options.preserveTransparency ? 'asset' : 'photo');
+  // With the backend, send the optimised bytes: the server stores them in media storage (R2) and keeps only the /api/media URL.
+  // A device-local file:// path would mean nothing to the server or to other devices.
+  if (backendEnabled) return optimizeImage(asset.uri, purpose, null);
   let uri = asset.uri;
   try {
     const out = await Manipulator.manipulateAsync(uri, asset.width > 1024 ? [{ resize: { width: 1024 } }] : [], { compress: 0.6, format: options.preserveTransparency ? Manipulator.SaveFormat.PNG : Manipulator.SaveFormat.JPEG });
     uri = out.uri;
   } catch { /* keep original */ }
-  // With the backend, send the (downscaled) bytes: the server stores them in media storage (R2) and keeps only the
-  // /api/media URL. A device-local file:// path would mean nothing to the server or to other devices.
-  if (backendEnabled) {
-    const { File } = await import('expo-file-system');
-    const png = !!options.preserveTransparency;
-    let base64 = await new File(uri).base64();
-    let type = png ? 'png' : 'jpeg';
-    // One request carries at most ~4 MB: a bigger picture is re-encoded (WebP keeps transparency) and shrunk until it fits.
-    for (let width = 1024; base64.length > 3.2 * 1024 * 1024 && width >= 256; width = Math.round(width * 0.75)) {
-      const out = await Manipulator.manipulateAsync(uri, [{ resize: { width } }], { compress: 0.7, format: Manipulator.SaveFormat.WEBP });
-      base64 = await new File(out.uri).base64(); type = 'webp';
-    }
-    return `data:image/${type};base64,${base64}`;
-  }
   return services.upload.upload(uri, 'photos');
 }
 

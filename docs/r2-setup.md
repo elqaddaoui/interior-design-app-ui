@@ -36,7 +36,7 @@ JPEG, WebP, GIF, AVIF, SVG (admin inline uploads only), MP4, WebM and QuickTime.
    - connect a **custom domain** (recommended, e.g. `media.example.com`; it is cached by Cloudflare's CDN), or
    - enable the **r2.dev subdomain** (rate-limited; fine for testing).
    That public URL is `R2_PUBLIC_BASE_URL`, with no trailing slash.
-3. Bucket → **Settings** → **CORS policy**. This is needed for direct (presigned) uploads from the browser:
+3. Bucket → **Settings** → **CORS policy**. This is needed for direct (presigned) uploads from the browser, and `GET` also lets the admin's **Performance > Video preview** read the card pictures to render the MP4 loops (the browser refuses to encode pictures served without CORS headers):
 
 ```json
 [

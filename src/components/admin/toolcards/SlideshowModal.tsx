@@ -16,7 +16,7 @@ import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { LANGS, useL, useT } from '@/i18n';
 import { HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, HOLD_MAX, HOLD_MIN, HOLD_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP, cleanFx, clampHold, clampSpeed, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
-import { FX_FADE, effectiveEffect, enabledIds, resolveAvail } from '@/lib/toolCardFx';
+import { FX_FADE, FX_IDS, effectiveEffect, enabledIds, resolveAvail } from '@/lib/toolCardFx';
 import { useStore } from '@/store/useStore';
 import { useTheme, ThemeScope } from '@/theme/ThemeProvider';
 import { PRESETS } from '@/theme/presets';
@@ -87,7 +87,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const themeCfg = useMemo(() => ({ active: simTheme, custom: {} }), [simTheme]);
   const [popup, setPopup] = useState(false);
   const [availOpen, setAvailOpen] = useState(false);
-  // Aspect ratio (width / height) of the image zone, measured from the live preview: uploaded pictures are cropped to it.
+  // Aspect ratio (width / height) of the image zone, measured from the live preview: shown to the admin as a hint only (uploaded pictures are never cropped).
   const [previewW, setPreviewW] = useState(360);
   const ratio = previewW / Math.max(1, imageHeight(global.height, global.textPlacement === 'inside', 72));
   const [effectNow, setEffectNow] = useState(-1);
@@ -149,7 +149,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
                     <Pressable testID="tc-availability" accessibilityRole="button" onPress={() => setAvailOpen(true)} className="flex-row items-center gap-2 px-4 h-11 rounded-xl bg-surface2">
                       <Icon name="tune-variant" size={18} tone="primary" />
                       <Txt className="flex-1 font-semibold text-[14px]" numberOfLines={1}>{t('tc.availOpen')}</Txt>
-                      <Txt className="text-muted text-[12px] font-bold">{t('tc.availCount', { on: avail.enabled.size, total: 30 })}</Txt>
+                      <Txt className="text-muted text-[12px] font-bold">{t('tc.availCount', { on: avail.enabled.size, total: FX_IDS.length })}</Txt>
                     </Pressable>
                   </Row>
                 </Group>

@@ -6,8 +6,11 @@
  *   2. at q = 1 the container covers the whole card (BACK fully covers FRONT, no seam / split frame), at q = 0 it shows nothing;
  *   3. the counter-scale never exceeds 5x; the effect resolution (disabled / low-end fallbacks) follows the rules.
  */
-import { SPEED_MAX, SPEED_MIN, HOLD_MAX, HOLD_MIN, FX, FX_FADE, FX_IDS, TIERS, DEFAULT_ENABLED, DEFAULT_LOW_END, cropToRatio, effectiveEffect, layerFrame, layerGeometry, makeCfg, nearestSafe, resolveAvail, verdictOf, ease, type Cfg } from '../src/lib/toolCardFx';
+import { TIER_ORDER, tierState, toggleTier } from '../src/lib/toolCardFx';
+import { SPEED_MAX, SPEED_MIN, HOLD_MAX, HOLD_MIN, FX, FX_FADE, FX_IDS, TIERS, DEFAULT_ENABLED, DEFAULT_LOW_END, cropToRatio, effectiveEffect, BADGE_D, badgeAt, badgeCount, extraBase, layerFrame, layerGeometry, makeCfg, nearestSafe, resolveAvail, verdictOf, ease, type Cfg } from '../src/lib/toolCardFx';
 
+import { planTimeline, frames, videoSize, videoSignature, videoStatus, shouldPlayVideo } from '../src/lib/cardVideoPlan';
+import { fitSide, fallbackFormat, alreadyOptimized, isRasterToOptimize, dataUrlMime, PRESETS } from '../src/lib/imageOptimizeCore';
 import { resolveFx, resolveGlobal, cleanFx } from '../src/lib/toolCards';
 import { EVIDENCE_TTL_MS, JANKY_AVG_MS, WARMUP_FRAMES, addOutcome, classifyDevice, judgeTransition, measuredVerdict, shouldRecord, type DeviceSignals, type Evidence } from '../src/lib/deviceTier';
 
@@ -86,20 +89,41 @@ for (const [W, H] of SIZES) for (const pr of [1, 2, 2.75, 3]) for (const rtl of 
   const sm = mul(T(geo.box.left, geo.box.top), matrixOf(start.ct as any[], bo.x, bo.y));
   if (cfg.k === 1) for (const [x, y] of [[0, 0], [W, 0], [0, H], [W, H]]) { const l = inv(sm, x, y); assert(!(l.x >= 0 && l.x <= bw && l.y >= 0 && l.y <= bh), `fx ${id} ${W}x${H} rtl=${rtl}: START shows corner (${x},${y})`); }
 }
-console.log(`photo stays pixel-aligned: ${checked} frames checked (${SIZES.length} sizes x 4 pixel ratios x LTR/RTL x 31 effects)`);
+console.log(`photo stays pixel-aligned: ${checked} frames checked (${SIZES.length} sizes x 4 pixel ratios x LTR/RTL x 40 effects)`);
 
-// Catalogue: tiers partition the 30 effects and match the specified defaults.
-assert.deepEqual([...TIERS.safe, ...TIERS.medium, ...TIERS.heavy].sort((a, b) => a - b), FX_IDS);
+// Catalogue: tiers partition the 39 effects and match the specified defaults.
+assert.deepEqual([...TIERS.safe, ...TIERS.medium, ...TIERS.heavy, ...TIERS.creative].sort((a, b) => a - b), FX_IDS);
 assert.deepEqual(TIERS.safe, [1, 2, 3, 4, 8, 9, 10, 11, 14, 15, 16, 17, 18]);
 assert.deepEqual(TIERS.medium, [5, 6, 7, 12, 13, 19, 20, 21]);
 assert.deepEqual(TIERS.heavy, [22, 23, 24, 25, 26, 27, 28, 29, 30]);
+assert.deepEqual(TIERS.creative, [31, 32, 33, 34, 35, 36, 37, 38, 39]);
+assert.equal(FX_IDS.length, 39);
 assert.deepEqual(DEFAULT_ENABLED, [...TIERS.safe, ...TIERS.medium].sort((a, b) => a - b));
 assert.deepEqual(DEFAULT_LOW_END, [...TIERS.safe].sort((a, b) => a - b));
 for (const [id, a] of [[1, 0], [2, 180], [3, 90], [4, -90], [5, 35], [6, -35], [7, 62], [8, 0], [9, 0], [10, 0], [11, 0], [12, 35], [13, 0], [14, 0], [15, 0]] as const) assert.equal(FX[id].angle, a, `fx ${id} angle`);
 assert.equal(FX[13].swingFrom, 28); assert.equal(FX[14].ease, 'back'); assert.equal(FX[15].ease, 'expo');
 assert.deepEqual([FX[16].sx, FX[16].sy, FX[17].sx, FX[17].sy], [true, false, false, true]);
 assert.deepEqual([FX[20].ox, FX[20].oy, FX[21].ox, FX[21].oy], [0, 1, 1, 0]);
-console.log('catalogue: 30 effects, tiers and defaults match the spec');
+// Creative tier: every effect has badges, they stay inside / on the window maths and are pure functions of p.
+for (const id of TIERS.creative) {
+  const def = FX[id]; assert.equal(def.tier, 'creative'); assert(badgeCount(def.extra) >= 1, `fx ${id} has badges`);
+  for (const rtl of [false, true]) for (const [W, H] of [[360, 225], [320, 180], [600, 300]]) {
+    const cfg = makeCfg(def, rtl);
+    for (let i = 0; i < badgeCount(def.extra); i++) {
+      let seen = 0;
+      for (let k = 0; k <= 40; k++) {
+        const p = k / 40, b = badgeAt(def.extra, cfg, W, H, p, i), b2 = badgeAt(def.extra, cfg, W, H, p, i);
+        assert.deepEqual(b, b2, 'pure'); assert(Number.isFinite(b.x + b.y + b.s + b.r + b.o) && b.o >= 0 && b.o <= 1 && b.s >= 0, `fx ${id} badge finite`);
+        if (b.o > 0.05 && b.x > -BADGE_D && b.x < W + BADGE_D && b.y > -BADGE_D && b.y < H + BADGE_D) seen++;
+      }
+      assert(seen >= 4, `fx ${id} badge ${i} is visible on the card for part of the transition (${seen})`);
+    }
+  }
+}
+assert.equal(extraBase('starKnob'), 'line'); assert.equal(extraBase('starBurst'), 'ring'); assert.equal(extraBase('starFrame'), 'frame'); assert.equal(extraBase('cornerStar'), 'none'); assert.equal(extraBase('doorsH'), 'doorsH');
+assert.equal(badgeCount('line'), 0);
+console.log('creative tier: 9 star-badge effects visible, finite and pure');
+console.log('catalogue: 39 effects, tiers and defaults match the spec');
 
 // RTL mirrors every horizontal direction.
 assert.equal(makeCfg(FX[1], true).a1, 180); assert.equal(makeCfg(FX[2], true).a1, 0);
@@ -192,3 +216,62 @@ assert.equal(measuredVerdict(ev, T0 + EVIDENCE_TTL_MS + 1), 'unknown', 'evidence
 assert.equal(measuredVerdict(ev, T0 - 3_600_000), 'unknown', 'a clock that went backwards invalidates it');
 assert.deepEqual(addOutcome(ev, 'smooth', T0 + EVIDENCE_TTL_MS + 5)?.runs, [false], 'expired evidence starts over');
 console.log('device: hardware, preference and measurement rules ok');
+
+// ---------------------------------------------------------------- tier checkboxes (Admin > Tools > availability)
+{
+  const base = resolveAvail(undefined);
+  assert.equal(tierState('safe', base), 'all'); assert.equal(tierState('medium', base), 'all'); assert.equal(tierState('heavy', base), 'none');
+  const heavyOn = toggleTier('heavy', base);
+  assert.equal(tierState('heavy', heavyOn), 'all', 'none -> all on');
+  assert.equal(tierState('safe', heavyOn), 'all', 'other tiers untouched');
+  const heavyOff = toggleTier('heavy', heavyOn);
+  assert.equal(tierState('heavy', heavyOff), 'none', 'all -> all off');
+  const some = { enabled: new Set(base.enabled), lowEnd: new Set(base.lowEnd) }; some.enabled.delete(TIERS.medium[0]);
+  assert.equal(tierState('medium', some), 'some'); assert.equal(tierState('medium', toggleTier('medium', some)), 'all', 'some -> all on');
+  const off = toggleTier('safe', base);
+  assert(TIERS.safe.every((id) => !off.lowEnd.has(id)), 'switching a tier off removes its low-end permission');
+  assert.equal(TIER_ORDER.length, 4); assert.equal(tierState('creative', base), 'none', 'creative is off by default');
+  console.log('tiers: tri-state checkbox rules ok');
+}
+
+// ---------------------------------------------------------------- pre-rendered card video
+{
+  const effects = [1, 5, 22];
+  const plan = planTimeline(3, effects, 0.9, 1);
+  assert.equal(plan.segments.length, 6, 'hold + transition per picture');
+  assert.equal(plan.segments[plan.segments.length - 1].to, 0, 'the loop ends on picture 0 (seamless)');
+  assert.equal(plan.segments[0].kind, 'hold'); assert.equal(plan.segments[0].from, 0, 'starts on a hold of picture 0');
+  assert.deepEqual(plan.segments.filter((x) => x.kind === 'transition').map((x) => x.effect), effects, 'one effect per picture, in order');
+  const all = [...frames(plan)];
+  assert.equal(all.length, plan.frames);
+  const last = all[all.length - 1];
+  assert(last.seg.kind === 'transition' && last.u === 1, 'the last frame is the new picture exactly');
+  assert(all.every((f, i) => i === 0 || f.t >= all[i - 1].t), 'timestamps never go backwards');
+  assert(Math.abs(last.t + last.dur - plan.duration) < 1e-6, 'frames fill the whole duration');
+  assert.equal(planTimeline(1, effects, 0.9, 1).frames, 0, 'one picture cannot animate'); assert.equal(planTimeline(3, [], 0.9, 1).frames, 0);
+  assert.equal(planTimeline(2, [1], 0, 1).segments.every((x) => x.kind === 'transition'), true, 'hold 0 = no hold segments');
+  for (const r of [0.4, 1, 1.6, 2.2, 9, NaN]) { const v = videoSize(r); assert(v.width % 2 === 0 && v.height % 2 === 0, `even size for ${r}`); }
+  const sig = videoSignature(['a', 'b'], [1, 2], 0.9, 1);
+  assert.equal(sig, videoSignature(['a', 'b'], [1, 2], 0.9, 1)); 
+  for (const other of [videoSignature(['b', 'a'], [1, 2], 0.9, 1), videoSignature(['a', 'b'], [1, 3], 0.9, 1), videoSignature(['a', 'b'], [1, 2], 1.0, 1), videoSignature(['a', 'b'], [1, 2], 0.9, 1.5)]) assert(other !== sig, 'any change outdates the video');
+  assert(videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, true) !== sig, 'turning the extras option on outdates the video'); assert.equal(videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false), sig, 'extras off keeps the old signature');
+  assert.equal(resolveGlobal(undefined).videoExtras, false); assert.equal(resolveGlobal({ videoExtras: true }).videoExtras, true);
+  assert.equal(videoStatus(undefined, undefined, sig), 'none'); assert.equal(videoStatus('v', sig, sig), 'ready'); assert.equal(videoStatus('v', 'x', sig), 'outdated');
+  assert.equal(shouldPlayVideo('lowEnd', true, true), true); assert.equal(shouldPlayVideo('lowEnd', false, true), false, 'high-end keeps the live animation');
+  assert.equal(shouldPlayVideo('always', false, true), true); assert.equal(shouldPlayVideo('off', true, true), false); assert.equal(shouldPlayVideo('always', true, false), false, 'no valid video: live engine');
+  assert.equal(resolveGlobal(undefined).videoMode, 'lowEnd'); assert.equal(resolveGlobal({ videoMode: 'always' }).videoMode, 'always'); assert.equal(resolveGlobal({ videoMode: 'nope' as never }).videoMode, 'lowEnd');
+  console.log('video: timeline, loop, signature and playback rules ok');
+}
+
+// ---------------------------------------------------------------- image optimiser rules
+{
+  assert.deepEqual(fitSide(4000, 3000, 1280), { width: 1280, height: 960, scale: 0.32 });
+  assert.deepEqual(fitSide(500, 300, 1280), { width: 500, height: 300, scale: 1 }); // never enlarged
+  assert.deepEqual(fitSide(0, 10, 100), { width: 0, height: 0, scale: 1 });
+  assert.equal(fallbackFormat('webp', false, true), 'webp'); assert.equal(fallbackFormat('webp', true, false), 'png'); assert.equal(fallbackFormat('webp', false, false), 'jpeg'); assert.equal(fallbackFormat('jpeg', false, true), 'jpeg');
+  assert.equal(alreadyOptimized('image/webp', 800, 500, 90_000, 'card'), true); assert.equal(alreadyOptimized('image/webp', 3000, 2000, 90_000, 'card'), false, 'too large');
+  assert.equal(alreadyOptimized('image/png', 100, 100, 1000, 'card'), false, 'PNG is always re-encoded'); assert.equal(isRasterToOptimize('image/gif'), false); assert.equal(isRasterToOptimize('image/svg+xml'), false); assert.equal(isRasterToOptimize('image/png'), true);
+  assert.equal(dataUrlMime('data:image/PNG;base64,AAA'), 'image/png');
+  for (const p of Object.values(PRESETS)) assert(p.maxSide >= 512 && p.quality > 0.5 && p.quality <= 1);
+  console.log('images: optimiser rules ok');
+}

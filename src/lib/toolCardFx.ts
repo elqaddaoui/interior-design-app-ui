@@ -17,11 +17,13 @@ import type { ViewStyle } from 'react-native';
 import type { ToolCardsGlobal } from '@/data/types';
 
 /* ------------------------------ catalogue ------------------------------ */
-export type Tier = 'safe' | 'medium' | 'heavy';
+export type Tier = 'safe' | 'medium' | 'heavy' | 'creative';
 export type Kind = 'fade' | 'wipe' | 'rect' | 'circle';
 export type Ease = 'inOut' | 'back' | 'expo';
 /** Small decorative views riding the same progress. Optional: skipped on low-end devices. */
-export type Extra = 'none' | 'line' | 'knob' | 'glow' | 'colorbar' | 'sparkle' | 'shine' | 'doorsH' | 'doorsV' | 'frame' | 'ring' | 'flash';
+export type Extra = 'none' | 'line' | 'knob' | 'glow' | 'colorbar' | 'sparkle' | 'shine' | 'doorsH' | 'doorsV' | 'frame' | 'ring' | 'flash'
+  // Creative tier: small white badges with a star inside, riding the window (see `badgeAt`).
+  | 'starKnob' | 'starTrail' | 'starBurst' | 'orbit' | 'starFrame' | 'cornerStar';
 
 export interface FxDef {
   id: number; kind: Kind; tier: Tier; extra: Extra; ease: Ease;
@@ -35,7 +37,7 @@ export interface FxDef {
 
 const wipe = (id: number, tier: Tier, angle: number, extra: Extra = 'line', more: Partial<FxDef> = {}): FxDef => ({ id, kind: 'wipe', tier, angle, extra, ease: 'inOut', ...more });
 const rect = (id: number, tier: Tier, sx: boolean, sy: boolean, ox: number, oy: number, extra: Extra = 'none'): FxDef => ({ id, kind: 'rect', tier, sx, sy, ox, oy, extra, ease: 'inOut' });
-const circle = (id: number, ox: number, oy: number, extra: Extra = 'none'): FxDef => ({ id, kind: 'circle', tier: 'heavy', ox, oy, extra, ease: 'inOut' });
+const circle = (id: number, ox: number, oy: number, extra: Extra = 'none', tier: Tier = 'heavy'): FxDef => ({ id, kind: 'circle', tier, ox, oy, extra, ease: 'inOut' });
 
 /** id 0 = cross-fade: always enabled, cannot be turned off, used whenever a chosen effect is disabled or not allowed. */
 export const FX: Record<number, FxDef> = {
@@ -52,26 +54,34 @@ export const FX: Record<number, FxDef> = {
   20: rect(20, 'medium', true, true, 0, 1), 21: rect(21, 'medium', true, true, 1, 0),
   22: circle(22, 0.5, 0.5), 23: circle(23, 0.5, 0.5, 'ring'), 24: circle(24, 0.5, 0.5, 'flash'),
   25: circle(25, 0, 0), 26: circle(26, 1, 1), 27: circle(27, 0, 0.5), 28: circle(28, 1, 0.5), 29: circle(29, 0.5, 0), 30: circle(30, 0.5, 1),
+  // Creative: the same window maths as the other tiers + a clean badge (white circle, star inside) that rides the window.
+  31: wipe(31, 'creative', 0, 'starKnob'), 32: wipe(32, 'creative', 90, 'starKnob'),
+  33: wipe(33, 'creative', 35, 'starTrail'), 34: wipe(34, 'creative', -90, 'starTrail'),
+  35: circle(35, 0.5, 0.5, 'starBurst', 'creative'), 36: circle(36, 0.5, 0.5, 'orbit', 'creative'),
+  37: rect(37, 'creative', true, true, 0.5, 0.5, 'starFrame'),
+  38: rect(38, 'creative', true, true, 0, 1, 'cornerStar'), 39: rect(39, 'creative', true, true, 1, 0, 'cornerStar'),
 };
 
-/** The 30 selectable effects (the cross-fade, id 0, is separate: it is always on). */
-export const FX_IDS = Array.from({ length: 30 }, (_, i) => i + 1);
+/** Highest effect id. The selectable effects are 1..FX_MAX (the cross-fade, id 0, is separate: it is always on). */
+export const FX_MAX = 39;
+export const FX_IDS = Array.from({ length: FX_MAX }, (_, i) => i + 1);
 export const FX_FADE = 0;
 export const TIERS: Record<Tier, number[]> = {
   safe: [1, 2, 3, 4, 8, 9, 10, 11, 14, 15, 16, 17, 18],
   medium: [5, 6, 7, 12, 13, 19, 20, 21],
   heavy: [22, 23, 24, 25, 26, 27, 28, 29, 30],
+  creative: [31, 32, 33, 34, 35, 36, 37, 38, 39],
 };
-export const TIER_ORDER: Tier[] = ['safe', 'medium', 'heavy'];
+export const TIER_ORDER: Tier[] = ['safe', 'medium', 'heavy', 'creative'];
 
 /* ------------------------------ availability (admin, global) ------------------------------ */
 export interface FxAvail { enabled: Set<number>; lowEnd: Set<number> }
 
-/** Defaults: Safe + Medium are enabled, only Safe is allowed on low-end devices, Heavy is disabled. */
+/** Defaults: Safe + Medium are enabled, only Safe is allowed on low-end devices, Heavy and Creative are disabled (the admin opts in). */
 export const DEFAULT_ENABLED = [...TIERS.safe, ...TIERS.medium].sort((a, b) => a - b);
 export const DEFAULT_LOW_END = [...TIERS.safe].sort((a, b) => a - b);
 
-const cleanIds = (v: unknown, fallback: number[]) => (Array.isArray(v) ? [...new Set(v.filter((n): n is number => Number.isInteger(n) && n >= 1 && n <= 30))].sort((a, b) => a - b) : fallback);
+const cleanIds = (v: unknown, fallback: number[]) => (Array.isArray(v) ? [...new Set(v.filter((n): n is number => Number.isInteger(n) && n >= 1 && n <= FX_MAX))].sort((a, b) => a - b) : fallback);
 
 /** Stored shape (`settings.toolCards.fxEnabled / fxLowEnd`, plain id lists) -> sets. Missing = defaults. */
 export function resolveAvail(g?: ToolCardsGlobal): FxAvail {
@@ -79,6 +89,25 @@ export function resolveAvail(g?: ToolCardsGlobal): FxAvail {
 }
 export const enabledIds = (a: FxAvail) => FX_IDS.filter((id) => a.enabled.has(id));
 export const availToStored = (a: FxAvail) => ({ fxEnabled: [...a.enabled].sort((x, y) => x - y), fxLowEnd: [...a.lowEnd].sort((x, y) => x - y) });
+
+/* ------------------------------ tier checkboxes (admin) ------------------------------ */
+export type TierState = 'all' | 'some' | 'none';
+/** State of a tier checkbox: every effect of the tier enabled / only some / none. */
+export function tierState(tier: Tier, a: FxAvail): TierState {
+  const on = TIERS[tier].filter((id) => a.enabled.has(id)).length;
+  return on === 0 ? 'none' : on === TIERS[tier].length ? 'all' : 'some';
+}
+/**
+ * Tapping a tier checkbox: when the whole tier is on it is switched off, otherwise (none or some) it is switched fully on.
+ * Switching a tier off also removes its low-end permission (an effect that cannot play at all cannot play on low-end either);
+ * switching it on touches nothing else (the low-end permissions stay exactly as the admin set them).
+ */
+export function toggleTier(tier: Tier, a: FxAvail): FxAvail {
+  const enabled = new Set(a.enabled), lowEnd = new Set(a.lowEnd);
+  if (tierState(tier, a) === 'all') TIERS[tier].forEach((id) => { enabled.delete(id); lowEnd.delete(id); });
+  else TIERS[tier].forEach((id) => enabled.add(id));
+  return { enabled, lowEnd };
+}
 
 /** Nearest ENABLED Safe effect (by id distance, lower id on a tie); 0 (cross-fade) when there is none. */
 export function nearestSafe(id: number, a: FxAvail): number {
@@ -292,6 +321,74 @@ export function layerGeometry(c: Cfg, W: number, H: number): LayerGeo {
     };
   }
   return { box: { position: 'absolute', left: 0, top: 0, width: W, height: H, overflow: 'hidden' }, inner: { ...photo, left: 0, top: 0 } };
+}
+
+/* ------------------------------ creative badges ------------------------------ */
+/** Diameter of a creative badge (white circle with a star inside), in card pixels. */
+export const BADGE_D = 30;
+
+/** One badge at progress `p`: centre (card pixels), scale, opacity, star rotation (degrees). */
+export interface Badge { x: number; y: number; s: number; o: number; r: number }
+
+/** How many badges an extra shows (0 for every non-creative extra). */
+export function badgeCount(x: Extra): number {
+  return x === 'starTrail' ? 3 : x === 'starFrame' ? 4 : x === 'starKnob' || x === 'starBurst' || x === 'orbit' || x === 'cornerStar' ? 1 : 0;
+}
+
+/** The classic extra a creative extra is drawn on top of (edge line, iris ring, zoom frame); any other extra is its own base. */
+export function extraBase(x: Extra): Extra {
+  return x === 'starKnob' || x === 'starTrail' ? 'line' : x === 'starBurst' || x === 'orbit' ? 'ring' : x === 'starFrame' ? 'frame' : x === 'cornerStar' ? 'none' : x;
+}
+
+/**
+ * Badge `i` of the creative extra `x` at progress `p`, from scratch every frame (pure, UI-thread safe: no allocations beyond one small object).
+ * It uses the very same maths as the window it rides (wipe edge / iris ring / growing rect), so it can never drift from it, and only moves
+ * through transform + opacity: no layout, no mask, no blur.
+ *   starKnob    centre of the wipe edge, star turning
+ *   starTrail   three small badges spread along the wipe edge, pulsing one after the other
+ *   starBurst   pops at the iris origin, then fades
+ *   orbit       travels around the iris ring while it grows
+ *   starFrame   the four corners of the zooming frame
+ *   cornerStar  the corner of the growing window that moves
+ */
+export function badgeAt(x: Extra, c: Cfg, W: number, H: number, p: number, i: number): Badge {
+  'worklet';
+  const q = ease(c.e, p);
+  const e = q < 0 ? 0 : q > 1 ? 1 : q;
+  const s = MIN_SCALE + (1 - MIN_SCALE) * e;
+  const ramp = Math.min(1, e / FADE_IN) * (1 - Math.min(1, Math.max(0, (e - (1 - FADE_IN)) / FADE_IN)));
+  const ox = Math.round(c.ox * W), oy = Math.round(c.oy * H);
+  const pp = p < 0 ? 0 : p > 1 ? 1 : p;
+  if (x === 'starKnob' || x === 'starTrail') {
+    const R = Math.ceil(Math.sqrt(W * W + H * H) / 2) + 4;
+    const d = -R + 2 * R * q;
+    const a = ((c.a0 + (c.a1 - c.a0) * e) * Math.PI) / 180;
+    const ar = (c.a1 * Math.PI) / 180;
+    // Extent of the card along the wipe edge: the badges are spread over 30% of it on each side.
+    const extent = Math.abs(Math.sin(ar)) * W + Math.abs(Math.cos(ar)) * H;
+    const dy = x === 'starKnob' ? 0 : (i - 1) * 0.3 * extent;
+    const px = Math.round(W / 2), py = Math.round(H / 2);
+    return {
+      x: px + Math.cos(a) * d - Math.sin(a) * dy, y: py + Math.sin(a) * d + Math.cos(a) * dy,
+      s: x === 'starKnob' ? 1 : 0.8 + 0.2 * Math.sin(2 * Math.PI * (pp * 1.5 + i / 3)), o: 1, r: 240 * pp + i * 40,
+    };
+  }
+  if (x === 'starBurst') return { x: ox, y: oy, s: 1.1 * Math.sin(Math.PI * e), o: Math.min(1, 2 * Math.sin(Math.PI * e)), r: 180 * e };
+  if (x === 'orbit') {
+    const far = Math.max(Math.sqrt(ox * ox + oy * oy), Math.sqrt((W - ox) * (W - ox) + oy * oy), Math.sqrt(ox * ox + (H - oy) * (H - oy)), Math.sqrt((W - ox) * (W - ox) + (H - oy) * (H - oy)));
+    const r = (Math.ceil(far) + 4) * s; // = radius of the iris window: the circle container has diameter 2 x ceil(far) + 8
+    const th = ((-90 + 300 * pp) * Math.PI) / 180;
+    return { x: ox + Math.cos(th) * r, y: oy + Math.sin(th) * r, s: 1, o: ramp, r: 360 * pp };
+  }
+  if (x === 'starFrame') {
+    const cx = i % 2 ? W : 0, cy = i >= 2 ? H : 0;
+    return { x: ox + s * (cx - ox), y: oy + s * (cy - oy), s: 0.8, o: ramp, r: (i % 2 ? 90 : -90) * e };
+  }
+  if (x === 'cornerStar') {
+    const cx = c.ox < 0.5 ? W : 0, cy = c.oy < 0.5 ? H : 0;
+    return { x: ox + s * (cx - ox), y: oy + s * (cy - oy), s: 1, o: ramp, r: 360 * e };
+  }
+  return { x: 0, y: 0, s: 0, o: 0, r: 0 };
 }
 
 /* ------------------------------ image crop ------------------------------ */
