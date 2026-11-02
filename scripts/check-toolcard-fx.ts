@@ -6,7 +6,10 @@
  *   2. at q = 1 the container covers the whole card (BACK fully covers FRONT, no seam / split frame), at q = 0 it shows nothing;
  *   3. the counter-scale never exceeds 5x; the effect resolution (disabled / low-end fallbacks) follows the rules.
  */
-import { FX, FX_FADE, FX_IDS, TIERS, DEFAULT_ENABLED, DEFAULT_LOW_END, cropToRatio, effectiveEffect, layerFrame, layerGeometry, makeCfg, nearestSafe, resolveAvail, verdictOf, ease, type Cfg } from '../src/lib/toolCardFx';
+import { SPEED_MAX, SPEED_MIN, HOLD_MAX, HOLD_MIN, FX, FX_FADE, FX_IDS, TIERS, DEFAULT_ENABLED, DEFAULT_LOW_END, cropToRatio, effectiveEffect, layerFrame, layerGeometry, makeCfg, nearestSafe, resolveAvail, verdictOf, ease, type Cfg } from '../src/lib/toolCardFx';
+
+import { resolveFx, resolveGlobal, cleanFx } from '../src/lib/toolCards';
+import { EVIDENCE_TTL_MS, JANKY_AVG_MS, WARMUP_FRAMES, addOutcome, classifyDevice, judgeTransition, measuredVerdict, shouldRecord, type DeviceSignals, type Evidence } from '../src/lib/deviceTier';
 
 /** Tiny strict assertions (the project has no Node typings, so `node:assert` is not imported). */
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -127,3 +130,65 @@ assert.equal(verdictOf(16.7, 0), 'smooth'); assert.equal(verdictOf(24, 0.1), 'bo
 assert.deepEqual(cropToRatio(1000, 1000, 2), { originX: 0, originY: 250, width: 1000, height: 500 });
 assert.deepEqual(cropToRatio(2000, 500, 1.5), { originX: 625, originY: 0, width: 750, height: 500 });
 console.log('easing, verdicts and crop: ok');
+
+// Pause may be 0, speed may not go under 0.2; stored garbage is clamped, never trusted.
+assert.equal(HOLD_MIN, 0); assert.equal(SPEED_MIN, 0.2);
+assert.equal(resolveFx({ hold: 0 }).hold, 0, 'a pause of 0 is kept (not replaced by the default)');
+assert.equal(resolveFx({ hold: -4 }).hold, 0); assert.equal(resolveFx({ hold: 99 }).hold, HOLD_MAX);
+assert.equal(resolveFx({ speed: 0 }).speed, SPEED_MIN); assert.equal(resolveFx({ speed: 0.2 }).speed, 0.2); assert.equal(resolveFx({ speed: 7 }).speed, SPEED_MAX);
+assert.equal(resolveFx({ speed: 0.30000000000000004 }).speed, 0.3);
+assert.equal(resolveFx({}).hold, 0.9); assert.equal(resolveFx({}).speed, 1); assert.equal(resolveFx({ pause: 0 }).hold, 0, 'the legacy pause key is read too');
+assert.equal(resolveFx({ hold: Number.NaN }).hold, 0.9);
+console.log('timing: pause min 0, speed min 0.2, clamped');
+
+// Text placement is global: read from settings.toolCards, never from a card; a legacy per-card value is dropped.
+assert.equal(resolveGlobal(undefined).textPlacement, 'inside'); assert.equal(resolveGlobal({ textPlacement: 'outside' }).textPlacement, 'outside');
+assert.equal(resolveGlobal({ textPlacement: 'x' as never }).textPlacement, 'inside');
+assert(!('textPlacement' in cleanFx({ textPlacement: 'outside', hold: 1 } as never)), 'per-card textPlacement is dropped');
+assert.equal(('textPlacement' in resolveFx({ textPlacement: 'outside' } as never)), false);
+console.log('layout: text placement is global');
+
+// Device classification.
+const GB = 1024 ** 3;
+const sig = (o: Partial<DeviceSignals>): DeviceSignals => ({ platform: 'android', memoryBytes: 8 * GB, cores: null, apiLevel: 34, is64bit: true, reducedMotion: false, saveData: false, ...o });
+const cls = (o: Partial<DeviceSignals>, m: 'janky' | 'smooth' | 'unknown' = 'unknown') => classifyDevice(sig(o), m);
+assert.equal(cls({}).low, false, 'a modern Android phone is NOT low-end (the old year-class rule said it was)');
+assert.equal(cls({ memoryBytes: 6 * GB, apiLevel: 33 }).low, false);
+assert.equal(cls({ memoryBytes: 3.7 * GB, apiLevel: 33 }).low, false, 'a 4 GB phone (reports ~3.7 GB) is a normal phone');
+assert.equal(cls({ memoryBytes: 2.8 * GB, apiLevel: 33 }).low, true, '3 GB phone: probation');
+assert.equal(cls({ memoryBytes: 2.8 * GB, apiLevel: 33 }, 'smooth').low, false, '... until it proves smooth');
+assert.equal(cls({ memoryBytes: 1.8 * GB }, 'smooth').low, true, '2 GB phone stays low whatever is measured');
+assert.equal(cls({ memoryBytes: 1.8 * GB }).fixed, true);
+assert.equal(cls({ is64bit: false }).low, true); assert.equal(cls({ is64bit: false }, 'smooth').low, false);
+assert.equal(cls({ apiLevel: 26 }).low, true);
+assert.equal(cls({ reducedMotion: true }, 'smooth').low, true); assert.equal(cls({ reducedMotion: true }).reason, 'reduceMotion');
+assert.equal(cls({ saveData: true }).reason, 'saveData');
+assert.equal(cls({}, 'janky').low, true); assert.equal(cls({}, 'janky').reason, 'measured');
+assert.equal(cls({ platform: 'ios', memoryBytes: 4 * GB, is64bit: true, apiLevel: null }).low, false);
+assert.equal(cls({ platform: 'web', memoryBytes: 8 * GB, cores: 8, apiLevel: null, is64bit: null }).low, false);
+assert.equal(cls({ platform: 'web', memoryBytes: null, cores: null, apiLevel: null, is64bit: null }).low, false, 'a browser that hides its specs is not condemned');
+assert.equal(cls({ platform: 'web', memoryBytes: 2 * GB, cores: 4, apiLevel: null, is64bit: null }).low, true);
+assert.equal(cls({ platform: 'web', memoryBytes: 8 * GB, cores: 2, apiLevel: null, is64bit: null }).low, true);
+assert.equal(shouldRecord(cls({})), true); assert.equal(shouldRecord(cls({ reducedMotion: true })), false); assert.equal(shouldRecord(cls({}, 'janky')), false);
+
+// Evidence: one bad transition never decides; several do; it expires.
+const T0 = 1_000_000_000_000;
+const stat = (avg: number, slow = 0, frames = 40) => ({ frames, sumMs: avg * frames, dropped: slow, slow });
+assert.equal(judgeTransition(stat(16.7)), 'smooth'); assert.equal(judgeTransition(stat(8.3)), 'smooth', '120 Hz screen');
+assert.equal(judgeTransition(stat(JANKY_AVG_MS + 5)), 'janky'); assert.equal(judgeTransition(stat(16.7, 10)), 'janky', '25% slow frames');
+assert.equal(judgeTransition(stat(16.7, 2)), 'smooth', 'a couple of slow frames in 40 are fine');
+assert.equal(judgeTransition(stat(90, 5, 3)), 'skip', 'too few frames to judge');
+assert(WARMUP_FRAMES >= 3);
+let ev: Evidence | null = null;
+ev = addOutcome(ev, 'janky', T0); assert.equal(measuredVerdict(ev, T0), 'unknown', 'one hiccup (cold start) is not a verdict');
+ev = addOutcome(ev, 'janky', T0); assert.equal(measuredVerdict(ev, T0), 'unknown');
+ev = addOutcome(ev, 'janky', T0); assert.equal(measuredVerdict(ev, T0), 'janky', 'three janky transitions demote');
+ev = addOutcome(ev, 'skip', T0); assert.deepEqual(ev?.runs, [true, true, true]);
+let good: Evidence | null = null;
+for (let i = 0; i < 3; i++) good = addOutcome(good, 'smooth', T0); assert.equal(measuredVerdict(good, T0), 'unknown');
+good = addOutcome(good, 'smooth', T0); assert.equal(measuredVerdict(good, T0), 'smooth', 'four smooth transitions promote');
+good = addOutcome(good, 'janky', T0); assert.equal(measuredVerdict(good, T0), 'smooth', 'one stumble after four good ones changes nothing');
+assert.equal(measuredVerdict(ev, T0 + EVIDENCE_TTL_MS + 1), 'unknown', 'evidence expires after a week');
+assert.equal(measuredVerdict(ev, T0 - 3_600_000), 'unknown', 'a clock that went backwards invalidates it');
+assert.deepEqual(addOutcome(ev, 'smooth', T0 + EVIDENCE_TTL_MS + 5)?.runs, [false], 'expired evidence starts over');
+console.log('device: hardware, preference and measurement rules ok');

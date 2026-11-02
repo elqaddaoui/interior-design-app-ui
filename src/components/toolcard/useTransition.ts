@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Easing, cancelAnimation, useFrameCallback, useSharedValue, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { DROP_MS, FADE_CFG, SLOW_MS, type Cfg } from '@/lib/toolCardFx';
+import { WARMUP_FRAMES } from '@/lib/deviceTier';
 
-/** Frame statistics of one transition, measured on the UI thread. */
+/** Frame statistics of one transition, measured on the UI thread (the first WARMUP_FRAMES frames are not counted). */
 export interface PlayStats { frames: number; sumMs: number; dropped: number; slow: number }
 
 /**
@@ -46,9 +47,13 @@ export function useTransition() {
   const slow = useSharedValue(0);
   const done = useRef<((s: PlayStats) => void) | null>(null);
 
+  const seen = useSharedValue(0);
   const meter = useFrameCallback((info) => {
     const dt = info.timeSincePreviousFrame;
     if (dt == null || dt > 500) return; // first frame / a stall (tab hidden): not a measurement
+    // The first frames of a transition pay for layer raster and image upload: they say nothing about the device, so they are not counted.
+    seen.value += 1;
+    if (seen.value <= WARMUP_FRAMES) return;
     frames.value += 1; sum.value += dt;
     if (dt > DROP_MS) dropped.value += 1;
     if (dt > SLOW_MS) slow.value += 1;
@@ -67,7 +72,7 @@ export function useTransition() {
   /** Runs one transition of `ms` milliseconds on the BACK layer; `cb` runs on the JS thread once the roles have been swapped. */
   const play = useCallback((ms: number, cb: (s: PlayStats) => void) => {
     done.current = cb;
-    frames.set(0); sum.set(0); dropped.set(0); slow.set(0);
+    frames.set(0); sum.set(0); dropped.set(0); slow.set(0); seen.set(0);
     active.set(1);
     meter.setActive(true);
     p.set(0);
@@ -79,7 +84,7 @@ export function useTransition() {
       active.value = 0;
       scheduleOnRN(finish, frames.value, sum.value, dropped.value, slow.value);
     }));
-  }, [p, backIdx, active, frames, sum, dropped, slow, meter, finish]);
+  }, [p, backIdx, active, frames, sum, dropped, slow, seen, meter, finish]);
 
   /** Stops the animation and the meter (unmount). A mounted card never cancels mid-transition: it always runs to its end. */
   const cancel = useCallback(() => {

@@ -107,14 +107,26 @@ export function effectiveEffect(id: number, a: FxAvail, lowEnd: boolean): number
 /** One transition lasts TR_BASE / speed seconds; the hold (pause) between two transitions is admin configurable. */
 export const TR_BASE = 0.65;
 export const HOLD_DEFAULT = 0.9;
-export const HOLDS = [0.5, 0.9, 1.5, 2, 3] as const;
-export const SPEEDS = [0.5, 1, 1.5, 2] as const;
+/** Hold between two transitions (seconds): 0 = the next transition starts at once. Continuous range, the admin uses a slider. */
+export const HOLD_MIN = 0;
+export const HOLD_MAX = 5;
+export const HOLD_STEP = 0.1;
+/** Animation speed multiplier: 0.2 = five times slower than the base duration, 2 = twice as fast. */
+export const SPEED_MIN = 0.2;
+export const SPEED_MAX = 2;
+export const SPEED_STEP = 0.1;
+export const SPEED_DEFAULT = 1;
+
+/** Whole tenths (0.1 steps), free of floating point noise (0.30000000000000004). */
+export const roundTenth = (v: number) => Math.round(v * 10) / 10;
+const clampTo = (v: unknown, min: number, max: number, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, roundTenth(v))) : fallback);
+export const clampHold = (v: unknown) => clampTo(v, HOLD_MIN, HOLD_MAX, HOLD_DEFAULT);
+export const clampSpeed = (v: unknown) => clampTo(v, SPEED_MIN, SPEED_MAX, SPEED_DEFAULT);
 
 /** Frame interval above which a frame counts as dropped (~1.5 frames at 60 Hz). */
 export const DROP_MS = 25;
-/** Runtime guard: more than this many frames slower than SLOW_MS inside one transition marks the device as low-end. */
+/** A frame slower than this is "slow" (~2 frames at 60 Hz). */
 export const SLOW_MS = 32;
-export const SLOW_LIMIT = 3;
 
 export type Verdict = 'smooth' | 'borderline' | 'slow';
 /** Benchmark verdict from the average frame time and the share of dropped frames (independent of the display's refresh rate). */

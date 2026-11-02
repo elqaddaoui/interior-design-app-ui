@@ -15,7 +15,7 @@ import { useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { LANGS, useL, useT } from '@/i18n';
-import { HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, HOLDS, SPEEDS, cleanFx, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
+import { HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, HOLD_MAX, HOLD_MIN, HOLD_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP, cleanFx, clampHold, clampSpeed, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
 import { FX_FADE, effectiveEffect, enabledIds, resolveAvail } from '@/lib/toolCardFx';
 import { useStore } from '@/store/useStore';
 import { useTheme, ThemeScope } from '@/theme/ThemeProvider';
@@ -51,7 +51,8 @@ function Group({ title, global, children }: { title: string; global?: boolean; c
 /**
  * "Multiple images" popup of the tools form (Admin > Tools > edit a tool > Multiple images).
  *  - TOP (fixed): the live card, the real <ToolCard/> (same component, language and theme as Home) built from the form's current title / subtitle / media + a status line.
- *  - BOTTOM (scrollable): the pictures, "Applies to all cards" (height, text zone) and "This card" (animation, pause, speed, text placement, gradient).
+ *  - BOTTOM (scrollable): the pictures, "Applies to all cards" (height, text zone, text placement, transition availability) and "This card" (animation, pause, speed, gradient).
+ *  - The popup fills the whole screen height.
  * Per-card changes go straight into the form's media value (`onChange`), so the preview updates at once and the form's own Save stores them in the tool.
  * Global changes go straight into the shared store (the Home cards update live) and are published by "Done".
  */
@@ -88,7 +89,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const [availOpen, setAvailOpen] = useState(false);
   // Aspect ratio (width / height) of the image zone, measured from the live preview: uploaded pictures are cropped to it.
   const [previewW, setPreviewW] = useState(360);
-  const ratio = previewW / Math.max(1, imageHeight(global.height, fx.textPlacement === 'inside', 72));
+  const ratio = previewW / Math.max(1, imageHeight(global.height, global.textPlacement === 'inside', 72));
   const [effectNow, setEffectNow] = useState(-1);
   const onEffect = useCallback((e: number) => setEffectNow(e), []);
 
@@ -96,8 +97,6 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const previewTool = { id: 'slideshow-preview', title: title ?? { dar: '', ar: '', fr: '' }, subtitle: subtitle ?? { dar: '', ar: '', fr: '' }, media, tabId: '', steps: [], modelIds: [], roomGroup: 'interior', order: 0, visible: true } as Tool;
 
   const toggleFx = (id: number) => setFx({ effects: (kept.includes(id) ? kept.filter((x) => x !== id) : [...kept, id]).sort((a, b) => a - b) });
-  const holdOpts: Opt<string>[] = HOLDS.map((h) => ({ key: String(h), label: `${h}s` }));
-  const speedOpts: Opt<string>[] = SPEEDS.map((s) => ({ key: String(s), label: `${s}x` }));
   const gradOpts: Opt<ToolCardGradient>[] = [{ key: 'soft', label: t('tc.soft') }, { key: 'medium', label: t('tc.medium') }, { key: 'strong', label: t('tc.strong') }];
   const single = effectiveEffect(fx.effect, avail, false);
   const animLabel = fx.mode === 'multiple' ? t('tc.choose', { n: kept.length }) : t(`tc.fx.${single}`);
@@ -114,8 +113,9 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   return (
     <Modal visible transparent animationType={tablet ? 'fade' : 'slide'} onRequestClose={cancel} statusBarTranslucent>
       <View style={[themeStyle, { flex: 1 }]}>
-        <Pressable onPress={cancel} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: tablet ? 'center' : 'flex-end', alignItems: 'center' }}>
-          <Pressable onPress={() => {}} testID="slideshow-modal" className={`bg-bg w-full overflow-hidden ${tablet ? 'rounded-2xl max-w-[880px]' : 'rounded-t-2xl'}`} style={{ height: screenH * (tablet ? 0.9 : 0.94), width: tablet ? '92%' : '100%' }}>
+        <Pressable onPress={cancel} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          {/* Full screen height on every device (the width stays comfortable on a tablet / desktop). */}
+          <Pressable onPress={() => {}} testID="slideshow-modal" className={`bg-bg w-full overflow-hidden ${tablet ? 'max-w-[880px]' : ''}`} style={{ height: screenH, width: tablet ? '92%' : '100%' }}>
             {/* ---------- TOP (fixed): header + live preview + status ---------- */}
             <View className="px-3 pt-2 pb-2 border-b border-line bg-bg" style={{ zIndex: 5 }}>
               <View className="flex-row items-center gap-2 mb-2">
@@ -142,6 +142,9 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
                   <Row label={t('tc.textZone')} hint={t('tc.global')}>
                     <Segmented testID="tc-zone" value={global.textZone} options={[{ key: 'top', label: t('tc.top') }, { key: 'bottom', label: t('tc.bottom') }]} onChange={(textZone) => setGlobal({ textZone })} />
                   </Row>
+                  <Row label={t('tc.placement')} hint={t('tc.global')}>
+                    <Segmented testID="tc-placement" value={global.textPlacement} options={[{ key: 'inside', label: t('tc.inside') }, { key: 'outside', label: t('tc.outside') }]} onChange={(textPlacement) => setGlobal({ textPlacement })} />
+                  </Row>
                   <Row label={t('tc.availTitle')} hint={t('tc.global')}>
                     <Pressable testID="tc-availability" accessibilityRole="button" onPress={() => setAvailOpen(true)} className="flex-row items-center gap-2 px-4 h-11 rounded-xl bg-surface2">
                       <Icon name="tune-variant" size={18} tone="primary" />
@@ -161,16 +164,13 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
                       <Icon name="chevron-down" size={20} tone="muted" />
                     </Pressable>
                   </Row>
-                  <Row label={t('tc.pause')}>
-                    <Segmented testID="tc-pause" value={String(fx.hold)} options={holdOpts} onChange={(v) => setFx({ hold: Number(v), pause: undefined })} compact />
+                  <Row label={`${t('tc.pause')}: ${fx.hold}s`}>
+                    <Slider testID="tc-pause" label={t('tc.pause')} value={fx.hold} min={HOLD_MIN} max={HOLD_MAX} step={HOLD_STEP} onChange={(v) => setFx({ hold: clampHold(v), pause: undefined })} />
                   </Row>
-                  <Row label={t('tc.speed')}>
-                    <Segmented testID="tc-speed" value={String(fx.speed)} options={speedOpts} onChange={(v) => setFx({ speed: Number(v) })} compact />
+                  <Row label={`${t('tc.speed')}: ${fx.speed}x`}>
+                    <Slider testID="tc-speed" label={t('tc.speed')} value={fx.speed} min={SPEED_MIN} max={SPEED_MAX} step={SPEED_STEP} onChange={(v) => setFx({ speed: clampSpeed(v) })} />
                   </Row>
-                  <Row label={t('tc.placement')}>
-                    <Segmented testID="tc-placement" value={fx.textPlacement} options={[{ key: 'inside', label: t('tc.inside') }, { key: 'outside', label: t('tc.outside') }]} onChange={(textPlacement) => setFx({ textPlacement })} />
-                  </Row>
-                  <Row label={t('tc.gradient')} dim={fx.textPlacement === 'outside'}>
+                  <Row label={t('tc.gradient')} dim={global.textPlacement === 'outside'}>
                     <Segmented testID="tc-gradient" value={fx.gradient} options={gradOpts} onChange={(gradient) => setFx({ gradient })} />
                   </Row>
                 </Group>

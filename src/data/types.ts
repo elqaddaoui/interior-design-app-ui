@@ -24,6 +24,8 @@ export interface ToolCardsGlobal {
   height?: number;
   /** Where the text zone sits on every card. */
   textZone?: 'top' | 'bottom';
+  /** Text over the picture (gradient) or under / beside it; the same for every card. */
+  textPlacement?: 'inside' | 'outside';
   /** Transition availability (ids 1-30). Enabled = can be chosen and played anywhere; missing = Safe + Medium. */
   fxEnabled?: number[];
   /** Subset of the enabled ids that low-end devices may play (the others play the cross-fade); missing = Safe only. */
@@ -37,13 +39,12 @@ export interface ToolCardFx {
   effects?: number[];
   /** Single mode: the chosen effect id. */
   effect?: number;
-  /** Hold between two transitions, seconds (default 0.9). */
+  /** Hold between two transitions, seconds (0 - 5, default 0.9; 0 = the next transition starts at once). */
   hold?: number;
   /** @deprecated Old name of `hold`; still read when `hold` is missing. */
   pause?: number;
-  /** Animation speed multiplier. */
+  /** Animation speed multiplier (0.2 - 2, default 1). */
   speed?: number;
-  textPlacement?: 'inside' | 'outside';
   gradient?: ToolCardGradient;
 }
 
