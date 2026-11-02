@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
-import { FADE_CFG, FX, FX_FADE, SLOW_LIMIT, TR_BASE, effectiveEffect, enabledIds, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
+import { FADE_CFG, FX, FX_FADE, TR_BASE, effectiveEffect, enabledIds, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
 import { availFromKey, availKey, requestedEffects, type ResolvedFx } from '@/lib/toolCards';
-import { fxLog, markLowEnd, useIsMostVisible, useLowEnd, useOnScreen } from '@/lib/toolCardPerf';
+import { shouldRecord, type DeviceClass } from '@/lib/deviceTier';
+import { fxLog, recordTransition, useDeviceClass, useIsMostVisible, useOnScreen } from '@/lib/toolCardPerf';
 import { RevealStack } from './RevealStack';
 import { useTransition, type PlayStats } from './useTransition';
 
@@ -29,8 +30,8 @@ type Pair<T> = [T, T];
  *
  * Everything the engine mutates outside React lives in `S` (refs), so the callbacks are stable and never go stale.
  */
-function Engine({ images, fx, rtl, run, force, lowEnd, avail, layout, onReady, onEffect }: {
-  images: string[]; fx: ResolvedFx; rtl: boolean; run: boolean; force: boolean; lowEnd: boolean; avail: FxAvail; layout: Size;
+function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, onReady, onEffect }: {
+  images: string[]; fx: ResolvedFx; rtl: boolean; run: boolean; force: boolean; lowEnd: boolean; record: boolean; avail: FxAvail; layout: Size;
   onReady?: () => void; onEffect?: (effect: number) => void;
 }) {
   const { colors } = useTheme();
@@ -59,8 +60,8 @@ function Engine({ images, fx, rtl, run, force, lowEnd, avail, layout, onReady, o
     failed: new Set<string>(), timer: null as ReturnType<typeof setTimeout> | null,
   });
   // Latest props, read by the stable callbacks (written after each commit).
-  const P = useRef({ images, fx, rtl, run, force, lowEnd, avail, lite, onReady, onEffect, size });
-  useLayoutEffect(() => { P.current = { images, fx, rtl, run, force, lowEnd, avail, lite, onReady, onEffect, size }; });
+  const P = useRef({ images, fx, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size });
+  useLayoutEffect(() => { P.current = { images, fx, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size }; });
 
   const reportReady = useCallback(() => { if (!S.current.readyDone) { S.current.readyDone = true; P.current.onReady?.(); } }, []);
 
@@ -161,8 +162,9 @@ function Engine({ images, fx, rtl, run, force, lowEnd, avail, layout, onReady, o
     setExtra(null);
     const avg = stats.frames ? stats.sumMs / stats.frames : 0;
     fxLog(`transition effect ${s.effect}: ${stats.frames} frames, avg ${avg.toFixed(1)} ms, dropped ${stats.dropped}, slow(>32ms) ${stats.slow}`);
-    // Runtime guard: a device that janks is treated as low-end from now on (persisted). The admin preview never trips it.
-    if (!P.current.force && stats.slow > SLOW_LIMIT) markLowEnd(`${stats.slow} slow frames in effect ${s.effect}`);
+    // Evidence for the device classification (lib/deviceTier.ts): one janky transition proves nothing, several in a row do. The admin
+    // preview never counts, and nothing is recorded once the verdict cannot change (see shouldRecord).
+    if (!P.current.force && P.current.record) recordTransition(stats);
     startHold();
     prepare();
   }, [prepare, startHold]);
@@ -222,7 +224,9 @@ export function CardStage({ id, images, fx, rtl, force, onReady, onEffect, style
   const box = useRef<View>(null);
   const { visible, near } = useOnScreen(box, id, !force);
   const most = useIsMostVisible(id);
-  const lowEnd = useLowEnd();
+  const device: DeviceClass = useDeviceClass();
+  const lowEnd = device.low;
+  const record = shouldRecord(device);
   const key = useStore((s) => availKey(s.doc.settings.toolCards));
   const avail = useMemo(() => availFromKey(key), [key]);
   const [layout, setLayout] = useState<Size>({ w: 0, h: 0 });
@@ -240,7 +244,7 @@ export function CardStage({ id, images, fx, rtl, force, onReady, onEffect, style
   return (
     <View ref={box} style={[{ overflow: 'hidden' }, style]} onLayout={onLayout}>
       {near && images.length > 0 && layout.w > 0 ? (
-        <Engine key={sig} images={images} fx={fx} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
+        <Engine key={sig} images={images} fx={fx} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} record={record} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
       ) : null}
     </View>
   );
