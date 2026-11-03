@@ -14,6 +14,7 @@
  */
 import { MIN_SCALE, ease, farCorners, decoAt, wipeR, type Badge, type Cfg, type CfgOverride, type Deco, type FxDef, type Path, type Shape } from './toolCardFx';
 import { hash } from './cardVideoPlan';
+import type { SavedPreset } from '../data/types';
 
 /* ------------------------------ model ------------------------------ */
 export type EaseKey = 'auto' | 'inOut' | 'back' | 'expo' | 'elastic' | 'bounce' | 'snap' | 'bezier' | 'spring' | 'linear' | 'anticipate' | 'steps';
@@ -468,4 +469,80 @@ export const exportStudio = (s: StudioStyle) => JSON.stringify(cleanStudio(s), n
 /** JSON text -> style, or null when the text is not a style. */
 export function importStudio(text: string): StudioStyle | null {
   try { const v = JSON.parse(text); return isObj(v) ? cleanStudio(v) : null; } catch { return null; }
+}
+
+/* ------------------------------ the 30-style library (6 categories x 5) ------------------------------ */
+export type LibCat = 'minimal' | 'cinema' | 'luxury' | 'tech' | 'fun' | 'nature';
+export const LIB_CATS: { key: LibCat; icon: string }[] = [
+  { key: 'minimal', icon: 'minus' }, { key: 'cinema', icon: 'movie-open-outline' }, { key: 'luxury', icon: 'diamond-stone' },
+  { key: 'tech', icon: 'flash-outline' }, { key: 'fun', icon: 'party-popper' }, { key: 'nature', icon: 'leaf' },
+];
+/** A ready-made before / after look: ONE transition (`fx`, 1-60) plus a complete style. Applying it forces that transition and sets the style. */
+export interface LibPreset { id: string; cat: LibCat; icon: string; fx: number; style: StudioStyle }
+const lib = (cat: LibCat, id: string, icon: string, fx: number, patch: Patch): LibPreset => ({ id, cat, icon, fx, style: mergeStudio(DEFAULT_STUDIO, { ...patch, force: fx }) });
+const OFF = { mode: 'off' };
+const GOLD = ['#FFF7D6', '#FDE68A', '#FBBF24'];
+
+/**
+ * 30 clean, tasteful looks in 6 categories. "Clean" = few pieces, thin bars, soft colour: nothing here covers the photo. Every one is a normal
+ * style (nothing hard-wired): apply it, then tweak anything. Ids are stable (saved nowhere, but used as test ids and as translation keys `sx.p.<id>`).
+ */
+export const LIBRARY: LibPreset[] = [
+  // minimal
+  lib('minimal', 'min-hairline', 'minus', 1, { ease: 'expo', bar: { mode: 'custom', size: 2, paint: P('white'), glow: 0 }, els: OFF }),
+  lib('minimal', 'min-soft', 'blur', 3, { ease: 'inOut', bar: { mode: 'custom', size: 10, paint: P('white'), opacity: 0.55, glow: 18, trail: 48, trailColor: '#FFFFFF', round: true }, els: OFF }),
+  lib('minimal', 'min-doors', 'arrow-split-vertical', 16, { ease: 'expo', bar: { mode: 'custom', size: 2, paint: P('white'), glow: 6 }, els: OFF }),
+  lib('minimal', 'min-iris', 'camera-iris', 22, { ease: 'inOut', bar: { mode: 'custom', size: 3, paint: P('white'), glow: 8, fade: true }, els: OFF }),
+  lib('minimal', 'min-slide', 'swap-horizontal', 2, { ease: 'snap', motion: { push: 0.45, zoomOut: 0.04 }, bar: { mode: 'off' }, els: OFF }),
+  // cinema
+  lib('cinema', 'cin-reveal', 'movie-open-outline', 1, { ease: 'inOut', motion: { zoomIn: 0.12, zoomOut: 0.06, push: 0.5 }, bar: { mode: 'custom', size: 1, paint: P('white'), glow: 6, opacity: 0.85 }, els: OFF }),
+  lib('cinema', 'cin-dolly', 'eye-outline', 15, { ease: 'expo', motion: { zoomIn: 0.22 }, bar: { mode: 'off' }, els: OFF, tint: { on: true, kind: 'solid', c1: '#000000', amount: 0.25, peak: 'mid' } }),
+  lib('cinema', 'cin-diagonal', 'vector-line', 5, { ease: 'inOut', motion: { sweep: 20, zoomIn: 0.08 }, bar: { mode: 'custom', size: 2, paint: P('white'), glow: 10 }, els: OFF, tint: { on: true, kind: 'solid', c1: '#F59E0B', amount: 0.18, peak: 'mid' } }),
+  lib('cinema', 'cin-spotlight', 'white-balance-sunny', 23, { ease: 'inOut', motion: { zoomIn: 0.1 }, bar: { mode: 'custom', size: 4, paint: P('white'), glow: 22, opacity: 0.9 }, els: OFF, tint: { on: true, kind: 'solid', c1: '#000000', amount: 0.3, peak: 'mid' } }),
+  lib('cinema', 'cin-curtain', 'cards-outline', 17, { ease: 'anticipate', motion: { zoomOut: 0.08 }, bar: { mode: 'custom', size: 2, paint: P('white'), glow: 4 }, els: OFF, tint: { on: true, kind: 'solid', c1: '#7F1D1D', amount: 0.2, peak: 'mid' } }),
+  // luxury
+  lib('luxury', 'lux-goldline', 'crown-outline', 1, { ease: 'inOut', bar: { mode: 'custom', size: 3, paint: P('gradient', '#FDE68A', '#F59E0B', 90), glow: 16, trail: 70, trailColor: '#F59E0B' }, els: OFF }),
+  lib('luxury', 'lux-sparkle', 'shimmer', 1, { ease: 'back', bar: { mode: 'custom', size: 2, paint: P('gradient', '#FDE68A', '#F59E0B', 90), glow: 12 }, els: { mode: 'custom', shape: 'spark', motion: 'follow', path: 'beads', count: 5, size: 16, colors: 'palette', palette: GOLD, glow: 10, spin: 1, pulse: 0.5 } }),
+  lib('luxury', 'lux-champagne', 'diamond-outline', 25, { ease: 'inOut', bar: { mode: 'custom', size: 3, paint: P('gradient', '#FDE68A', '#FBBF24', 90), glow: 14 }, els: OFF, tint: { on: true, kind: 'gradient', c1: '#FDE68A', c2: '#FB7185', c3: '', ang: 135, amount: 0.18, peak: 'mid' } }),
+  lib('luxury', 'lux-rosegold', 'diamond-stone', 6, { ease: 'expo', bar: { mode: 'custom', size: 3, paint: P('gradient', '#FBCFE8', '#FB7185', 90), glow: 16, trail: 50, trailColor: '#FB7185' }, els: OFF, tint: { on: true, kind: 'solid', c1: '#FB7185', amount: 0.12, peak: 'mid' } }),
+  lib('luxury', 'lux-pearl', 'feather', 18, { ease: 'inOut', bar: { mode: 'off' }, els: OFF, tint: { on: true, kind: 'solid', c1: '#FFFFFF', amount: 0.35, peak: 'mid' } }),
+  // tech
+  lib('tech', 'tech-neon', 'flash-outline', 1, { ease: 'snap', bar: { mode: 'custom', size: 4, paint: P('gradient', '#22D3EE', '#E879F9', 90), glow: 26, trail: 130, trailColor: '#7C3AED', round: true }, els: OFF }),
+  lib('tech', 'tech-glitch', 'television-classic', 2, { ease: 'steps', steps: 6, motion: { dir: 'random' }, bar: { mode: 'custom', size: 5, look: 'dashed', paint: P('gradient', '#22D3EE', '#F43F5E', 90) }, els: { mode: 'custom', shape: 'bar', motion: 'random', count: 8, size: 14, colors: 'palette', palette: ['#22D3EE', '#F43F5E', '#FFFFFF'], stagger: 0.4, spin: 0 }, tint: { on: true, kind: 'solid', c1: '#F43F5E', amount: 0.1, peak: 'mid' } }),
+  lib('tech', 'tech-radar', 'radar', 26, { ease: 'inOut', bar: { mode: 'custom', size: 3, paint: P('custom', '#22D3EE'), glow: 20 }, els: OFF, tint: { on: true, kind: 'solid', c1: '#22D3EE', amount: 0.12, peak: 'mid' } }),
+  lib('tech', 'tech-grid', 'dots-grid', 34, { ease: 'inOut', bar: { mode: 'custom', size: 2, paint: P('white'), glow: 12 }, els: { mode: 'custom', shape: 'dot', motion: 'follow', path: 'beads', count: 7, size: 10, colors: 'white', glow: 8 } }),
+  lib('tech', 'tech-pulse', 'sine-wave', 24, { ease: 'expo', bar: { mode: 'custom', size: 5, paint: P('custom', '#A78BFA'), glow: 28 }, els: OFF, tint: { on: true, kind: 'gradient', c1: '#7C3AED', c2: '#22D3EE', c3: '', ang: 120, amount: 0.22, peak: 'mid' } }),
+  // fun
+  lib('fun', 'fun-confetti', 'party-popper', 22, { ease: 'back', bar: { mode: 'off' }, els: { mode: 'custom', shape: 'mixed', motion: 'burst', count: 16, size: 16, sizeVar: 0.5, colors: 'palette', palette: ['#FF4D8D', '#FFD60A', '#38BDF8', '#4ADE80', '#FFFFFF'], stagger: 0.5, spin: 2 } }),
+  lib('fun', 'fun-bounce', 'balloon', 3, { ease: 'bounce', bar: { mode: 'custom', size: 6, paint: P('gradient', '#F472B6', '#FACC15', 90), glow: 10, round: true }, els: OFF }),
+  lib('fun', 'fun-bubbles', 'water-outline', 29, { ease: 'spring', sp: [2, 3], bar: { mode: 'custom', size: 3, paint: P('white'), glow: 8 }, els: { mode: 'custom', shape: 'ring', motion: 'rise', count: 12, size: 16, sizeVar: 0.6, colors: 'palette', palette: ['#FFFFFF', '#BAE6FD', '#7DD3FC'], stagger: 0.8, opacity: 0.85 } }),
+  lib('fun', 'fun-hearts', 'heart', 4, { ease: 'spring', bar: { mode: 'custom', size: 3, paint: P('custom', '#FB7185'), glow: 12, round: true }, els: { mode: 'custom', shape: 'heart', motion: 'rise', count: 8, size: 20, sizeVar: 0.5, colors: 'palette', palette: ['#FB7185', '#F43F5E', '#FDA4AF', '#FFFFFF'], stagger: 0.7, spin: 0.25, pulse: 0.5 } }),
+  lib('fun', 'fun-spin', 'rocket-launch-outline', 49, { ease: 'back', motion: { dir: 'alternate' }, bar: { mode: 'custom', size: 4, paint: P('white'), glow: 10 }, els: { mode: 'custom', shape: 'diamond', motion: 'follow', path: 'corners', count: 4, size: 14, colors: 'mix' } }),
+  // nature
+  lib('nature', 'nat-sunrise', 'weather-sunset', 4, { ease: 'inOut', bar: { mode: 'custom', size: 6, paint: P('gradient', '#FDE68A', '#FB923C', 90), glow: 20, trail: 120, trailColor: '#FB923C' }, els: OFF, tint: { on: true, kind: 'gradient', c1: '#F59E0B', c2: '#FB7185', c3: '', ang: 90, amount: 0.22, peak: 'start' } }),
+  lib('nature', 'nat-ocean', 'waves', 1, { ease: 'spring', sp: [2, 3], motion: { sweep: 18 }, bar: { mode: 'custom', size: 10, paint: P('gradient', '#38BDF8', '#0EA5E9', 90), glow: 22, trail: 140, trailColor: '#38BDF8', opacity: 0.85 }, els: OFF, tint: { on: true, kind: 'gradient', c1: '#0EA5E9', c2: '#14B8A6', c3: '', ang: 90, amount: 0.2, peak: 'mid' } }),
+  lib('nature', 'nat-snow', 'snowflake', 2, { ease: 'inOut', bar: { mode: 'off' }, els: { mode: 'custom', shape: 'dot', motion: 'rain', count: 18, size: 10, sizeVar: 0.7, colors: 'white', stagger: 0.8, opacity: 0.9, glow: 4 }, tint: { on: true, kind: 'solid', c1: '#BFDBFE', amount: 0.18, peak: 'mid' } }),
+  lib('nature', 'nat-petals', 'flower-outline', 20, { ease: 'inOut', bar: { mode: 'custom', size: 2, paint: P('custom', '#FBCFE8'), glow: 8 }, els: { mode: 'custom', shape: 'dot', motion: 'drift', count: 14, size: 12, sizeVar: 0.5, colors: 'palette', palette: ['#FBCFE8', '#FDA4AF', '#FFFFFF'], stagger: 0.7, opacity: 0.9 }, tint: { on: true, kind: 'solid', c1: '#FBCFE8', amount: 0.15, peak: 'mid' } }),
+  lib('nature', 'nat-aurora', 'weather-night', 13, { ease: 'inOut', motion: { dir: 'alternate', zoomIn: 0.08 }, bar: { mode: 'custom', size: 6, paint: P('gradient', '#34D399', '#818CF8', 90), glow: 30, trail: 180, trailColor: '#34D399', round: true }, els: OFF, tint: { on: true, kind: 'gradient', c1: '#0F766E', c2: '#4338CA', c3: '', ang: 90, amount: 0.28, peak: 'mid' } }),
+];
+
+/* ------------------------------ presets the admin saves ------------------------------ */
+export const MAX_SAVED = 60;
+/** Stored presets -> valid ones (the style is sanitised, names are trimmed, duplicates / junk dropped, newest first). Never throws. */
+export function cleanSavedPresets(raw: unknown): SavedPreset[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: SavedPreset[] = [];
+  for (const r of raw) {
+    if (!isObj(r) || typeof r.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(r.id) || seen.has(r.id)) continue;
+    const name = typeof r.name === 'string' ? r.name.trim().slice(0, 60) : '';
+    if (!name) continue;
+    seen.add(r.id);
+    out.push({ id: r.id, name, fx: Number.isInteger(r.fx) && (r.fx as number) >= 0 && (r.fx as number) <= 60 ? (r.fx as number) : 0, style: cleanStudio(r.style), at: typeof r.at === 'number' && Number.isFinite(r.at) ? r.at : 0 });
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, MAX_SAVED);
+}
+/** A new saved preset from the style being edited (id from the clock + a random suffix; the transition is remembered with it). */
+export function makeSavedPreset(name: string, fx: number, style: StudioStyle, now: number, rand: number): SavedPreset {
+  return { id: `u${now.toString(36)}${Math.floor(rand * 1e6).toString(36)}`, name: name.trim().slice(0, 60), fx: Math.min(60, Math.max(0, Math.round(fx))), style: cleanStudio(style), at: now };
 }

@@ -9,8 +9,8 @@
  * Card height, text zone and text placement are never read from a card; any old per-card `height` / `textZone` / `textPlacement` key is ignored.
  * The transition engine itself (catalogue, geometry, easing, timing) lives in lib/toolCardFx.ts.
  */
-import type { Media, ToolCardFx, ToolCardGradient, ToolCardsGlobal, VideoMode, VideoQuality } from '@/data/types';
-import { cleanVideoQuality } from './cardVideoPlan';
+import type { Media, ToolCardFx, ToolCardGradient, ToolCardsGlobal, VideoAdvanced, VideoMode, VideoQuality } from '@/data/types';
+import { advancedKey, cleanAdvanced, cleanVideoQuality } from './cardVideoPlan';
 import { activeStudio, cleanStudio, studioKey, type StudioStyle } from './fxStudio';
 import { DEFAULT_ENABLED, DEFAULT_LOW_END, FX_FADE, FX_MAX, clampHold, clampSpeed, effectiveEffect, enabledIds, resolveAvail, type FxAvail } from './toolCardFx';
 
@@ -33,7 +33,7 @@ export const GRADIENT_STRENGTH: Record<ToolCardGradient, number> = { soft: 0.55,
 export const GRADIENT_MID = 0.55;
 
 /* ------------------------------ resolved settings ------------------------------ */
-export interface CardGlobal { height: number; textZone: 'top' | 'bottom'; textPlacement: 'inside' | 'outside'; videoMode: VideoMode; videoExtras: boolean; videoQuality: VideoQuality; /** The global Animation Studio style (null = none). */ studio: StudioStyle | null }
+export interface CardGlobal { height: number; textZone: 'top' | 'bottom'; textPlacement: 'inside' | 'outside'; videoMode: VideoMode; videoExtras: boolean; videoQuality: VideoQuality; /** Advanced render overrides ({} = none). */ videoAdv: VideoAdvanced; /** First Home card starts its first transition at once. */ instantFirst: boolean; /** The global Animation Studio style (null = none). */ studio: StudioStyle | null }
 export interface ResolvedFx {
   mode: 'single' | 'multiple';
   /** Multiple mode: the kept effect ids (0 = cross-fade). `null` = never edited = every ENABLED effect. */
@@ -56,8 +56,11 @@ export const clampHeight = (v: unknown) => {
 
 /** The one global layout. Missing or invalid values fall back to 220px / bottom / text inside the picture. */
 export function resolveGlobal(g?: ToolCardsGlobal): CardGlobal {
-  return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom', textPlacement: g?.textPlacement === 'outside' ? 'outside' : 'inside', videoMode: g?.videoMode === 'always' || g?.videoMode === 'off' ? g.videoMode : 'lowEnd', videoExtras: g?.videoExtras === true, videoQuality: cleanVideoQuality(g?.videoQuality), studio: activeStudio(g?.studio) };
+  return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom', textPlacement: g?.textPlacement === 'outside' ? 'outside' : 'inside', videoMode: g?.videoMode === 'always' || g?.videoMode === 'off' ? g.videoMode : 'lowEnd', videoExtras: g?.videoExtras === true, videoQuality: cleanVideoQuality(g?.videoQuality), videoAdv: cleanAdvanced(g?.videoAdv), instantFirst: g?.instantFirst !== false, studio: activeStudio(g?.studio) };
 }
+
+/** Stable string of the advanced render settings ('' = none): select THIS from the store (an object would re-render on every store change). */
+export const videoAdvKeyOf = (g?: ToolCardsGlobal): string => advancedKey(g?.videoAdv);
 
 /** Stable string of the global style ('' = none): select THIS from the store so a card re-renders only when the style really changes. */
 export const studioKeyOf = (g?: ToolCardsGlobal): string => studioKey(g?.studio);

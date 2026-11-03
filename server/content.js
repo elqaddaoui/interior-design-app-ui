@@ -132,6 +132,24 @@ function createContent(db, sync, mediaOptions = {}) {
     return next;
   }
 
+  /**
+   * Animation Studio presets an admin saved (stored in the admin's own prefs, never in the public settings). The style itself is sanitised by the
+   * app (`cleanStudio`) every time it is read, so the server only checks the envelope and caps the size: 60 presets, 12 KB per style.
+   */
+  function cleanStudioPresets(list) {
+    if (!Array.isArray(list) || list.length > 60) throw fail(400, 'Invalid presets');
+    const ids = new Set();
+    return list.map(p => {
+      if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.id) || ids.has(p.id)) throw fail(400, 'Invalid preset id');
+      ids.add(p.id);
+      const name = typeof p.name === 'string' ? p.name.trim().slice(0, 60) : '';
+      if (!name) throw fail(400, 'Invalid preset name');
+      if (!Number.isInteger(p.fx) || p.fx < 0 || p.fx > 999) throw fail(400, 'Invalid preset transition');
+      if (!p.style || typeof p.style !== 'object' || Array.isArray(p.style) || JSON.stringify(p.style).length > 12000) throw fail(400, 'Invalid preset style');
+      return { id: p.id, name, fx: p.fx, style: p.style, at: Number.isFinite(p.at) ? p.at : Date.now() };
+    });
+  }
+
   /** Preferences are stored per identity (one row per client, one per admin). */
   function cleanPrefs(input) {
     if (!input || typeof input !== 'object') throw fail(400, 'Invalid preferences');
@@ -139,6 +157,7 @@ function createContent(db, sync, mediaOptions = {}) {
     if (input.notifications !== undefined) { if (typeof input.notifications !== 'boolean') throw fail(400, 'Invalid notifications'); out.notifications = input.notifications; }
     if (input.bannerDismissed !== undefined) { if (typeof input.bannerDismissed !== 'boolean') throw fail(400, 'Invalid banner'); out.bannerDismissed = input.bannerDismissed; }
     if (input.lang !== undefined) { if (!LANGS.includes(input.lang)) throw fail(400, 'Invalid language'); out.lang = input.lang; }
+    if (input.studioPresets !== undefined) out.studioPresets = cleanStudioPresets(input.studioPresets);
     return out;
   }
   const adminPrefs = async adminId => JSON.parse((await db.query('SELECT data FROM admin_prefs WHERE admin_id=$1', [adminId]))[0]?.data || '{}');

@@ -10,9 +10,10 @@ import { useT } from '@/i18n';
 import { useTheme } from '@/theme/ThemeProvider';
 import { FX, FX_FADE, TIERS, TIER_ORDER } from '@/lib/toolCardFx';
 import {
-  DEFAULT_STUDIO, EASE_ID, EASE_KEYS, PIECE_MOTIONS, PIECE_SHAPES, PRESETS, cloneStudio, exportStudio, gradPoints, importStudio, mergeStudio, randomStudio, studioKey,
-  type EaseKey, type Paint, type StudioStyle,
+  DEFAULT_STUDIO, EASE_ID, EASE_KEYS, LIBRARY, LIB_CATS, PIECE_MOTIONS, PIECE_SHAPES, PRESETS, cloneStudio, exportStudio, gradPoints, importStudio, mergeStudio, randomStudio, studioKey,
+  type EaseKey, type LibCat, type Paint, type StudioStyle,
 } from '@/lib/fxStudio';
+import type { SavedPreset } from '@/data/types';
 import { toast } from '@/store/useToast';
 import { CurvePreview } from './CurvePreview';
 import { Chips, Group, Line, Sld, Sw } from './ui';
@@ -58,7 +59,7 @@ function PaintEditor({ paint, onChange, accent }: { paint: Paint; onChange: (p: 
 }
 
 /** The whole control panel: one tab at a time, every control writes straight into the style (`onChange`), so the stage reacts at once. */
-export function StudioPanel({ tab, style, onChange, onReplace, effect, onEffect, accent, history, onUndo, onRedo }: {
+export function StudioPanel({ tab, style, onChange, onReplace, effect, onEffect, accent, history, onUndo, onRedo, saved, onSave, onDeleteSaved }: {
   tab: StudioTab; style: StudioStyle; effect: number;
   /** A partial style merged into the current one (groups merge key by key). */
   onChange: (patch: Record<string, unknown>) => void;
@@ -66,11 +67,15 @@ export function StudioPanel({ tab, style, onChange, onReplace, effect, onEffect,
   onReplace: (s: StudioStyle) => void;
   onEffect: (id: number) => void; accent: string;
   history: { canUndo: boolean; canRedo: boolean }; onUndo: () => void; onRedo: () => void;
+  /** The admin's own saved looks (newest first), saving the current look under a name, deleting one. */
+  saved: SavedPreset[]; onSave: (name: string) => void; onDeleteSaved: (id: string) => void;
 }) {
   const { t } = useT();
   const { colors } = useTheme();
   const [text, setText] = useState('');
   const [pal, setPal] = useState(0);
+  const [cat, setCat] = useState<LibCat>('minimal');
+  const [name, setName] = useState('');
   const m = style.motion, b = style.bar, e = style.els, ti = style.tint;
   const def = FX[effect] ?? FX[FX_FADE];
 
@@ -235,20 +240,58 @@ export function StudioPanel({ tab, style, onChange, onReplace, effect, onEffect,
 
   // looks
   const cur = studioKey(style);
+  const applyLook = (fx: number, st: StudioStyle) => { onReplace({ ...cloneStudio(st), force: fx }); if (fx > 0) onEffect(fx); };
+  const tile = (key: string, icon: string, label: string, on: boolean, press: () => void, extra?: React.ReactNode) => (
+    <Pressable key={key} testID={key} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={press}
+      className={`items-center justify-center rounded-2xl border ${on ? 'bg-soft border-primary' : 'bg-surface2 border-line'}`} style={{ width: 92, height: 76, gap: 4 }}>
+      <Icon name={icon} size={24} tone={on ? 'primary' : 'fg'} />
+      <Txt className="text-[12px] font-bold" numberOfLines={1}>{label}</Txt>
+      {extra}
+    </Pressable>
+  );
+  const inCat = LIBRARY.filter((p) => p.cat === cat);
   return (
     <View>
-      <Group title={t('st.presets')}>
-        <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-          {PRESETS.map((p) => {
-            const on = cur !== '' && cur === studioKey({ ...p.style, force: style.force });
+      <Group title={t('st.library')} note={t('st.libraryNote')}>
+        <View testID="st-lib-cats" accessibilityRole="tablist" className="flex-row flex-wrap" style={{ gap: 6 }}>
+          {LIB_CATS.map((c) => {
+            const on = c.key === cat;
             return (
-              <Pressable key={p.id} testID={`st-preset-${p.id}`} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={() => onReplace({ ...cloneStudio(p.style), force: style.force })}
-                className={`items-center justify-center rounded-2xl border ${on ? 'bg-soft border-primary' : 'bg-surface2 border-line'}`} style={{ width: 92, height: 76, gap: 4 }}>
-                <Icon name={p.icon} size={24} tone={on ? 'primary' : 'fg'} />
-                <Txt className="text-[12px] font-bold" numberOfLines={1}>{t(`st.preset.${p.id}`)}</Txt>
+              <Pressable key={c.key} testID={`st-cat-${c.key}`} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => setCat(c.key)}
+                className={`flex-row items-center h-9 px-3 rounded-full border ${on ? 'bg-ink border-ink' : 'bg-surface2 border-line'}`} style={{ gap: 6 }}>
+                <Icon name={c.icon} size={16} tone={on ? 'onink' : 'fg'} />
+                <Txt className={`text-[12.5px] font-bold ${on ? 'text-onink' : ''}`}>{t(`st.cat.${c.key}`)}</Txt>
               </Pressable>
             );
           })}
+        </View>
+        <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+          {inCat.map((p) => tile(`st-lib-${p.id}`, p.icon, t(`st.lib.${p.id}`), cur !== '' && cur === studioKey(mergeStudio(p.style, { force: p.fx })) && style.force === p.fx, () => applyLook(p.fx, p.style)))}
+        </View>
+      </Group>
+      <Group title={t('st.mine')} note={t('st.mineNote')}>
+        <View className="flex-row items-center" style={{ gap: 8 }}>
+          <TextInput testID="st-save-name" value={name} onChangeText={setName} maxLength={60} placeholder={t('st.saveName')} placeholderTextColor={colors.muted} onSubmitEditing={() => { if (name.trim()) { onSave(name); setName(''); } }}
+            style={{ flex: 1, height: 40, borderRadius: 12, paddingHorizontal: 12, backgroundColor: colors.surface2, color: colors.fg, fontSize: 14, outlineStyle: 'none' } as any} />
+          <Button testID="st-save" size="sm" icon="content-save-outline" title={t('st.save')} disabled={!name.trim()} onPress={() => { onSave(name); setName(''); }} />
+        </View>
+        {saved.length === 0 ? <Txt testID="st-saved-empty" className="text-muted text-[12px]">{t('st.mineEmpty')}</Txt> : (
+          <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+            {saved.map((p) => (
+              <View key={p.id} testID={`st-saved-${p.id}`} style={{ position: 'relative' }}>
+                {tile(`st-saved-apply-${p.id}`, 'star-outline', p.name, false, () => applyLook(p.fx, p.style))}
+                <Pressable testID={`st-saved-del-${p.id}`} accessibilityRole="button" accessibilityLabel={t('st.delete')} onPress={() => onDeleteSaved(p.id)} hitSlop={6}
+                  className="absolute items-center justify-center rounded-full bg-surface border border-line" style={{ top: -6, right: -6, width: 24, height: 24 }}>
+                  <Icon name="close" size={14} tone="danger" />
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
+      </Group>
+      <Group title={t('st.presets')}>
+        <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+          {PRESETS.map((p) => tile(`st-preset-${p.id}`, p.icon, t(`st.preset.${p.id}`), cur !== '' && cur === studioKey({ ...p.style, force: style.force }), () => onReplace({ ...cloneStudio(p.style), force: style.force })))}
         </View>
         <View className="flex-row flex-wrap" style={{ gap: 8 }}>
           <Button testID="st-surprise" size="sm" icon="dice-multiple-outline" title={t('st.surprise')} onPress={() => onReplace({ ...randomStudio(Math.floor(Math.random() * 1e6)), force: style.force })} />

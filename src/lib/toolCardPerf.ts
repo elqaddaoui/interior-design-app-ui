@@ -35,7 +35,7 @@ const POLL_MS = 250;
  */
 export function useOnScreen(ref: RefObject<View | null>) {
   const focused = useIsFocused();
-  const [state, setState] = useState({ shown: false, near: Platform.OS !== 'web' });
+  const [state, setState] = useState({ shown: false, near: Platform.OS !== 'web', known: false });
   const [foreground, setForeground] = useState(true);
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -50,11 +50,11 @@ export function useOnScreen(ref: RefObject<View | null>) {
   useEffect(() => {
     if (Platform.OS === 'web') {
       const element = ref.current as unknown as Element | null;
-      if (!element || typeof IntersectionObserver === 'undefined') { setState({ shown: true, near: true }); return; }
+      if (!element || typeof IntersectionObserver === 'undefined') { setState({ shown: true, near: true, known: true }); return; }
       const a = new IntersectionObserver((entries) => {
         const entry = entries[entries.length - 1];
         const shown = entry.isIntersecting && entry.intersectionRatio > 0;
-        setState((old) => (old.shown === shown ? old : { ...old, shown }));
+        setState((old) => (old.shown === shown && old.known ? old : { ...old, shown, known: true }));
       }, { threshold: [0, 0.001] });
       const b = new IntersectionObserver((entries) => {
         const entry = entries[entries.length - 1];
@@ -67,13 +67,13 @@ export function useOnScreen(ref: RefObject<View | null>) {
       const screenH = Dimensions.get('window').height;
       const shown = h > 0 && y < screenH && y + h > 0;
       const near = h > 0 && y + h > -NEAR_MARGIN && y < screenH + NEAR_MARGIN;
-      setState((old) => (old.shown === shown && old.near === near ? old : { shown, near }));
+      setState((old) => (old.shown === shown && old.near === near && old.known ? old : { shown, near, known: true }));
     });
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
   }, [ref]);
-  return { visible: state.shown && focused && foreground, near: state.near };
+  return { visible: state.shown && focused && foreground, near: state.near, /** The first real measurement has arrived (before it, `visible` is only a guess). */ known: state.known };
 }
 
 /* ------------------------------ device capability ------------------------------ */

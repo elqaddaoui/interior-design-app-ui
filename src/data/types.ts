@@ -45,11 +45,39 @@ export interface ToolCardsGlobal {
   videoExtras?: boolean;
   /** Render quality of the pre-rendered videos: picture size + frame rate + bitrate (see VIDEO_QUALITIES in lib/cardVideoPlan.ts). Default 'balanced'. */
   videoQuality?: VideoQuality;
+  /** Advanced render settings of the pre-rendered videos (only the values the admin changed; see VideoAdvanced). */
+  videoAdv?: VideoAdvanced;
+  /** The first Home card starts its first transition at once (no hold, images and visibility assumed ready). Default true. Admin > Animation Studio. */
+  instantFirst?: boolean;
   /** Animation Studio style shared by every card (main transition, bar, elements, colours, motion). Missing = no style (the effects look as designed). See lib/fxStudio.ts. */
   studio?: StudioStyle;
 }
 export type VideoMode = 'lowEnd' | 'always' | 'off';
-export type VideoQuality = 'low' | 'balanced' | 'high' | 'ultra';
+export type VideoQuality = 'low' | 'balanced' | 'high' | 'ultra' | 'best';
+/**
+ * Advanced render settings (Admin > Performance > Advanced rendering). Every key is an OVERRIDE of the chosen quality preset: a missing key
+ * follows the preset. See `resolveRender` in lib/cardVideoPlan.ts.
+ */
+export interface VideoAdvanced {
+  /** Output width in px; 0 = the real card size (card width on screen x pixel ratio). */
+  width?: number;
+  /** Frames per second of the transitions (24 - 60). */
+  fps?: number;
+  /** Card width on screen in CSS px (used by the real card size). */
+  cardW?: number;
+  /** Pixel ratio of the screens the video is made for (used by the real card size). */
+  dpr?: number;
+  /** Fit the file between minMB and maxMB (the encoder is re-run until it does). */
+  fit?: boolean;
+  minMB?: number;
+  maxMB?: number;
+  /** Manual bitrate in kbit/s (used when `fit` is off). */
+  kbps?: number;
+  /** Seconds between two key frames. */
+  keyInt?: number;
+  /** Preferred encoder; auto = H.264 first (plays everywhere). */
+  codec?: 'auto' | 'avc' | 'vp9' | 'av1';
+}
 export type ToolCardGradient = 'soft' | 'medium' | 'strong';
 /** PER-CARD animation settings (Tool.media.fx, slideshow only). Every key is optional: missing keys use the defaults in lib/toolCards.ts. */
 export interface ToolCardFx {
@@ -296,6 +324,8 @@ export interface DocMap {
   settings: AppSettings;
 }
 /** Per-identity preferences stored in the database (one set per client, one per admin). */
-export interface UserPrefs { notifications?: boolean; bannerDismissed?: boolean; lang?: Lang }
+export interface UserPrefs { notifications?: boolean; bannerDismissed?: boolean; lang?: Lang; /** Animation Studio presets the admin saved (per admin, every device). */ studioPresets?: SavedPreset[] }
+/** An Animation Studio style saved by the admin to be reused later (`style` is sanitised by `cleanSavedPresets` in lib/fxStudio.ts). */
+export interface SavedPreset { id: string; name: string; /** transition the preset was made with (0 = cross-fade) */ fx: number; style: StudioStyle; at: number }
 export type CollName = keyof CollMap;
 export type DocName = keyof DocMap;
