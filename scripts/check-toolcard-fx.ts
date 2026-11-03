@@ -11,7 +11,9 @@ import { SPEED_MAX, SPEED_MIN, HOLD_MAX, HOLD_MIN, FX, FX_FADE, FX_IDS, TIERS, D
 
 import { planTimeline, frames, videoSize, videoSignature, videoStatus, shouldPlayVideo, VIDEO_QUALITIES, VIDEO_QUALITY_ORDER, VIDEO_QUALITY_DEFAULT, cleanVideoQuality, qualityPreset } from '../src/lib/cardVideoPlan';
 import { fitSide, fallbackFormat, alreadyOptimized, isRasterToOptimize, dataUrlMime, PRESETS } from '../src/lib/imageOptimizeCore';
-import { resolveFx, resolveGlobal, cleanFx } from '../src/lib/toolCards';
+import { resolveFx, resolveGlobal, cleanFx, cardEffectList, effectiveStudio, patchGlobal, studioKeyOf } from '../src/lib/toolCards';
+import { DEFAULT_STUDIO, PRESETS as STUDIO_PRESETS, activeStudio, cleanStudio, exportStudio, importStudio, isDefaultStudio, overrideFor, pieceAt, randomStudio, rnd, studioHasExtras, studioMoves, studioPiece, studioPieceCount, studioSig, followDeco, tintAlpha, barAlpha, barSegments, EASE_KEYS, type StudioStyle } from '../src/lib/fxStudio';
+import { backMotion, frontMotion, motionTransform } from '../src/lib/toolCardFx';
 import { EVIDENCE_TTL_MS, JANKY_AVG_MS, WARMUP_FRAMES, addOutcome, classifyDevice, judgeTransition, measuredVerdict, shouldRecord, type DeviceSignals, type Evidence } from '../src/lib/deviceTier';
 
 /** Tiny strict assertions (the project has no Node typings, so `node:assert` is not imported). */
@@ -58,7 +60,7 @@ for (const [W, H] of SIZES) for (const pr of [1, 2, 2.75, 3]) for (const rtl of 
   const io = origin(geo.inner, W, H);
   for (let i = 0; i <= 40; i++) {
     const q = i / 40;
-    const f = layerFrame(cfg, W, H, pr, ease(cfg.e, q));
+    const f = layerFrame(cfg, W, H, pr, ease(cfg.e, q, cfg.ep));
     const cm = matrixOf(f.ct as any[], bo.x, bo.y);
     const im = matrixOf(f.it as any[], io.x, io.y);
     // photo-local -> container-local -> (container transform) -> card
@@ -287,6 +289,111 @@ console.log('device: hardware, preference and measurement rules ok');
   assert.equal(shouldPlayVideo('always', false, true), true); assert.equal(shouldPlayVideo('off', true, true), false); assert.equal(shouldPlayVideo('always', true, false), false, 'no valid video: live engine');
   assert.equal(resolveGlobal(undefined).videoMode, 'lowEnd'); assert.equal(resolveGlobal({ videoMode: 'always' }).videoMode, 'always'); assert.equal(resolveGlobal({ videoMode: 'nope' as never }).videoMode, 'lowEnd');
   console.log('video: timeline, loop, signature and playback rules ok');
+}
+
+// ---------------------------------------------------------------- Animation Studio
+{
+  // New easings: exact ends, finite, plausible ranges; the named ones behave as documented.
+  for (const [kind, ep] of [[6, [0.4, 0, 0.2, 1]], [6, [0.7, -0.6, 0.3, 1.6]], [7, [3, 3.6]], [7, [1, 1.5]], [7, [6, 8]], [8, undefined], [9, undefined], [10, [4]], [10, [16]]] as [number, number[] | undefined][]) {
+    assert.equal(ease(kind, 0, ep), 0, `ease ${kind} start`); assert.equal(ease(kind, 1, ep), 1, `ease ${kind} end`);
+    for (let k = 1; k < 100; k++) { const v = ease(kind, k / 100, ep); assert(Number.isFinite(v) && v > -1.1 && v < 2.1, `ease ${kind} ${JSON.stringify(ep)} @${k / 100} = ${v}`); }
+  }
+  assert(Math.abs(ease(8, 0.3) - 0.3) < 1e-12, 'linear is the identity');
+  assert(ease(9, 0.15) < 0, 'anticipate dips below 0 before it goes');
+  assert(Math.abs(ease(6, 0.5, [0.25, 0.25, 0.75, 0.75]) - 0.5) < 1e-3, 'a bezier on the diagonal is linear');
+  { const st = [1, 2, 3, 4, 5, 6, 7].map((i) => ease(10, i / 8, [4])); assert(st.every((v) => [0.25, 0.5, 0.75, 1].includes(v)), 'steps(4) only takes 4 values'); }
+  { let over = 0; for (let k = 1; k < 100; k++) over = Math.max(over, ease(7, k / 100, [3, 3.6])); assert(over > 1.05, 'a spring overshoots'); }
+
+  // Cfg overrides: no override = the effect as it was; overrides replace only what they name.
+  for (const id of FX_IDS) {
+    for (const rtl of [false, true]) {
+      const a = makeCfg(FX[id], rtl), b = makeCfg(FX[id], rtl, {});
+      assert.deepEqual(a, b, `fx ${id}: an empty override changes nothing`);
+      assert(a.zi === 0 && a.zo === 0 && a.pu === 0, `fx ${id}: no photo motion by default`);
+    }
+  }
+  { const c = makeCfg(FX[1], false, { e: 6, ep: [0.1, 0.2, 0.3, 0.4], angle: 45, zi: 0.2, zo: 0.1, pu: 0.5 });
+    assert.equal(c.e, 6); assert.deepEqual(c.ep, [0.1, 0.2, 0.3, 0.4]); assert.equal(c.a1, 45); assert(c.zi === 0.2 && c.zo === 0.1 && c.pu === 0.5); }
+  // Photo motion: never below 1x (the photo always covers its window), identity at rest, the push never exceeds the covered part.
+  for (const id of FX_IDS) {
+    const c = makeCfg(FX[id], false, { zi: 0.4, zo: 0.3, pu: 1 });
+    for (const [W, H] of [[360, 225], [720, 450], [300, 300]]) for (let k = 0; k <= 20; k++) {
+      const q = k / 20, b = backMotion(c, q), f = frontMotion(c, W, H, q);
+      assert(b.s >= 1 - 1e-9 && b.s <= 1.4 + 1e-9, `fx ${id} back zoom ${b.s}`); assert(f.s >= 1 - 1e-9 && f.s <= 1.3 + 1e-9, `fx ${id} front zoom ${f.s}`);
+      assert(Number.isFinite(f.tx) && Number.isFinite(f.ty), `fx ${id} front push finite`);
+      assert(Math.hypot(f.tx, f.ty) <= Math.abs(Math.cos((c.a1 * Math.PI) / 180)) * W + Math.abs(Math.sin((c.a1 * Math.PI) / 180)) * H + 1e-6, `fx ${id} push stays within the travel`);
+    }
+    const end = backMotion(c, 1); assert(end.s === 1 && end.tx === 0 && end.ty === 0, `fx ${id} back photo rests at 1x`);
+    assert.deepEqual(motionTransform({ s: 1, tx: 0, ty: 0 }), [{ translateX: 0 }, { translateY: 0 }, { scale: 1 }]);
+  }
+
+  // The style model: sanitiser (idempotent, never throws), default = plain, presets valid, random valid, export / import round trip.
+  assert(isDefaultStudio(DEFAULT_STUDIO) && activeStudio(DEFAULT_STUDIO) === null, 'the default style is plain');
+  assert.equal(studioSig(DEFAULT_STUDIO), ''); assert.equal(studioKeyOf({ studio: DEFAULT_STUDIO }), ''); assert.equal(studioKeyOf(undefined), '');
+  for (const junk of [undefined, null, 1, 'x', [], {}, { bar: 5, els: [], tint: null, motion: 'zz', ease: 'nope', force: -3, seed: 'a' }, { els: { count: 9999, size: -5, palette: ['red', 12, '#fff'] }, bz: ['a', 99], steps: 1e9 }]) {
+    const c = cleanStudio(junk); assert.deepEqual(cleanStudio(c), c, 'cleanStudio is idempotent');
+    assert(c.v === 1 && c.els.count >= 1 && c.els.count <= 24 && c.bz[0] >= 0 && c.bz[0] <= 1 && c.steps >= 2 && c.steps <= 16 && c.force >= 0 && EASE_KEYS.includes(c.ease), 'cleanStudio clamps');
+  }
+  assert.equal(cleanStudio({ force: 12.5 }).force, 0, 'a non-integer force is dropped');
+  assert(STUDIO_PRESETS.length >= 12, 'presets present');
+  for (const pr of STUDIO_PRESETS) { const st = cleanStudio(pr.style); assert.deepEqual(cleanStudio(st), st, `preset ${pr.id} is valid`); assert(!isDefaultStudio(st), `preset ${pr.id} does something`); }
+  for (let seed = 1; seed <= 40; seed++) { const r = randomStudio(seed); assert.deepEqual(cleanStudio(r), r, `random style ${seed} is valid`); assert.deepEqual(randomStudio(seed), r, 'random style is deterministic'); }
+  for (const pr of STUDIO_PRESETS) { const st = cleanStudio(pr.style); assert.deepEqual(importStudio(exportStudio(st)), st, `export / import round trip ${pr.id}`); }
+  assert.equal(importStudio('not json'), null); assert.equal(importStudio('[1]'), null);
+  assert(studioSig(randomStudio(3)) !== studioSig(randomStudio(4)), 'different styles have different signatures'); assert.equal(studioSig(randomStudio(3)), studioSig(randomStudio(3)));
+  assert(rnd(5, 9) === rnd(5, 9) && rnd(5, 9) >= 0 && rnd(5, 9) < 1 && rnd(5, 9) !== rnd(5, 10), 'rnd is deterministic in [0,1)');
+
+  // overrideFor: only what the style asks for; `random` direction is deterministic and changes per transition.
+  { const plain = cleanStudio({}); const o = overrideFor(plain, FX[1], 0); assert(o.angle === undefined && o.e === undefined && o.ox === undefined, 'a plain style overrides nothing');
+    const alt = cleanStudio({ motion: { dir: 'alternate' } }); assert.equal(overrideFor(alt, FX[1], 1).angle, 180); assert.equal(overrideFor(alt, FX[1], 2).angle, 0);
+    const ran = cleanStudio({ motion: { dir: 'random' }, seed: 7 }); assert.equal(overrideFor(ran, FX[1], 3).angle, overrideFor(ran, FX[1], 3).angle); assert(new Set([0, 1, 2, 3, 4, 5].map((i) => overrideFor(ran, FX[1], i).angle)).size > 2, 'random directions vary');
+    assert.equal(overrideFor(cleanStudio({ ease: 'bezier', bz: [0.1, 0.2, 0.3, 0.4] }), FX[1], 0).e, 6); assert.equal(overrideFor(cleanStudio({ ease: 'linear' }), FX[1], 0).e, 8);
+    const og = overrideFor(cleanStudio({ motion: { origin: true, ox: 0.2, oy: 0.8 } }), FX[20], 0); assert(og.ox === 0.2 && og.oy === 0.8);
+    assert(studioMoves(alt) && !studioMoves(plain) && !studioHasExtras(plain) && studioHasExtras(cleanStudio({ tint: { on: true } }))); }
+
+  // Pieces: finite and bounded for every motion x every effect x several sizes; opacity 0 at both ends (nothing pops); bar / tint ramps.
+  for (const motion of ['follow', 'random', 'burst', 'rain', 'rise', 'drift', 'swirl', 'twinkle']) {
+    const st = cleanStudio({ els: { mode: 'custom', motion, count: 12, shape: 'mixed', spin: 1 } });
+    for (const id of FX_IDS) {
+      const def = FX[id], cfg = makeCfg(def, false, overrideFor(st, def, 0));
+      for (const [W, H] of [[360, 225], [720, 450]]) {
+        const n = studioPieceCount(st, def, cfg); assert(n >= 1 && n <= 24, `fx ${id} ${motion} count ${n}`);
+        for (let i = 0; i < n; i++) for (let k = 0; k <= 40; k++) {
+          const b = studioPiece(st, def, followDeco(st.els, def, st.seed, i), cfg, W, H, k / 40, i);
+          assert([b.x, b.y, b.s, b.o, b.r].every(Number.isFinite), `fx ${id} ${motion} piece ${i} finite @${k / 40}`);
+          assert(b.o >= -1e-9 && b.o <= 1 + 1e-9 && b.s >= -1e-9 && b.s < 4, `fx ${id} ${motion} piece ${i} opacity / scale in range`);
+          if (k === 0 || k === 40) assert(b.o <= 1e-9 || motion === 'follow', `fx ${id} ${motion} piece ${i} invisible at the ends (${b.o})`);
+        }
+      }
+    }
+  }
+  { // burst pieces ride the visible part of an iris (the old ring maths put every piece outside the card)
+    const st = cleanStudio({ els: { mode: 'custom', motion: 'burst', count: 18 } }), def = FX[23], cfg = makeCfg(def, false, null);
+    let seen = 0; for (let k = 5; k <= 35; k++) for (let i = 0; i < 18; i++) { const b = studioPiece(st, def, followDeco(st.els, def, st.seed, i), cfg, 360, 225, k / 40, i); if (b.o > 0.2 && b.x > -20 && b.x < 380 && b.y > -20 && b.y < 245) seen++; }
+    assert(seen > 40, `iris bursts are visible on the card (${seen})`); }
+  { const tn = cleanStudio({ tint: { on: true, amount: 0.4, peak: 'mid' } }).tint; assert(tintAlpha(tn, 0) === 0 && tintAlpha(tn, 1) === 0 && Math.abs(tintAlpha(tn, 0.5) - 0.4) < 1e-9, 'tint blooms and fades');
+    const br = cleanStudio({ bar: { fade: true, opacity: 0.8 } }).bar; assert(barAlpha(br, 0) === 0 && barAlpha(br, 1) === 0 && Math.abs(barAlpha(br, 0.5) - 0.8) < 1e-9, 'bar fades in and out');
+    for (const look of ['dashed', 'dotted'] as const) for (const size of [1, 4, 40]) { const sg = barSegments(look, size, 600); assert(sg.length >= 1 && sg.length <= 48, `bar segments ${look} ${size}`); assert(sg[0][0] <= -280 && sg[sg.length - 1][0] + sg[sg.length - 1][1] >= 280, 'segments cover the bar'); }
+    assert.equal(barSegments('solid', 4, 600).length, 0); }
+  // pieceAt is pure (same inputs, same output).
+  { const st = cleanStudio({ els: { mode: 'custom', motion: 'swirl' } }), cfg = makeCfg(FX[23], false); assert.deepEqual(pieceAt(st.els, 3, cfg, 360, 225, 0.4, 2), pieceAt(st.els, 3, cfg, 360, 225, 0.4, 2)); }
+
+  // Settings plumbing: force replaces the list, a plain style changes nothing, patchGlobal never drops keys, effective style = own > global.
+  { const fx = resolveFx(undefined);
+    const av = resolveAvail(undefined), base = cardEffectList(fx, av, false);
+    assert.deepEqual(cardEffectList(fx, av, false, null), base); assert.deepEqual(cardEffectList(fx, av, false, cleanStudio({})), base);
+    assert.deepEqual(cardEffectList(fx, av, false, cleanStudio({ force: 5 })), [5], 'force = one transition on every card'); }
+  { const stored = { height: 200, textZone: 'top' as const, studio: cleanStudio({ force: 3 }), enabled: [1, 2] } as never; const out = patchGlobal(stored, { videoMode: 'always' });
+    assert(out.studio && out.videoMode === 'always' && (out as never as { enabled: number[] }).enabled.length === 2 && out.height === 200, 'patchGlobal keeps every stored key'); assert.deepEqual(patchGlobal(undefined, { height: 180 }), { height: 180 }); }
+  { const g = activeStudio(cleanStudio({ force: 2 })), own = cleanStudio({ force: 9 });
+    const rf = (studio: unknown) => ({ studio }) as never;
+    assert.equal(effectiveStudio(g, rf(undefined)), g, 'no own style = the global one'); assert.equal(effectiveStudio(g, rf(own))?.force, 9, 'own style wins'); assert.equal(effectiveStudio(g, rf(DEFAULT_STUDIO)), null, 'a default own style means plain'); }
+  // Videos: a style outdates the video, no style keeps the old signature.
+  { const sig0 = videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'balanced'); assert.equal(videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'balanced', ''), sig0, 'no style keeps the old signature');
+    const s1 = videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'balanced', studioSig(randomStudio(1))), s2 = videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'balanced', studioSig(randomStudio(2)));
+    assert(s1 !== sig0 && s2 !== sig0 && s1 !== s2, 'each style has its own video signature'); }
+  const _unused: StudioStyle | null = null; void _unused;
+  console.log(`studio: ${STUDIO_PRESETS.length} presets, easings, overrides, photo motion, pieces x ${FX_IDS.length} effects, plumbing and signatures ok`);
 }
 
 // ---------------------------------------------------------------- image optimiser rules

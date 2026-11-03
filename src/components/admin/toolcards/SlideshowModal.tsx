@@ -15,7 +15,7 @@ import { useBackCheckpoint } from '@/hooks/useLeaveGuard';
 import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { LANGS, useL, useT } from '@/i18n';
-import { HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, HOLD_MAX, HOLD_MIN, HOLD_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP, cleanFx, clampHold, clampSpeed, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
+import { HEIGHT_MAX, HEIGHT_MIN, HEIGHT_STEP, HOLD_MAX, HOLD_MIN, HOLD_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP, cleanFx, clampHold, clampSpeed, imageHeight, mediaFx, patchGlobal, resolveGlobal, slideshowImages } from '@/lib/toolCards';
 import { FX_FADE, FX_IDS, effectiveEffect, enabledIds, resolveAvail } from '@/lib/toolCardFx';
 import { useStore } from '@/store/useStore';
 import { useTheme, ThemeScope } from '@/theme/ThemeProvider';
@@ -72,7 +72,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const enabled = enabledIds(avail);
   const kept = fx.effects ?? enabled;
 
-  const setGlobal = (patch: Partial<typeof global>) => settings.patch({ toolCards: { ...resolveGlobal(useStore.getState().doc.settings.toolCards), ...patch } });
+  const setGlobal = (patch: Partial<Omit<typeof global, 'studio'>>) => settings.patch({ toolCards: patchGlobal(useStore.getState().doc.settings.toolCards, patch) });
   const setFx = (patch: ToolCardFx) => onChange({ ...media, fx: cleanFx({ ...(media.fx ?? {}), ...patch }) });
   const setImages = (next: string[]) => onChange({ ...media, images: next, uri: next[0] ?? '' });
 
