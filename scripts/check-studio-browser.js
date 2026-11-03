@@ -105,6 +105,51 @@ async function run(lang, width) {
   await page.getByTestId('studio-discard').click();
   await page.waitForFunction(() => document.querySelector('[data-testid="studio-submit"]').hasAttribute('aria-disabled'), null, { timeout: 5000 });
 
+
+  // 9. NEW: instant-first toggle + device card with the reset button.
+  await page.getByTestId('st-instant').waitFor();
+  assert.equal(await page.getByTestId('st-reset-detection').isVisible(), true, 'reset detection button is visible');
+  assert((await page.getByTestId('st-device').innerText()).length > 5, 'the device verdict is shown');
+  await page.getByTestId('st-reset-detection').click();
+  const on0 = await page.getByTestId('st-instant').getAttribute('aria-checked');
+  await page.getByTestId('st-instant').click();
+  await page.waitForFunction((v) => document.querySelector('[data-testid="st-instant"]').getAttribute('aria-checked') !== v, on0, { timeout: 5000 });
+  assert.equal(await page.getByTestId('studio-submit').isDisabled(), false, 'toggling the instant card makes the draft dirty');
+  await page.getByTestId('studio-discard').click();
+
+  // 10. NEW: the 30-look library (6 categories x 5), apply forces the transition, save / apply / delete a look.
+  await page.getByTestId('st-tab-looks').click();
+  const cats = ['minimal', 'cinema', 'luxury', 'tech', 'fun', 'nature'];
+  let total = 0;
+  for (const c of cats) { await page.getByTestId(`st-cat-${c}`).click(); total += await page.locator('[data-testid^="st-lib-"]:not([data-testid="st-lib-cats"])').count(); }
+  assert.equal(total, 30, `${lang}: 30 looks across 6 categories (got ${total})`);
+  await page.getByTestId('st-cat-luxury').click();
+  await page.getByTestId('st-lib-lux-goldline').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid="studio-submit"]').hasAttribute('aria-disabled'), null, { timeout: 5000 });
+  await shot('10-library');
+  await page.getByTestId('st-save-name').fill('Mon style test');
+  await page.getByTestId('st-save').click();
+  await page.locator('[data-testid^="st-saved-apply-"]').first().waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('[data-testid^="st-saved-apply-"]').count(), 1, 'one saved look');
+  await page.getByTestId('st-reset').click();
+  await page.locator('[data-testid^="st-saved-apply-"]').first().click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid="studio-submit"]').hasAttribute('aria-disabled'), null, { timeout: 5000 });
+  await page.locator('[data-testid^="st-saved-del-"]').first().click();
+  await page.getByTestId('st-saved-empty').waitFor({ timeout: 5000 });
+  await page.getByTestId('studio-discard').click();
+
+  // 11. NEW: the preview stage stays in view while the page scrolls (sticky), desktop and phone.
+  await page.getByTestId('st-tab-looks').click();
+  const box = page.getByTestId('studio-stage-box');
+  const top0 = (await box.boundingBox()).y;
+  await page.evaluate(() => { const sc = Array.from(document.querySelectorAll('*')).filter((e) => e.scrollHeight > e.clientHeight + 200 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)).sort((a, b) => b.scrollHeight - a.scrollHeight)[0]; window.__sc = sc; sc.scrollTop = 600; });
+  await page.waitForTimeout(400);
+  const scrolled = await page.evaluate(() => window.__sc.scrollTop);
+  const b1 = await box.boundingBox();
+  assert(scrolled > 150, `${lang}: the page really scrolled (${scrolled})`);
+  assert(b1.y >= -2 && b1.y < 140, `${lang}: the stage stays in view after scrolling (top ${top0} -> ${b1.y})`);
+  await shot('11-sticky');
+
   await browser.close();
   const real = errors.filter((e) => !/favicon|Failed to load resource|net::ERR/.test(e));
   assert.deepEqual(real, [], `${lang} ${width}: page errors`);

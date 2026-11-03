@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Image } from 'expo-image';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import { FADE_CFG, FX, FX_FADE, TR_BASE, hasExtras, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
-import { availFromKey, availKey, cardEffectList, effectiveStudio, resolveGlobal, studioKeyOf, type ResolvedFx } from '@/lib/toolCards';
+import { availFromKey, availKey, cardEffectList, effectiveStudio, resolveGlobal, studioKeyOf, videoAdvKeyOf, type ResolvedFx } from '@/lib/toolCards';
 import { accentOf, activeStudio, overrideFor, studioHasExtras, studioSig, type StudioStyle } from '@/lib/fxStudio';
 import { VIDEO_RTL, shouldPlayVideo, videoSignature, videoStatus } from '@/lib/cardVideoPlan';
 import { CardVideo } from './CardVideo';
@@ -27,8 +28,8 @@ type Pair<T> = [T, T];
  *
  * Everything the engine mutates outside React lives in `S` (refs), so the callbacks are stable and never go stale.
  */
-function Engine({ images, fx, studio, rtl, run, force, lowEnd, record, avail, layout, onReady, onEffect }: {
-  images: string[]; fx: ResolvedFx; studio: StudioStyle | null; rtl: boolean; run: boolean; force: boolean; lowEnd: boolean; record: boolean; avail: FxAvail; layout: Size;
+function Engine({ images, fx, studio, rtl, run, force, instant, lowEnd, record, avail, layout, onReady, onEffect }: {
+  images: string[]; fx: ResolvedFx; studio: StudioStyle | null; rtl: boolean; run: boolean; force: boolean; /** First Home card: the first transition starts as soon as both pictures are ready (no hold). */ instant: boolean; lowEnd: boolean; record: boolean; avail: FxAvail; layout: Size;
   onReady?: () => void; onEffect?: (effect: number) => void;
 }) {
   const { colors } = useTheme();
@@ -60,8 +61,8 @@ function Engine({ images, fx, studio, rtl, run, force, lowEnd, record, avail, la
     failed: new Set<string>(), timer: null as ReturnType<typeof setTimeout> | null,
   });
   // Latest props, read by the stable callbacks (written after each commit).
-  const P = useRef({ images, fx, studio, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size });
-  useLayoutEffect(() => { P.current = { images, fx, studio, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size }; });
+  const P = useRef({ images, fx, studio, rtl, run, force, instant, lowEnd, record, avail, lite, onReady, onEffect, size });
+  useLayoutEffect(() => { P.current = { images, fx, studio, rtl, run, force, instant, lowEnd, record, avail, lite, onReady, onEffect, size }; });
 
   const reportReady = useCallback(() => { if (!S.current.readyDone) { S.current.readyDone = true; P.current.onReady?.(); } }, []);
 
@@ -122,6 +123,8 @@ function Engine({ images, fx, studio, rtl, run, force, lowEnd, record, avail, la
     if (s.timer) clearTimeout(s.timer);
     s.timer = null; s.holdDone = false;
     if (!P.current.run || s.running) return;
+    // Instant first card: the very first hold is skipped; only the pictures being ready can delay the first transition.
+    if (P.current.instant && s.cursor === 0) { s.holdDone = true; tryStart(); return; }
     s.timer = setTimeout(() => { s.timer = null; s.holdDone = true; tryStart(); }, P.current.fx.hold * 1000);
   }, [tryStart]);
 
@@ -186,6 +189,8 @@ function Engine({ images, fx, studio, rtl, run, force, lowEnd, record, avail, la
   useEffect(() => {
     const s = S.current;
     s.alive = true;
+    // Warm the cache with the first two pictures at once (the second one is the hidden layer's picture).
+    if (P.current.instant) void Image.prefetch(P.current.images.slice(0, 2));
     return () => { s.alive = false; if (s.timer) clearTimeout(s.timer); s.timer = null; };
   }, []);
 
@@ -223,17 +228,23 @@ function Engine({ images, fx, studio, rtl, run, force, lowEnd, record, avail, la
  *  - Low-end devices (and reduce-motion) play only the effects the admin allowed for them, else the cross-fade, and no extras.
  *  - Admin availability: a disabled effect is replaced by the nearest enabled Safe effect, or the cross-fade.
  */
-export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, style }: {
+export function CardStage({ images, fx, rtl, force, first, video, onReady, onEffect, style }: {
   images: string[]; fx: ResolvedFx; rtl: boolean;
   /** The card's pre-rendered video (Admin > Performance) and the signature it was rendered for. Played instead of the live engine when the rules allow it. */
   video?: { uri: string; sig?: string };
   /** Admin preview: always animates (even when scrolled out of view) and ignores the low-end demotion. */
   force?: boolean; onReady?: () => void;
+  /** The first card of the Home page: allowed to start its first transition at once (Admin > Animation Studio > instant first card). */
+  first?: boolean;
   /** Reports the effect prepared / playing (0 = cross-fade, -1 = still image); the admin status line shows it. */
   onEffect?: (effect: number) => void; style?: StyleProp<ViewStyle>;
 }) {
   const box = useRef<View>(null);
-  const { visible, near } = useOnScreen(box);
+  const { visible, near: nearScreen, known } = useOnScreen(box);
+  const allowInstant = useStore((s) => resolveGlobal(s.doc.settings.toolCards).instantFirst);
+  const instant = !!first && !force && allowInstant;
+  // The instant card mounts its engine at once and assumes it is visible until the first real measurement says otherwise.
+  const near = nearScreen || instant;
   const device: DeviceClass = useDeviceClass();
   const lowEnd = device.low;
   const record = shouldRecord(device);
@@ -243,14 +254,15 @@ export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, st
   const studio = useMemo(() => effectiveStudio(globalStudio, fx), [globalStudio, fx]);
   const avail = useMemo(() => availFromKey(key), [key]);
   const [layout, setLayout] = useState<Size>({ w: 0, h: 0 });
-  const run = visible || !!force;
+  const run = visible || !!force || (instant && !known);
   // Pre-rendered video: only when it matches the card's CURRENT pictures / effects / timing (else the live animation runs), the admin's mode
   // allows it on this phone, and it has not failed. The admin preview always shows the live engine.
   const videoMode = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoMode);
   const videoExtras = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoExtras);
   const videoQuality = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoQuality);
+  const advKey = useStore((s) => videoAdvKeyOf(s.doc.settings.toolCards));
   const [videoFailed, setVideoFailed] = useState<string | null>(null);
-  const status = videoStatus(video?.uri, video?.sig, videoSignature(images, cardEffectList(fx, avail, false, studio), fx.hold, fx.speed, VIDEO_RTL, videoExtras, videoQuality, studioSig(studio)));
+  const status = videoStatus(video?.uri, video?.sig, videoSignature(images, cardEffectList(fx, avail, false, studio), fx.hold, fx.speed, VIDEO_RTL, videoExtras, videoQuality, studioSig(studio), advKey));
   const playVideo = !force && !!video?.uri && videoFailed !== video.uri && shouldPlayVideo(videoMode, lowEnd, status === 'ready');
   const failVideo = useCallback(() => setVideoFailed(video?.uri ?? null), [video?.uri]);
 
@@ -268,7 +280,7 @@ export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, st
       {near && playVideo && video ? (
         <CardVideo uri={video.uri} poster={images[0]} run={run} onReady={onReady} onFail={failVideo} />
       ) : near && images.length > 0 && layout.w > 0 ? (
-        <Engine key={sig} images={images} fx={fx} studio={studio} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} record={record} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
+        <Engine key={sig} images={images} fx={fx} studio={studio} rtl={rtl} run={run} force={!!force} instant={instant} lowEnd={lowEnd} record={record} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
       ) : null}
     </View>
   );

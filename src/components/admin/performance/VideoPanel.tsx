@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { Image } from 'expo-image';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -14,9 +14,10 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { mediaUploadsEnabled, uploadBlob } from '@/lib/media';
 import { availFromKey, availKey, cardEffectList, effectiveStudio, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
 import { accentOf, studioSig } from '@/lib/fxStudio';
-import { VIDEO_QUALITY_ORDER, VIDEO_RTL, qualityPreset, videoSignature, videoSize, videoStatus, type VideoStatus } from '@/lib/cardVideoPlan';
-import { canRenderVideo, renderCardVideo, type RenderSupport } from '@/lib/cardVideoRender';
-import type { Tool, VideoMode, VideoQuality } from '@/data/types';
+import { VIDEO_QUALITY_ORDER, VIDEO_RTL, advancedKey, cleanAdvanced, estimateVideo, resolveRender, sharpestWidth, videoSignature, videoStatus, type VideoStatus } from '@/lib/cardVideoPlan';
+import { canRenderVideo, previewFrame, renderCardVideo, type FramePreview, type RenderInfo, type RenderSupport } from '@/lib/cardVideoRender';
+import { RenderAdvanced } from './RenderAdvanced';
+import type { Tool, VideoAdvanced, VideoMode, VideoQuality } from '@/data/types';
 
 /** Width a phone card typically has: the video takes the shape of the image zone at this width (the card itself crops with `cover`). */
 const REF_WIDTH = 360;
@@ -31,10 +32,12 @@ const toDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
 });
 const fmtSize = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
-type Job = { state: 'wait' | 'run' | 'upload' | 'done' | 'error'; pct: number; error?: string; size?: number };
+type Job = { state: 'wait' | 'run' | 'upload' | 'done' | 'error'; pct: number; error?: string; size?: number; pass?: number; passes?: number; info?: RenderInfo };
+/** The last frame drawn (`key` = the settings it was drawn for) or the last failure (`failedKey`). Busy = the current settings are not the drawn ones yet. */
+type Look = { frame?: FramePreview; key?: string; failedKey?: string };
 
 /** Admin > Performance > Video preview: renders the looping MP4 of each animated card, uploads it, and assigns it to the card. */
-export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQuality }: { videoMode: VideoMode; onMode: (m: VideoMode) => void; extras: boolean; onExtras: (on: boolean) => void; quality: VideoQuality; onQuality: (q: VideoQuality) => void }) {
+export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQuality, adv, onAdv }: { videoMode: VideoMode; onMode: (m: VideoMode) => void; extras: boolean; onExtras: (on: boolean) => void; quality: VideoQuality; onQuality: (q: VideoQuality) => void; adv: VideoAdvanced; onAdv: (a: VideoAdvanced) => void }) {
   const { t } = useT();
   const { colors } = useTheme();
   const pick = useL();
@@ -44,11 +47,14 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
   const avail = useMemo(() => availFromKey(key), [key]);
   const global = resolveGlobal(settings);
   const ratio = REF_WIDTH / imageHeight(global.height, global.textPlacement === 'inside', 72);
-  const preset = qualityPreset(quality);
-  const size = videoSize(ratio, preset.maxWidth);
+  const advKey = advancedKey(adv);
+  // Everything the renderer will use: the quality's recipe + the admin's advanced overrides.
+  const rs = useMemo(() => resolveRender(quality, adv, ratio), [quality, advKey, ratio]); // eslint-disable-line react-hooks/exhaustive-deps
+  const size = { width: rs.width, height: rs.height };
+  const [showAdv, setShowAdv] = useState(false);
 
   const [support, setSupport] = useState<RenderSupport | null>(null);
-  useEffect(() => { let alive = true; void canRenderVideo(size).then((s) => { if (alive) setSupport(s); }); return () => { alive = false; }; }, [size.width, size.height]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { let alive = true; void canRenderVideo(size, rs.codec).then((s) => { if (alive) setSupport(s); }); return () => { alive = false; }; }, [size.width, size.height, rs.codec]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Animated cards = slideshows with 2+ pictures.
   const cards = useMemo(() => tools.filter((x) => slideshowImages(x.media).length >= 2).map((tool) => {
@@ -57,9 +63,9 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
     // The card's Animation Studio style (its own, else the global one): it changes the picture of the video, so it is part of the signature.
     const studio = effectiveStudio(global.studio, fx);
     const effects = cardEffectList(fx, avail, false, studio);
-    const sig = videoSignature(images, effects, fx.hold, fx.speed, VIDEO_RTL, extras, quality, studio ? studioSig(studio) : '');
+    const sig = videoSignature(images, effects, fx.hold, fx.speed, VIDEO_RTL, extras, quality, studio ? studioSig(studio) : '', advKey);
     return { tool, images, fx, effects, sig, studio, status: videoStatus(tool.media.video, tool.media.videoSig, sig) as VideoStatus };
-  }), [tools, avail, extras, quality, global.studio]);
+  }), [tools, avail, extras, quality, global.studio, advKey]);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [jobs, setJobs] = useState<Record<string, Job>>({});
@@ -97,20 +103,21 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
       const id = c.tool.id;
       try {
         setJob(id, { state: 'run', pct: 0 });
-        const blob = await renderCardVideo({ images: c.images, effects: c.effects, hold: c.fx.hold, speed: c.fx.speed, rtl: VIDEO_RTL, extras, quality, accent: accentOf(c.studio, colors.primary), studio: c.studio, width: size.width, height: size.height, signal: ctl.signal, onProgress: (d, total) => setJob(id, { state: 'run', pct: d / total }) });
+        let info: RenderInfo | undefined;
+        const blob = await renderCardVideo({ images: c.images, effects: c.effects, hold: c.fx.hold, speed: c.fx.speed, rtl: VIDEO_RTL, extras, quality, accent: accentOf(c.studio, colors.primary), studio: c.studio, width: size.width, height: size.height, render: rs, signal: ctl.signal, onProgress: (d, total, pass, passes) => setJob(id, { state: 'run', pct: d / total, pass, passes }), onInfo: (i) => { info = i; } });
         setJob(id, { state: 'upload', pct: 1 });
         const url = mediaUploadsEnabled ? await uploadBlob(blob) : await toDataUrl(blob);
         // Assigned straight away: the card's video type is this file from now on (the latest media is read again: the admin may have edited the card meanwhile).
         const latest = useStore.getState().tools.find((x) => x.id === id) ?? c.tool;
         await useStore.getState().update('tools', id, { media: { ...latest.media, video: url, videoSig: c.sig } });
-        setJob(id, { state: 'done', pct: 1, size: blob.size });
+        setJob(id, { state: 'done', pct: 1, size: blob.size, info });
         ok++;
       } catch (e) { setJob(id, { state: 'error', pct: 0, error: errText(e) }); }
     }
     abort.current = null;
     setBusy(false);
     if (ok) toast(t('ax.vid.done', { count: ok }));
-  }, [busy, size.width, size.height, extras, quality, colors.primary]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [busy, rs, extras, quality, colors.primary]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const remove = async (tool: Tool) => {
     const { video: _v, videoSig: _s, ...rest } = tool.media;
@@ -118,6 +125,33 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
     setJobs((old) => { const n = { ...old }; delete n[tool.id]; return n; });
     if (preview === tool.media.video) setPreview(null);
   };
+
+  /* ------------------------------ size estimate (before rendering) ------------------------------ */
+  const codecFor = rs.codec === 'auto' ? (support?.codec as 'avc' | 'vp9' | 'av1' | undefined) ?? 'avc' : rs.codec;
+  const estimates = useMemo(() => cards.map((c) => ({ id: c.tool.id, est: estimateVideo(c.images.length, c.fx.hold, c.fx.speed, rs, codecFor) })), [cards, rs, codecFor]);
+  const totalBytes = estimates.reduce((n, x) => n + x.est.bytes, 0);
+  const totalLow = estimates.reduce((n, x) => n + x.est.lowBytes, 0), totalHigh = estimates.reduce((n, x) => n + x.est.highBytes, 0);
+  // The card the estimate and the frame preview are shown for: the first ticked one, else the first card.
+  const refCard = cards.find((c) => picked.has(c.tool.id)) ?? cards[0];
+  const refEst = refCard ? estimates.find((x) => x.id === refCard.tool.id)?.est : undefined;
+  const sharpest = refCard ? sharpestWidth(refCard.images.length, refCard.fx.hold, refCard.fx.speed, rs, ratio, codecFor) : 0;
+
+  /* ------------------------------ middle-of-the-transition frame ------------------------------ */
+  const [look, setLook] = useState<Look>({});
+  const lookKey = refCard ? `${refCard.sig}|${rs.width}x${rs.height}|${rs.fps}|${rs.fit ? `${rs.minMB}-${rs.maxMB}` : rs.bitrate ?? rs.bitrateStep}|${rs.codec}|${support?.ok ? 1 : 0}` : '';
+  const lookSeq = useRef(0);
+  const lookFailed = look.failedKey === lookKey, lookBusy = !lookFailed && look.key !== lookKey;
+  useEffect(() => {
+    if (!refCard || !support?.ok || Platform.OS !== 'web') return;
+    const seq = ++lookSeq.current;
+    // Debounced: dragging a slider must not start an encode per tick.
+    const timer = setTimeout(() => {
+      previewFrame({ images: refCard.images, effects: refCard.effects, hold: refCard.fx.hold, speed: refCard.fx.speed, rtl: VIDEO_RTL, extras, quality, accent: accentOf(refCard.studio, colors.primary), studio: refCard.studio, width: rs.width, height: rs.height, render: rs })
+        .then((frame) => { if (seq === lookSeq.current) setLook({ frame, key: lookKey }); })
+        .catch(() => { if (seq === lookSeq.current) setLook((old) => ({ ...old, failedKey: lookKey })); });
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [lookKey, extras]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const chosen = cards.filter((c) => picked.has(c.tool.id));
   const outdated = cards.filter((c) => c.status !== 'ready');
@@ -138,7 +172,7 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
         <Txt className="text-muted text-[12px] mt-2">{t(`ax.vid.modeHint.${videoMode}`)}</Txt>
         <Txt className="font-bold text-[13px] mt-4 mb-2">{t('ax.vid.quality')}</Txt>
         <Segmented testID="video-quality" value={quality} options={VIDEO_QUALITY_ORDER.map((q) => ({ key: q, label: t(`ax.vid.q.${q}`) }))} onChange={onQuality} />
-        <Txt testID="video-quality-hint" className="text-muted text-[12px] mt-2">{t(`ax.vid.qHint.${quality}`, { w: preset.maxWidth, fps: preset.fps })}</Txt>
+        <Txt testID="video-quality-hint" className="text-muted text-[12px] mt-2">{t(`ax.vid.qHint.${quality}`, { w: rs.width, fps: rs.fps, min: rs.minMB, max: rs.maxMB })}</Txt>
         <Txt className="text-muted text-[12px] mt-1">{t('ax.vid.qNote')}</Txt>
         <View className="mt-3 flex-row items-start gap-3">
           <Checkbox testID="video-extras" state={extras} onPress={() => onExtras(!extras)} label={t('ax.vid.extras')} />
@@ -153,6 +187,70 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
             {support == null ? t('ax.vid.checking') : support.ok ? t('ax.vid.supported', { codec: String(support.codec).toUpperCase(), w: size.width, h: size.height }) : support.reason === 'native' || Platform.OS !== 'web' ? t('ax.vid.nativeNote') : support.reason === 'no-webcodecs' ? t('ax.vid.noWebcodecs') : t('ax.vid.noEncoder')}
           </Txt>
         </View>
+        <Pressable testID="video-adv-toggle" accessibilityRole="button" accessibilityState={{ expanded: showAdv }} onPress={() => setShowAdv((v) => !v)} className="mt-4 flex-row items-center gap-2 h-10">
+          <Icon name="tune-variant" size={20} tone="primary" />
+          <Txt className="font-extrabold text-[15px] flex-1">{t('ax.vid.adv.title')}</Txt>
+          <Icon name={showAdv ? 'chevron-up' : 'chevron-down'} size={22} tone="muted" />
+        </Pressable>
+        {showAdv ? <RenderAdvanced adv={cleanAdvanced(adv)} onAdv={onAdv} rs={rs} /> : null}
+      </Card>
+
+      <Card testID="video-estimate" className="p-3 mb-3">
+        <View className="flex-row items-center gap-2 mb-1">
+          <Icon name="calculator-variant-outline" size={20} tone="primary" />
+          <Txt className="font-extrabold text-[17px] flex-1">{t('ax.vid.est.title')}</Txt>
+        </View>
+        <Txt className="text-muted text-[12px] mb-3">{t('ax.vid.est.intro')}</Txt>
+        {!cards.length || !refCard || !refEst ? <Txt className="text-muted text-[13px]">{t('ax.vid.empty')}</Txt> : (
+          <>
+            <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+              <View style={{ flexGrow: 1, flexBasis: 220, gap: 8 }}>
+                <Txt testID="video-est-card" className="text-[13px] font-bold" numberOfLines={1}>{t('ax.vid.est.forCard', { name: title(refCard.tool) })}</Txt>
+                <Txt testID="video-est-size" className="text-[22px] font-extrabold">{rs.fit ? `${fmtSize(refEst.lowBytes)} – ${fmtSize(refEst.highBytes)}` : `≈ ${fmtSize(refEst.bytes)}`}</Txt>
+                <View className="flex-row items-center gap-2">
+                  <Icon name={refEst.withinMax ? 'check-circle-outline' : 'alert-outline'} size={16} tone={refEst.withinMax ? 'primary' : 'danger'} />
+                  <Txt testID="video-est-verdict" className="text-[12px] flex-1">{refEst.withinMax ? t('ax.vid.est.ok', { max: rs.maxMB }) : t('ax.vid.est.over', { max: rs.maxMB })}</Txt>
+                </View>
+                <Txt testID="video-est-quality" className="text-[12px]">{t('ax.vid.est.quality')}: <Txt className="font-bold">{t(`ax.vid.est.label.${refEst.label}`)}</Txt> · {refEst.bpp.toFixed(3)} {t('ax.vid.est.bpp')}</Txt>
+                {refEst.label === 'low' || refEst.label === 'fair' ? <Txt testID="video-est-hint" className="text-muted text-[12px]">{t('ax.vid.est.sharpest', { w: sharpest })}</Txt> : null}
+              </View>
+              <View style={{ flexGrow: 1, flexBasis: 220, gap: 4 }}>
+                <Txt className="text-[13px] font-bold mb-1">{t('ax.vid.est.how')}</Txt>
+                <Txt testID="video-est-line-size" className="text-muted text-[12px]">• {t('ax.vid.est.lSize', { w: rs.width, h: rs.height, fps: rs.fps })}{rs.real ? ` (${t('ax.vid.est.lReal')})` : ''}</Txt>
+                <Txt testID="video-est-line-loop" className="text-muted text-[12px]">• {t('ax.vid.est.lLoop', { n: refEst.pictures, s: refEst.seconds.toFixed(1), move: refEst.moveFrames, hold: refEst.holdFrames })}</Txt>
+                <Txt testID="video-est-line-rate" className="text-muted text-[12px]">• {rs.fit ? t('ax.vid.est.lFit', { min: rs.minMB, max: rs.maxMB, kbps: Math.round(refEst.bitrate / 1000) }) : rs.bitrate ? t('ax.vid.est.lManual', { kbps: Math.round(refEst.bitrate / 1000), s: refEst.seconds.toFixed(1) }) : t('ax.vid.est.lPreset', { kbps: Math.round(refEst.bitrate / 1000), s: refEst.seconds.toFixed(1) })}</Txt>
+                <Txt className="text-muted text-[12px]">• {t('ax.vid.est.lCodec', { codec: String(codecFor).toUpperCase() })}</Txt>
+              </View>
+            </View>
+            <View className="mt-3 pt-3 border-t border-line">
+              <Txt testID="video-est-total" className="text-[13px]">{t('ax.vid.est.total', { n: cards.length })}: <Txt className="font-extrabold">{rs.fit ? `${fmtSize(totalLow)} – ${fmtSize(totalHigh)}` : `≈ ${fmtSize(totalBytes)}`}</Txt></Txt>
+              {!mediaUploadsEnabled && refEst.highBytes > DEMO_MAX ? <Txt className="text-danger text-[12px] mt-1">{t('ax.vid.est.demoLimit')}</Txt> : null}
+            </View>
+          </>
+        )}
+      </Card>
+
+      <Card testID="video-look" className="p-3 mb-3">
+        <View className="flex-row items-center gap-2 mb-1">
+          <Icon name="image-outline" size={20} tone="primary" />
+          <Txt className="font-extrabold text-[17px] flex-1">{t('ax.vid.look.title')}</Txt>
+        </View>
+        <Txt className="text-muted text-[12px] mb-3">{t('ax.vid.look.intro')}</Txt>
+        {Platform.OS !== 'web' ? <Txt className="text-muted text-[13px]">{t('ax.vid.nativeNote')}</Txt>
+          : !refCard ? <Txt className="text-muted text-[13px]">{t('ax.vid.empty')}</Txt>
+          : unsupported ? <Txt className="text-muted text-[13px]">{t('ax.vid.noEncoder')}</Txt>
+          : (
+            <View style={{ gap: 8 }}>
+              <View testID="video-look-box" className="rounded-xl overflow-hidden bg-surface2 items-center justify-center" style={{ aspectRatio: rs.width / rs.height, width: '100%', maxWidth: 520 }}>
+                {look.frame ? <Image testID="video-look-image" source={{ uri: look.frame.url }} style={{ width: '100%', height: '100%', opacity: lookBusy ? 0.45 : 1 }} contentFit="cover" /> : <Txt className="text-muted text-[12px] p-3 text-center">{lookFailed ? t('ax.vid.look.error') : t('ax.vid.look.busy')}</Txt>}
+              </View>
+              <Txt testID="video-look-meta" className="text-muted text-[12px]">
+                {look.frame ? t(look.frame.compressed ? 'ax.vid.look.metaC' : 'ax.vid.look.metaRaw', { w: look.frame.width, h: look.frame.height, name: title(refCard.tool) }) : ''}
+                {lookBusy && look.frame ? ` · ${t('ax.vid.look.updating')}` : ''}
+              </Txt>
+              <Txt className="text-muted text-[12px]">{t('ax.vid.look.decide')}</Txt>
+            </View>
+          )}
       </Card>
 
       <Card className="p-3 mb-3">
@@ -179,7 +277,7 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
                   <Txt className="font-bold text-[14px]" numberOfLines={1}>{title(c.tool)}</Txt>
                   <View className="flex-row items-center gap-1 mt-0.5">
                     <Icon name={badge.icon} size={14} tone={badge.tone} />
-                    <Txt testID={`video-status-${c.tool.id}`} className="text-muted text-[12px]" numberOfLines={1}>{badge.text} · {t('ax.vid.pictures', { n: c.images.length })}{job?.size ? ` · ${fmtSize(job.size)}` : ''}</Txt>
+                    <Txt testID={`video-status-${c.tool.id}`} className="text-muted text-[12px]" numberOfLines={1}>{badge.text} · {t('ax.vid.pictures', { n: c.images.length })}{job?.size ? ` · ${fmtSize(job.size)}` : ''}{job?.info ? ` · ${t(job.info.inWindow ? 'ax.vid.fitIn' : job.info.bytes < rs.minMB * 1048576 ? 'ax.vid.fitSmall' : 'ax.vid.fitOut', { passes: job.info.passes })}` : ''}</Txt>
                   </View>
                 </View>
                 <Button testID={`video-render-${c.tool.id}`} size="sm" variant="soft" title={c.status === 'none' ? t('ax.vid.render') : t('ax.vid.rerender')} disabled={!!unsupported || busy || !support} onPress={() => run([c])} />
@@ -187,7 +285,7 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
               {running ? (
                 <View className="mt-2">
                   <View className="h-2 rounded-full bg-surface2 overflow-hidden"><View testID={`video-bar-${c.tool.id}`} className="h-2 bg-primary" style={{ width: `${Math.round((job.state === 'run' ? job.pct : 1) * 100)}%` }} /></View>
-                  <Txt className="text-muted text-[11px] mt-1">{job.state === 'wait' ? t('ax.vid.waiting') : job.state === 'run' ? t('ax.vid.rendering', { pct: Math.round(job.pct * 100) }) : t('ax.vid.uploading')}</Txt>
+                  <Txt className="text-muted text-[11px] mt-1">{job.state === 'wait' ? t('ax.vid.waiting') : job.state === 'run' ? job.passes && job.passes > 1 && (job.pass ?? 1) > 1 ? t('ax.vid.renderingPass', { pct: Math.round(job.pct * 100), pass: job.pass, max: job.passes }) : t('ax.vid.rendering', { pct: Math.round(job.pct * 100) }) : t('ax.vid.uploading')}</Txt>
                 </View>
               ) : null}
               {job?.state === 'error' ? <Txt className="text-danger text-[12px] mt-1">{job.error}</Txt> : null}

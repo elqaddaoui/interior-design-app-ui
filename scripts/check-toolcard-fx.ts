@@ -9,10 +9,10 @@
 import { TIER_ORDER, tierState, toggleTier } from '../src/lib/toolCardFx';
 import { SPEED_MAX, SPEED_MIN, HOLD_MAX, HOLD_MIN, FX, FX_FADE, FX_IDS, TIERS, DEFAULT_ENABLED, DEFAULT_LOW_END, cropToRatio, effectiveEffect, decoAt, decoCount, farCorners, hasExtras, layerFrame, layerGeometry, makeCfg, nearestSafe, resolveAvail, verdictOf, ease, type Cfg } from '../src/lib/toolCardFx';
 
-import { planTimeline, frames, videoSize, videoSignature, videoStatus, shouldPlayVideo, VIDEO_QUALITIES, VIDEO_QUALITY_ORDER, VIDEO_QUALITY_DEFAULT, cleanVideoQuality, qualityPreset } from '../src/lib/cardVideoPlan';
+import { planTimeline, frames, videoSize, videoSignature, videoStatus, shouldPlayVideo, VIDEO_QUALITIES, VIDEO_QUALITY_ORDER, VIDEO_QUALITY_DEFAULT, cleanVideoQuality, qualityPreset, cleanAdvanced, advancedKey, resolveRender, realWidth, estimateVideo, sharpestWidth, presetBitrate } from '../src/lib/cardVideoPlan';
 import { fitSide, fallbackFormat, alreadyOptimized, isRasterToOptimize, dataUrlMime, PRESETS } from '../src/lib/imageOptimizeCore';
 import { resolveFx, resolveGlobal, cleanFx, cardEffectList, effectiveStudio, patchGlobal, studioKeyOf } from '../src/lib/toolCards';
-import { DEFAULT_STUDIO, PRESETS as STUDIO_PRESETS, activeStudio, cleanStudio, exportStudio, importStudio, isDefaultStudio, overrideFor, pieceAt, randomStudio, rnd, studioHasExtras, studioMoves, studioPiece, studioPieceCount, studioSig, followDeco, tintAlpha, barAlpha, barSegments, EASE_KEYS, type StudioStyle } from '../src/lib/fxStudio';
+import { DEFAULT_STUDIO, PRESETS as STUDIO_PRESETS, LIBRARY, LIB_CATS, cleanSavedPresets, makeSavedPreset, activeStudio, cleanStudio, exportStudio, importStudio, isDefaultStudio, overrideFor, pieceAt, randomStudio, rnd, studioHasExtras, studioMoves, studioPiece, studioPieceCount, studioSig, followDeco, tintAlpha, barAlpha, barSegments, EASE_KEYS, type StudioStyle } from '../src/lib/fxStudio';
 import { backMotion, frontMotion, motionTransform } from '../src/lib/toolCardFx';
 import { EVIDENCE_TTL_MS, JANKY_AVG_MS, WARMUP_FRAMES, addOutcome, classifyDevice, judgeTransition, measuredVerdict, shouldRecord, type DeviceSignals, type Evidence } from '../src/lib/deviceTier';
 
@@ -270,13 +270,13 @@ console.log('device: hardware, preference and measurement rules ok');
   assert.equal(sig, videoSignature(['a', 'b'], [1, 2], 0.9, 1)); 
   for (const other of [videoSignature(['b', 'a'], [1, 2], 0.9, 1), videoSignature(['a', 'b'], [1, 3], 0.9, 1), videoSignature(['a', 'b'], [1, 2], 1.0, 1), videoSignature(['a', 'b'], [1, 2], 0.9, 1.5)]) assert(other !== sig, 'any change outdates the video');
   // Quality presets: monotonic size / fps, valid even sizes, default keeps the old signature, any other quality outdates the video.
-  assert.deepEqual(VIDEO_QUALITY_ORDER, ['low', 'balanced', 'high', 'ultra']); assert.equal(VIDEO_QUALITY_DEFAULT, 'balanced');
-  for (let k = 1; k < VIDEO_QUALITY_ORDER.length; k++) assert(VIDEO_QUALITIES[VIDEO_QUALITY_ORDER[k]].maxWidth > VIDEO_QUALITIES[VIDEO_QUALITY_ORDER[k - 1]].maxWidth, 'width grows with quality');
+  assert.deepEqual(VIDEO_QUALITY_ORDER, ['low', 'balanced', 'high', 'ultra', 'best']); assert.equal(VIDEO_QUALITY_DEFAULT, 'balanced');
+  for (let k = 1; k < VIDEO_QUALITY_ORDER.length - 1; k++) assert(VIDEO_QUALITIES[VIDEO_QUALITY_ORDER[k]].maxWidth > VIDEO_QUALITIES[VIDEO_QUALITY_ORDER[k - 1]].maxWidth, 'width grows with quality');
   assert.equal(cleanVideoQuality('nope'), 'balanced'); assert.equal(cleanVideoQuality(undefined), 'balanced'); assert.equal(cleanVideoQuality('ultra'), 'ultra'); assert.equal(cleanVideoQuality('__proto__'), 'balanced');
   assert.equal(resolveGlobal({ videoQuality: 'high' } as any).videoQuality, 'high'); assert.equal(resolveGlobal(undefined).videoQuality, 'balanced'); assert.equal(resolveGlobal({ videoQuality: 'x' } as any).videoQuality, 'balanced');
   for (const q of VIDEO_QUALITY_ORDER) { const v = videoSize(1.6, qualityPreset(q).maxWidth); assert(v.width === qualityPreset(q).maxWidth && v.height % 2 === 0, `size ${q}`); }
   assert.equal(videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'balanced'), sig, 'default quality keeps the old signature');
-  const qs = VIDEO_QUALITY_ORDER.map((q) => videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, q)); assert.equal(new Set(qs).size, 4, 'each quality has its own signature');
+  const qs = VIDEO_QUALITY_ORDER.map((q) => videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, q)); assert.equal(new Set(qs).size, 5, 'each quality has its own signature');
   { const lo = planTimeline(3, [1, 2], 0.9, 1, 24), hi = planTimeline(3, [1, 2], 0.9, 1, 60);
     assert.equal(lo.fps, 24); assert.equal(hi.fps, 60); assert(hi.frames > lo.frames, 'more fps = more frames');
     assert(Math.abs(lo.duration - hi.duration) < 0.05, `the loop lasts the same whatever the fps (${lo.duration} vs ${hi.duration})`);
@@ -289,6 +289,68 @@ console.log('device: hardware, preference and measurement rules ok');
   assert.equal(shouldPlayVideo('always', false, true), true); assert.equal(shouldPlayVideo('off', true, true), false); assert.equal(shouldPlayVideo('always', true, false), false, 'no valid video: live engine');
   assert.equal(resolveGlobal(undefined).videoMode, 'lowEnd'); assert.equal(resolveGlobal({ videoMode: 'always' }).videoMode, 'always'); assert.equal(resolveGlobal({ videoMode: 'nope' as never }).videoMode, 'lowEnd');
   console.log('video: timeline, loop, signature and playback rules ok');
+}
+
+// ---------------------------------------------------------------- Best quality, advanced render settings, size estimate
+{
+  const best = qualityPreset('best');
+  assert.equal(best.fps, 50, 'best = 50 fps'); assert.equal(best.real, true, 'best uses the real card size'); assert.deepEqual(best.fit, [1, 1.5], 'best fits 1 - 1.5 MB'); assert.equal(best.bitrate, 'very-high');
+  assert.equal(cleanVideoQuality('best'), 'best');
+  assert.equal(realWidth(360, 3), 1080, 'real card width = 360 css px x 3'); assert.equal(realWidth(100, 1), 240); assert.equal(realWidth(720, 4), 1920);
+  const rs = resolveRender('best', {}, 1.6);
+  assert.equal(rs.width, 1080); assert.equal(rs.fps, 50); assert.equal(rs.fit, true); assert.equal(rs.minMB, 1); assert.equal(rs.maxMB, 1.5); assert.equal(rs.real, true); assert(rs.width % 2 === 0 && rs.height % 2 === 0);
+  const bal = resolveRender('balanced', {}, 1.6); assert.equal(bal.fit, false); assert.equal(bal.width, 720); assert.equal(bal.fps, 30); assert.equal(bal.real, false);
+  // Overrides win over the preset, and only the touched keys are stored.
+  assert.deepEqual(cleanAdvanced({}), {}); assert.deepEqual(cleanAdvanced(null), {}); assert.deepEqual(cleanAdvanced({ junk: 1, fps: 'x' }), {}, 'unknown / bad keys are dropped');
+  assert.equal(cleanAdvanced({ fps: 500 }).fps, 60, 'fps is clamped'); assert.equal(cleanAdvanced({ maxMB: 99 }).maxMB, 8); assert.equal(cleanAdvanced({ codec: 'nope' }).codec, undefined); assert.equal(cleanAdvanced({ codec: 'vp9' }).codec, 'vp9');
+  assert.equal(cleanAdvanced({ width: 0 }).width, 0, 'width 0 = real card size'); assert.equal(cleanAdvanced({ width: 801 }).width! % 2, 0);
+  assert.equal(resolveRender('best', { fps: 40, maxMB: 1.2 }, 1.6).fps, 40); assert.equal(resolveRender('best', { fps: 40, maxMB: 1.2 }, 1.6).maxMB, 1.2);
+  assert.equal(resolveRender('best', { minMB: 3, maxMB: 2 }, 1.6).minMB, 2, 'min never exceeds max');
+  assert.equal(resolveRender('balanced', { width: 0 }, 1.6).width, 1080, 'any quality can use the real size'); assert.equal(resolveRender('best', { width: 640 }, 1.6).width, 640);
+  assert.equal(resolveRender('balanced', { fit: true }, 1.6).fit, true); assert.equal(resolveRender('best', { fit: false, kbps: 3000 }, 1.6).bitrate, 3_000_000); assert.equal(resolveRender('best', { kbps: 3000 }, 1.6).bitrate, null, 'manual bitrate only without fit');
+  assert.equal(advancedKey({}), ''); assert.equal(advancedKey(undefined), ''); assert.equal(advancedKey({ fps: 40, junk: 1 }), advancedKey({ fps: 40 })); assert(advancedKey({ fps: 40 }) !== advancedKey({ fps: 41 }));
+  assert.equal(resolveGlobal({ videoAdv: { fps: 99 } as any }).videoAdv.fps, 60); assert.deepEqual(resolveGlobal(undefined).videoAdv, {});
+  // Signature: no advanced settings keeps old videos valid; a change outdates them.
+  const base = videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'best', '', '');
+  assert.equal(videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'best'), base); assert(videoSignature(['a', 'b'], [1, 2], 0.9, 1, true, false, 'best', '', advancedKey({ fps: 40 })) !== base);
+  // The estimate.
+  const e = estimateVideo(3, 0.9, 1, rs);
+  assert.equal(e.mode, 'fit'); assert.equal(e.lowBytes, 1048576); assert.equal(e.highBytes, 1.5 * 1048576); assert(e.bytes >= e.lowBytes && e.bytes <= e.highBytes && e.withinMax, 'fit estimate lands inside the window');
+  assert(e.seconds > 0 && e.frames === e.moveFrames + e.holdFrames && e.pictures === 3 && e.moveFrames > 0);
+  assert(estimateVideo(6, 0.9, 1, rs).seconds > e.seconds, 'more pictures = longer loop'); assert(estimateVideo(3, 0.9, 1, rs).moveFrames === estimateVideo(3, 2, 1, rs).moveFrames, 'hold does not change moving frames');
+  const p1 = estimateVideo(3, 0.9, 1, bal), p2 = estimateVideo(3, 0.9, 1, resolveRender('high', {}, 1.6)), p3 = estimateVideo(3, 0.9, 1, resolveRender('ultra', {}, 1.6));
+  assert.equal(p1.mode, 'preset'); assert(p1.bytes < p2.bytes && p2.bytes < p3.bytes, 'preset sizes grow with quality');
+  assert(estimateVideo(3, 0.9, 1, { ...bal, bitrate: 4_000_000 }).bytes > estimateVideo(3, 0.9, 1, { ...bal, bitrate: 1_000_000 }).bytes, 'manual bit rate drives the size'); assert.equal(estimateVideo(3, 0.9, 1, { ...bal, bitrate: 1_000_000 }).mode, 'manual');
+  assert.equal(estimateVideo(1, 0.9, 1, rs).bytes, 0, 'one picture cannot animate: nothing to render');
+  assert(presetBitrate('very-high', 1080, 675) > presetBitrate('medium', 1080, 675) && presetBitrate('very-high', 1080, 675, 'av1') < presetBitrate('very-high', 1080, 675), 'bitrate: quality up, better codec down');
+  assert(sharpestWidth(3, 0.9, 1, rs, 1.6) >= 240 && sharpestWidth(3, 0.9, 1, rs, 1.6) <= 1920);
+  assert(sharpestWidth(3, 0.9, 1, { ...rs, maxMB: 0.3, minMB: 0.2 }, 1.6) <= sharpestWidth(3, 0.9, 1, rs, 1.6), 'a smaller budget never allows a bigger picture');
+  console.log('video: best quality, advanced settings and size estimate ok');
+}
+
+// ---------------------------------------------------------------- Animation Studio library + saved presets, instant first card
+{
+  assert.equal(LIB_CATS.length, 6); assert.equal(LIBRARY.length, 30, '30 ready-made looks');
+  for (const c of LIB_CATS) assert.equal(LIBRARY.filter((p) => p.cat === c.key).length, 5, `5 looks in ${c.key}`);
+  assert.equal(new Set(LIBRARY.map((p) => p.id)).size, 30, 'unique ids');
+  for (const p of LIBRARY) {
+    assert(Number.isInteger(p.fx) && p.fx >= 1 && p.fx <= 60 && FX[p.fx], `${p.id}: a real transition`); assert.equal(p.style.force, p.fx, `${p.id}: forces its transition`);
+    const st = cleanStudio(p.style); assert.deepEqual(cleanStudio(st), st, `${p.id} is a valid style`); assert(!isDefaultStudio(st), `${p.id} does something`);
+    assert(st.els.mode === 'off' || st.els.count <= 18, `${p.id} stays clean (few pieces)`);
+  }
+  assert(new Set(LIBRARY.map((p) => studioSig(p.style))).size >= 29, 'the looks are really different from each other');
+  // Saved presets: sanitised on the way in and out, newest first, capped.
+  const a = makeSavedPreset('  My look  ', 5, LIBRARY[0].style, 1000, 0.5), b = makeSavedPreset('Second', 9, LIBRARY[1].style, 2000, 0.25);
+  assert.equal(a.name, 'My look'); assert.equal(a.fx, 5); assert(/^[A-Za-z0-9_-]{1,64}$/.test(a.id)); assert(a.id !== b.id);
+  assert.deepEqual(cleanSavedPresets([a, b]).map((x) => x.name), ['Second', 'My look'], 'newest first');
+  assert.deepEqual(cleanSavedPresets([a, a]).length, 1, 'duplicate ids dropped'); assert.deepEqual(cleanSavedPresets('x'), []); assert.deepEqual(cleanSavedPresets([{ id: 'x y', name: 'n', style: {} }, { id: 'ok', name: '   ', style: {} }, null, 5]), [], 'bad entries dropped');
+  assert.equal(cleanSavedPresets([{ id: 'k', name: 'n', fx: 999, style: { junk: 1 }, at: 1 }])[0].fx, 0, 'bad fx falls back to 0');
+  assert.equal(cleanSavedPresets(Array.from({ length: 80 }, (_, i) => ({ id: `p${i}`, name: `n${i}`, fx: 1, style: {}, at: i }))).length, 60, 'capped at 60');
+  assert.equal(makeSavedPreset('x'.repeat(200), 1, DEFAULT_STUDIO, 1, 0).name.length, 60);
+  // instantFirst defaults to ON, only an explicit false turns it off; it never touches the other settings.
+  assert.equal(resolveGlobal(undefined).instantFirst, true); assert.equal(resolveGlobal({ instantFirst: false }).instantFirst, false); assert.equal(resolveGlobal({ instantFirst: true }).instantFirst, true);
+  assert.equal(patchGlobal({ height: 300 }, { instantFirst: false }).height, 300);
+  console.log('studio: 30-look library, saved presets and instant-first setting ok');
 }
 
 // ---------------------------------------------------------------- Animation Studio

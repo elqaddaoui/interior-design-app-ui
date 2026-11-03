@@ -8,14 +8,16 @@ import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
 import { StudioPanel, TABS, applyPatch, type StudioTab } from '@/components/admin/studio/StudioPanel';
 import { StudioStage } from '@/components/admin/studio/StudioStage';
-import { Chips } from '@/components/admin/studio/ui';
+import { Chips, Group, Sw } from '@/components/admin/studio/ui';
 import { SAMPLES } from '@/components/admin/studio/samples';
 import { useT, useL } from '@/i18n';
 import { useBp } from '@/hooks/useBp';
 import { useCollectionDraft, useDraftDoc } from '@/hooks/useDraftDoc';
 import { useTheme } from '@/theme/ThemeProvider';
 import { FX_FADE } from '@/lib/toolCardFx';
-import { DEFAULT_STUDIO, accentOf, activeStudio, cleanStudio, cloneStudio, isDefaultStudio, type StudioStyle } from '@/lib/fxStudio';
+import { DEFAULT_STUDIO, accentOf, activeStudio, cleanSavedPresets, cleanStudio, cloneStudio, isDefaultStudio, makeSavedPreset, type StudioStyle } from '@/lib/fxStudio';
+import { deviceFacts, resetLowEnd, useDeviceClass } from '@/lib/toolCardPerf';
+import { usePrefs } from '@/store/usePrefs';
 import { cardEffectList, cleanFx, availFromKey, availKey, mediaFx, patchGlobal, resolveGlobal, slideshowImages } from '@/lib/toolCards';
 import { toast } from '@/store/useToast';
 import { useStore } from '@/store/useStore';
@@ -55,6 +57,13 @@ function Studio({ appRtl }: { appRtl: boolean }) {
   const [picked, setPicked] = useState<Record<string, number>>({});
 
   const global = resolveGlobal(settings.draft.toolCards);
+  const device = useDeviceClass();
+  const facts = deviceFacts();
+  const factsText = [facts.platform, facts.memoryGB != null ? `${facts.memoryGB} GB` : null, facts.cores != null ? `${facts.cores} cores` : null, facts.api != null ? `API ${facts.api}` : null].filter(Boolean).join(' · ');
+  // The admin's own saved looks live in the admin's preferences (private to the admin, follow them to every device), not in the public settings.
+  const adminPrefs = usePrefs((s) => s.admin);
+  const savedRaw = adminPrefs?.studioPresets;
+  const saved = useMemo(() => cleanSavedPresets(savedRaw), [savedRaw]);
   const card: Tool | undefined = scope === GLOBAL ? undefined : cards.find((x) => x.id === scope);
   const fx = card ? mediaFx(card.media) : null;
   const ownStyle = fx?.studio;                       // the card's own style (undefined = it uses the global one)
@@ -105,6 +114,14 @@ function Studio({ appRtl }: { appRtl: boolean }) {
     write(nxt);
   };
 
+  const savePreset = (name: string) => {
+    if (!editing || !name.trim()) return;
+    const made = makeSavedPreset(name, effect, editing, nowMs(), Math.random());
+    void usePrefs.getState().save('admin', { studioPresets: [made, ...saved].slice(0, 60) });
+    toast(t('st.savedOk'));
+  };
+  const deleteSaved = (id: string) => { void usePrefs.getState().save('admin', { studioPresets: saved.filter((x) => x.id !== id) }); };
+
   /* ------------------------------ save ------------------------------ */
   const dirty = settings.dirty || tools.dirty;
   const save = async () => {
@@ -117,11 +134,11 @@ function Studio({ appRtl }: { appRtl: boolean }) {
   /* ------------------------------ stage inputs ------------------------------ */
   const own = card ? slideshowImages(card.media) : [];
   const images: [string, string] = own.length >= 2 ? [own[0], own[1]] : SAMPLES;
-  const stageH = Math.min(260, Math.max(160, global.height));
+  const stageH = desktop ? Math.min(260, Math.max(160, global.height)) : Math.min(190, Math.max(130, global.height));
   const accent = accentOf(shown, colors.primary);
 
   const stage = (
-    <View testID="studio-stage-box" style={desktop ? ({ position: 'sticky', top: 8 } as object) : undefined}>
+    <View testID="studio-stage-box" style={desktop ? ({ position: 'sticky', top: 8 } as object) : ({ paddingBottom: 6 } as object)}>
       <StudioStage key={scope} style={shown} effect={effect} rtl={rtl} speed={fx?.speed ?? 1} lowEnd={lowEnd} images={images} height={stageH} accent={accent} />
       <View className="flex-row flex-wrap items-center mt-3" style={{ gap: 14 }}>
         <View className="flex-row items-center" style={{ gap: 8 }}><Toggle testID="st-rtl" label={t('st.rtl')} value={rtl} onValueChange={setRtl} /><Txt className="text-[13px] font-semibold">{t('st.rtl')}</Txt></View>
@@ -150,9 +167,21 @@ function Studio({ appRtl }: { appRtl: boolean }) {
         {cards.length === 0 ? <Txt className="text-muted text-[12px]">{t('st.noCards')}</Txt> : null}
       </View>
 
-      <View style={{ flexDirection: desktop ? 'row' : 'column', gap: 16, alignItems: 'flex-start' }}>
-        <View style={{ width: desktop ? 520 : '100%', maxWidth: '100%' }}>{stage}</View>
+      <View style={{ flexDirection: desktop ? 'row' : 'column', gap: desktop ? 16 : 10, alignItems: 'flex-start' }}>
+        {/* The stage stays in view while the controls scroll. Desktop: this column stretches over the whole row so the sticky box has room to travel.
+            Phone: the column itself sticks to the top of the scroll area (opaque, above the controls). */}
+        <View testID="studio-stage-col" style={desktop ? { width: 520, maxWidth: '100%', alignSelf: 'stretch' } : ({ width: '100%', position: 'sticky', top: 0, zIndex: 20, backgroundColor: colors.bg } as object)}>{stage}</View>
         <View style={{ flex: desktop ? 1 : undefined, width: desktop ? undefined : '100%', minWidth: 0 }}>
+          <Group title={t('st.deviceTitle')}>
+            <Sw testID="st-instant" label={t('st.instant')} value={global.instantFirst} onChange={(v) => settings.set((old) => ({ ...old, toolCards: patchGlobal(old.toolCards, { instantFirst: v ? undefined : false }) }))} />
+            <Txt className="text-muted text-[12px] -mt-1">{t('st.instantNote')}</Txt>
+            <View className="flex-row items-center flex-wrap" style={{ gap: 8 }}>
+              <Icon name={device.low ? 'speedometer-slow' : 'speedometer'} size={18} tone={device.low ? 'danger' : 'muted'} />
+              <Txt testID="st-device" className="text-[12px] flex-1" style={{ minWidth: 160 }}>{device.low ? t('tc.devLow', { why: device.reason ? t(`tc.why.${device.reason}`) : '' }) : t('tc.devOk')}</Txt>
+              <Button testID="st-reset-detection" size="sm" variant="soft" icon="restore" title={t('tc.resetDetection')} onPress={resetLowEnd} />
+            </View>
+            <Txt testID="st-device-facts" className="text-muted text-[11px]">{factsText}{device.measured !== 'unknown' ? ` · ${t(`tc.measured.${device.measured}`)}` : ''}</Txt>
+          </Group>
           {scope !== GLOBAL && editing === null ? (
             <View className="bg-surface rounded-2xl border border-line p-3" style={{ gap: 10 }}>
               <Txt className="text-muted text-[13px]">{t('st.ownNote')}</Txt>
@@ -173,7 +202,8 @@ function Studio({ appRtl }: { appRtl: boolean }) {
                 })}
               </ScrollView>
               <StudioPanel tab={tab} style={editing} effect={effect} onEffect={setEffect} onChange={change} onReplace={replace} accent={accent}
-                history={{ canUndo: h.past.length > 0, canRedo: h.future.length > 0 }} onUndo={undo} onRedo={redo} />
+                history={{ canUndo: h.past.length > 0, canRedo: h.future.length > 0 }} onUndo={undo} onRedo={redo}
+                saved={saved} onSave={savePreset} onDeleteSaved={deleteSaved} />
               {scope !== GLOBAL ? <Button testID="st-own-off" size="sm" variant="outline" icon="restore" title={t('st.ownOff')} onPress={() => { if (card) tools.update(card.id, { media: { ...card.media, fx: cleanFx({ ...(card.media.fx ?? {}), studio: undefined }) } }); }} /> : null}
             </>
           ) : null}
