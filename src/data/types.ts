@@ -1,3 +1,5 @@
+import type { StudioStyle } from '@/lib/fxStudio';
+
 /** Domain model. Every admin-editable text is an `LText` with one value per language. */
 export type Lang = 'dar' | 'ar' | 'fr';
 export type LText = Record<Lang, string>;
@@ -24,6 +26,7 @@ type Ordered = { order: number; visible: boolean };
 
 export interface HomeTab extends Ordered { id: Id; title: LText }
 
+
 /** GLOBAL tools-card layout: stored once (settings.toolCards) and read by every card, never per card. */
 export interface ToolCardsGlobal {
   /** Total card height in px (140-420, step 2). */
@@ -42,6 +45,8 @@ export interface ToolCardsGlobal {
   videoExtras?: boolean;
   /** Render quality of the pre-rendered videos: picture size + frame rate + bitrate (see VIDEO_QUALITIES in lib/cardVideoPlan.ts). Default 'balanced'. */
   videoQuality?: VideoQuality;
+  /** Animation Studio style shared by every card (main transition, bar, elements, colours, motion). Missing = no style (the effects look as designed). See lib/fxStudio.ts. */
+  studio?: StudioStyle;
 }
 export type VideoMode = 'lowEnd' | 'always' | 'off';
 export type VideoQuality = 'low' | 'balanced' | 'high' | 'ultra';
@@ -60,6 +65,8 @@ export interface ToolCardFx {
   /** Animation speed multiplier (0.2 - 2, default 1). */
   speed?: number;
   gradient?: ToolCardGradient;
+  /** This card's own Animation Studio style: replaces the global one for this card (a default-valued style = "plain", no style at all). */
+  studio?: StudioStyle;
 }
 
 export interface Tool extends Ordered {

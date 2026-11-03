@@ -95,11 +95,13 @@ export function hash(text: string): string {
  * Signature of everything the video shows: the pictures, the effect list, hold, speed, direction, whether the animated extras are drawn and the render quality. A video whose stored signature differs
  * from the card's current one is OUTDATED: the app does not play it (the live animation runs instead) and the Performance page offers to re-render it.
  */
-export const videoSignature = (images: string[], effects: number[], hold: number, speed: number, rtl: boolean = VIDEO_RTL, extras = false, quality: VideoQuality = VIDEO_QUALITY_DEFAULT): string => {
+export const videoSignature = (images: string[], effects: number[], hold: number, speed: number, rtl: boolean = VIDEO_RTL, extras = false, quality: VideoQuality = VIDEO_QUALITY_DEFAULT, studio = ''): string => {
   // The extras flag and the quality are only part of the hash when they differ from the defaults, so videos rendered before the options existed stay valid.
   const parts: unknown[] = [images, effects, hold, speed, rtl ? 1 : 0];
   if (extras) parts.push('extras');
   if (cleanVideoQuality(quality) !== VIDEO_QUALITY_DEFAULT) parts.push(`q:${quality}`);
+  // The Animation Studio style (its signature, '' = none) outdates a video only when there is one.
+  if (studio) parts.push(`s:${studio}`);
   return hash(JSON.stringify(parts));
 };
 

@@ -70,13 +70,13 @@ export function useTransition() {
   const configure = useCallback((idx: 0 | 1, cfg: Cfg) => { (idx === 0 ? cfg0 : cfg1).set(cfg); }, [cfg0, cfg1]);
 
   /** Runs one transition of `ms` milliseconds on the BACK layer; `cb` runs on the JS thread once the roles have been swapped. */
-  const play = useCallback((ms: number, cb: (s: PlayStats) => void) => {
+  const play = useCallback((ms: number, cb: (s: PlayStats) => void, from = 0) => {
     done.current = cb;
     frames.set(0); sum.set(0); dropped.set(0); slow.set(0); seen.set(0);
     active.set(1);
     meter.setActive(true);
-    p.set(0);
-    p.set(withTiming(1, { duration: Math.max(1, ms), easing: Easing.linear }, (fin) => {
+    p.set(from);
+    p.set(withTiming(1, { duration: Math.max(1, ms * (1 - from)), easing: Easing.linear }, (fin) => {
       if (!fin) return;
       // Same UI-thread frame: BACK (now fully covering) becomes FRONT, the old FRONT goes back to START (hidden).
       backIdx.value = 1 - backIdx.value;
@@ -85,6 +85,27 @@ export function useTransition() {
       scheduleOnRN(finish, frames.value, sum.value, dropped.value, slow.value);
     }));
   }, [p, backIdx, active, frames, sum, dropped, slow, seen, meter, finish]);
+
+  /** Animation Studio stage: stops at once and hides the BACK layer again (the FRONT picture stays exactly as it is). No roles are swapped. */
+  const reset = useCallback(() => {
+    cancelAnimation(p);
+    meter.setActive(false);
+    done.current = null;
+    p.set(0);
+    active.set(0);
+  }, [p, active, meter]);
+
+  /** Animation Studio stage: freezes the transition where it is (the stage's pause button). Returns nothing; read `v.p.value` for the position. */
+  const freeze = useCallback(() => { cancelAnimation(p); meter.setActive(false); done.current = null; }, [p, meter]);
+
+  /** Animation Studio stage: shows the transition at progress `u` (0..1) without playing it (the scrub slider). */
+  const scrub = useCallback((u: number) => {
+    cancelAnimation(p);
+    meter.setActive(false);
+    done.current = null;
+    active.set(u > 0 ? 1 : 0);
+    p.set(Math.min(1, Math.max(0, u)));
+  }, [p, active, meter]);
 
   /** Stops the animation and the meter (unmount). A mounted card never cancels mid-transition: it always runs to its end. */
   const cancel = useCallback(() => {
@@ -97,6 +118,6 @@ export function useTransition() {
   useEffect(() => cancel, [cancel]);
 
   const v = useMemo<FxValues>(() => ({ p, backIdx, active, cfg0, cfg1 }), [p, backIdx, active, cfg0, cfg1]);
-  return useMemo(() => ({ v, play, configure, cancel }), [v, play, configure, cancel]);
+  return useMemo(() => ({ v, play, configure, cancel, reset, freeze, scrub }), [v, play, configure, cancel, reset, freeze, scrub]);
 }
 export type Driver = ReturnType<typeof useTransition>;

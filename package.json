@@ -75,7 +75,8 @@
     "start:server": "node server/start.js",
     "gen:seed": "sucrase-node scripts/gen-seed.ts",
     "postinstall": "node scripts/postinstall.js",
-    "check:toolcards": "sucrase-node scripts/check-toolcard-fx.ts"
+    "check:toolcards": "sucrase-node scripts/check-toolcard-fx.ts",
+    "check:studio": "node scripts/check-studio-browser.js"
   },
   "private": true,
   "engines": {

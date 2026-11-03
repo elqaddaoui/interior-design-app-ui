@@ -11,7 +11,7 @@ import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useT } from '@/i18n';
 import { FX_IDS, TIERS, TIER_ORDER, availToStored, resolveAvail, tierState, toggleTier, type FxAvail, type Tier } from '@/lib/toolCardFx';
 import { deviceFacts, resetLowEnd, useDeviceClass } from '@/lib/toolCardPerf';
-import { resolveGlobal } from '@/lib/toolCards';
+import { patchGlobal } from '@/lib/toolCards';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import { BenchStage, type BenchResult } from './BenchStage';
@@ -38,7 +38,7 @@ export function AvailabilityModal({ images, onClose }: { images: string[]; onClo
   const factsText = [facts.platform, facts.memoryGB != null ? `${facts.memoryGB} GB` : null, facts.cores != null ? `${facts.cores} cores` : null, facts.api != null ? `API ${facts.api}` : null].filter(Boolean).join(' · ');
 
   /** Writes a new availability into the shared store (live), keeping the other global settings (height, text zone). */
-  const apply = useCallback((next: FxAvail) => settings.patch({ toolCards: { ...resolveGlobal(useStore.getState().doc.settings.toolCards), ...availToStored(next) } }), [settings]);
+  const apply = useCallback((next: FxAvail) => settings.patch({ toolCards: patchGlobal(useStore.getState().doc.settings.toolCards, availToStored(next)) }), [settings]);
   const edit = (id: number, key: 'enabled' | 'lowEnd', on: boolean) => {
     const enabled = new Set(avail.enabled), low = new Set(avail.lowEnd);
     const set = key === 'enabled' ? enabled : low;

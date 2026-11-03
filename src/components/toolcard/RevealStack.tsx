@@ -4,7 +4,10 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useDerivedValue } from 'react-native-reanimated';
 import { Icon } from '@/components/ui/Icon';
-import { MIN_SCALE, circleDiameter, decoAt, decoColor, decoCount, ease, extraRamp, layerFrame, layerGeometry, originPx, wipePivot, wipeR, withAlpha, type Cfg, type Deco, type Extra, type FxDef, type Shape as DecoShape } from '@/lib/toolCardFx';
+import { Shape } from './PieceShape';
+import { StudioLayer } from './StudioExtras';
+import { MIN_SCALE, circleDiameter, decoAt, decoColor, decoCount, ease, extraRamp, layerFrame, layerGeometry, originPx, wipePivot, wipeR, withAlpha, backMotion, frontMotion, motionOrigin, motionTransform, type Cfg, type Tr, type Deco, type Extra, type FxDef } from '@/lib/toolCardFx';
+import { studioHasExtras, type StudioStyle } from '@/lib/fxStudio';
 import type { FxValues } from './useTransition';
 
 /**
@@ -20,20 +23,43 @@ import type { FxValues } from './useTransition';
  */
 const WILL_CHANGE = Platform.OS === 'web';
 
+/**
+ * A photo motion (zoom + push) about the point `o`, as a transform list that is exact whatever the photo's own transform origin is:
+ * scale about o = translate(o) scale translate(-o); the photo's transform origin is that same point for every effect (see `motionOrigin`),
+ * so the plain list [translate, scale] already scales about it. Only the push is added on top.
+ */
+const motionAbout = (m: { s: number; tx: number; ty: number }, _o: { x: number; y: number }): Tr[] => {
+  'worklet';
+  return motionTransform(m);
+};
+
 function Layer({ idx, uri, cfg, W, H, pr, z, v, raster, onLoad, onError }: {
   idx: 0 | 1; uri: string | null; cfg: Cfg; W: number; H: number; pr: number; z: number; v: FxValues; raster: boolean;
   onLoad: (idx: 0 | 1, uri: string) => void; onError: (idx: 0 | 1, uri: string) => void;
 }) {
   const geo = useMemo(() => layerGeometry(cfg, W, H), [cfg, W, H]);
   const sv = idx === 0 ? v.cfg0 : v.cfg1;
+  const other = idx === 0 ? v.cfg1 : v.cfg0;
   const frame = useDerivedValue(() => {
     const c = sv.value;
-    // FRONT: FULL state (q = 1), static.
-    if (v.backIdx.value !== idx) { const f = layerFrame(c, W, H, pr, 1); return { o: 1, ct: f.ct, it: f.it }; }
+    // FRONT: FULL state (q = 1), static. While a transition runs, the covered photo gets the Studio's departure motion (zoom / push) of the BACK layer's effect.
+    if (v.backIdx.value !== idx) {
+      const f = layerFrame(c, W, H, pr, 1);
+      const bc = other.value;
+      if (v.p.value > 0 && (bc.zo > 0 || bc.pu > 0)) {
+        const m = frontMotion(bc, W, H, ease(bc.e, v.p.value, bc.ep)), o = motionOrigin(bc, W, H);
+        return { o: 1, ct: f.ct, it: [...f.it, ...motionAbout(m, o)] };
+      }
+      return { o: 1, ct: f.ct, it: f.it };
+    }
     const p = v.p.value;
     // BACK, waiting: START state, invisible.
     if (p <= 0) { const f = layerFrame(c, W, H, pr, 0); return { o: 0, ct: f.ct, it: f.it }; }
-    return layerFrame(c, W, H, pr, ease(c.e, p));
+    const q = ease(c.e, p, c.ep);
+    const f = layerFrame(c, W, H, pr, q);
+    // BACK: the Studio's arrival zoom (the incoming photo settles from `zi` to 1 while the window opens).
+    if (c.zi > 0) return { o: f.o, ct: f.ct, it: [...f.it, ...motionAbout(backMotion(c, q), motionOrigin(c, W, H))] };
+    return f;
   }, [W, H, pr]);
   const boxStyle = useAnimatedStyle(() => ({ opacity: frame.value.o, transform: frame.value.ct as never }));
   const innerStyle = useAnimatedStyle(() => ({ transform: frame.value.it as never }));
@@ -65,7 +91,7 @@ function WipeRider({ v, cfg, W, H, pr, x, accent }: { v: FxValues; cfg: Cfg; W: 
   const L = 2 * wipeR(W, H);
   const { x: px, y: py } = wipePivot(W, H);
   const st = useAnimatedStyle(() => {
-    const f = layerFrame(cfg, W, H, pr, ease(cfg.e, v.p.value));
+    const f = layerFrame(cfg, W, H, pr, ease(cfg.e, v.p.value, cfg.ep));
     return { opacity: v.active.value, transform: f.ct as never };
   }, [cfg, W, H, pr]);
   const sparkle = useAnimatedStyle(() => ({ opacity: Math.sin(Math.PI * Math.min(1, Math.max(0, v.p.value))) }));
@@ -95,7 +121,7 @@ function WipeRider({ v, cfg, W, H, pr, x, accent }: { v: FxValues; cfg: Cfg; W: 
 /** Rect / circle growth at progress p (same formula as the layer: scale 0.2 -> 1). */
 const grow = (cfg: Cfg, p: number) => {
   'worklet';
-  const e = Math.min(1, Math.max(0, ease(cfg.e, p)));
+  const e = Math.min(1, Math.max(0, ease(cfg.e, p, cfg.ep)));
   return { e, s: MIN_SCALE + (1 - MIN_SCALE) * e };
 };
 
@@ -142,24 +168,6 @@ function Flash({ v }: { v: FxValues }) {
   return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: WHITE, zIndex: EXTRA_Z }, st]} />;
 }
 
-/** The six clean flat shapes of the Creative tier, drawn with plain views (no images, no icon font). */
-function Shape({ shape, size, color }: { shape: DecoShape; size: number; color: string }) {
-  const t = Math.max(2, Math.round(size / 7));
-  switch (shape) {
-    case 'ring': return <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: t, borderColor: color }} />;
-    case 'diamond': { const d = size * 0.72; return <View style={{ width: d, height: d, backgroundColor: color, borderRadius: 2, transform: [{ rotate: '45deg' }] }} />; }
-    case 'plus': return (
-      <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-        <View style={{ position: 'absolute', width: size, height: t + 1, borderRadius: 2, backgroundColor: color }} />
-        <View style={{ position: 'absolute', width: t + 1, height: size, borderRadius: 2, backgroundColor: color }} />
-      </View>
-    );
-    case 'bar': return <View style={{ width: size * 0.34, height: size * 1.5, borderRadius: size * 0.17, backgroundColor: color }} />;
-    case 'tri': return <View style={{ width: 0, height: 0, borderLeftWidth: size * 0.5, borderRightWidth: size * 0.5, borderBottomWidth: size * 0.86, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: color }} />;
-    default: return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }} />;
-  }
-}
-
 /**
  * One Creative piece (dot, ring, diamond, plus, bar, triangle) riding the effect: position / scale / opacity / turn come from `decoAt`, the same
  * maths as the window it decorates. One derived worklet per piece, transform + opacity only, nothing allocated outside it.
@@ -198,15 +206,18 @@ export function Extras({ v, cfg, def, W, H, pr, accent }: { v: FxValues; cfg: Cf
 }
 
 /** The stage content: exactly W x H, always LTR (RTL is handled by the effects' maths; a photo is never mirrored). */
-export function RevealStack({ W, H, pr, v, uris, cfgs, back, raster, extra, accent, onLoad, onError }: {
+export function RevealStack({ W, H, pr, v, uris, cfgs, back, raster, extra, studio, accent, onLoad, onError }: {
   W: number; H: number; pr: number; v: FxValues; uris: [string | null, string | null]; cfgs: [Cfg, Cfg]; back: 0 | 1; raster: boolean;
-  extra: { def: FxDef; cfg: Cfg } | null; accent: string; onLoad: (idx: 0 | 1, uri: string) => void; onError: (idx: 0 | 1, uri: string) => void;
+  extra: { def: FxDef; cfg: Cfg } | null;
+  /** The Animation Studio style drawn over the transition (bar, pieces, tint). Null / without extras = nothing is drawn. */
+  studio?: { def: FxDef; cfg: Cfg; style: StudioStyle } | null; accent: string; onLoad: (idx: 0 | 1, uri: string) => void; onError: (idx: 0 | 1, uri: string) => void;
 }) {
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width: W, height: H, overflow: 'hidden', direction: 'ltr' }}>
       <Layer idx={0} uri={uris[0]} cfg={cfgs[0]} W={W} H={H} pr={pr} z={back === 0 ? 2 : 1} v={v} raster={raster} onLoad={onLoad} onError={onError} />
       <Layer idx={1} uri={uris[1]} cfg={cfgs[1]} W={W} H={H} pr={pr} z={back === 1 ? 2 : 1} v={v} raster={raster} onLoad={onLoad} onError={onError} />
       {extra ? <Extras v={v} cfg={extra.cfg} def={extra.def} W={W} H={H} pr={pr} accent={accent} /> : null}
+      {studio && studioHasExtras(studio.style) ? <StudioLayer v={v} cfg={studio.cfg} def={studio.def} style={studio.style} W={W} H={H} pr={pr} accent={accent} /> : null}
     </View>
   );
 }

@@ -32,6 +32,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { key: 'branding', icon: 'flag-outline', href: '/admin/branding' },
     { key: 'theme', icon: 'palette-outline', href: '/admin/theme' },
     { key: 'interface', icon: 'page-layout-footer', href: '/admin/interface' },
+    { key: 'studio', icon: 'motion-play-outline', href: '/admin/studio' },
     { key: 'performance', icon: 'speedometer', href: '/admin/performance' },
   ] },
 ];

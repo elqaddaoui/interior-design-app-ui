@@ -3,7 +3,8 @@ import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import { FADE_CFG, FX, FX_FADE, TR_BASE, hasExtras, makeCfg, type Cfg, type FxAvail, type FxDef } from '@/lib/toolCardFx';
-import { availFromKey, availKey, cardEffectList, resolveGlobal, type ResolvedFx } from '@/lib/toolCards';
+import { availFromKey, availKey, cardEffectList, effectiveStudio, resolveGlobal, studioKeyOf, type ResolvedFx } from '@/lib/toolCards';
+import { accentOf, activeStudio, overrideFor, studioHasExtras, studioSig, type StudioStyle } from '@/lib/fxStudio';
 import { VIDEO_RTL, shouldPlayVideo, videoSignature, videoStatus } from '@/lib/cardVideoPlan';
 import { CardVideo } from './CardVideo';
 import { shouldRecord, type DeviceClass } from '@/lib/deviceTier';
@@ -26,17 +27,19 @@ type Pair<T> = [T, T];
  *
  * Everything the engine mutates outside React lives in `S` (refs), so the callbacks are stable and never go stale.
  */
-function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, onReady, onEffect }: {
-  images: string[]; fx: ResolvedFx; rtl: boolean; run: boolean; force: boolean; lowEnd: boolean; record: boolean; avail: FxAvail; layout: Size;
+function Engine({ images, fx, studio, rtl, run, force, lowEnd, record, avail, layout, onReady, onEffect }: {
+  images: string[]; fx: ResolvedFx; studio: StudioStyle | null; rtl: boolean; run: boolean; force: boolean; lowEnd: boolean; record: boolean; avail: FxAvail; layout: Size;
   onReady?: () => void; onEffect?: (effect: number) => void;
 }) {
   const { colors } = useTheme();
   const drv = useTransition();
   const pr = PixelRatio.get();
   const lite = lowEnd && !force; // low-end: no extras (and the effect list is already reduced by effectList)
-  const list = useMemo(() => effectList(fx, avail, lowEnd && !force), [fx, avail, lowEnd, force]);
+  const studioK = studio ? studioSig(studio) : '';
+  const list = useMemo(() => effectList(fx, avail, lowEnd && !force, studio), [fx, avail, lowEnd, force, studioK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const accent = accentOf(studio, colors.primary);
   const animatable = images.length >= 2 && list.length > 0;
-  const listKey = `${list.join(',')}|${rtl ? 1 : 0}|${lite ? 1 : 0}|${animatable ? 1 : 0}`;
+  const listKey = `${list.join(',')}|${rtl ? 1 : 0}|${lite ? 1 : 0}|${animatable ? 1 : 0}|${studioK}`;
 
   // Rendered state (only what the layers need to draw).
   const [uris, setUris] = useState<Pair<string | null>>(() => [images[0] ?? null, null]);
@@ -44,6 +47,7 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
   const [back, setBack] = useState<0 | 1>(1);
   const [phase, setPhase] = useState<'idle' | 'running'>('idle');
   const [extra, setExtra] = useState<{ def: FxDef; cfg: Cfg } | null>(null);
+  const [studioNow, setStudioNow] = useState<{ def: FxDef; cfg: Cfg; style: StudioStyle } | null>(null);
   // The size never changes during a transition: a new layout is applied once the layers are idle again.
   const [size, setSize] = useState<Size>(layout);
   if (phase !== 'running' && (size.w !== layout.w || size.h !== layout.h)) setSize(layout);
@@ -56,8 +60,8 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
     failed: new Set<string>(), timer: null as ReturnType<typeof setTimeout> | null,
   });
   // Latest props, read by the stable callbacks (written after each commit).
-  const P = useRef({ images, fx, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size });
-  useLayoutEffect(() => { P.current = { images, fx, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size }; });
+  const P = useRef({ images, fx, studio, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size });
+  useLayoutEffect(() => { P.current = { images, fx, studio, rtl, run, force, lowEnd, record, avail, lite, onReady, onEffect, size }; });
 
   const reportReady = useCallback(() => { if (!S.current.readyDone) { S.current.readyDone = true; P.current.onReady?.(); } }, []);
 
@@ -83,12 +87,16 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
   const prepare = useCallback(() => {
     const s = S.current, p = P.current;
     if (!s.alive || s.running || s.prepared || !p.run || !s.frontLoaded) return;
-    const list2 = effectList(p.fx, p.avail, p.lowEnd && !p.force);
+    const list2 = effectList(p.fx, p.avail, p.lowEnd && !p.force, p.studio);
     const next = pickNext(s.cur);
     if (p.images.length < 2 || list2.length === 0 || next < 0) return;
     const e = list2[s.cursor % list2.length];
     const def = FX[e] ?? FX[FX_FADE];
-    const cfg = makeCfg(def, p.rtl);
+    // Animation Studio: the style's motion overrides (easing, direction, origin, photo zoom). A low-end phone keeps the cheap ones only (no photo zoom / push).
+    const st = p.studio;
+    const ov = st ? overrideFor(st, def, s.cursor) : null;
+    if (ov && p.lite) { ov.zi = 0; ov.zo = 0; ov.pu = 0; }
+    const cfg = makeCfg(def, p.rtl, ov);
     const b = (1 - s.front) as 0 | 1;
     const uri = p.images[next];
     s.next = next; s.effect = e; s.prepared = true;
@@ -99,7 +107,10 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
     setUris([s.uris[0], s.uris[1]]);
     setCfgs((old) => (b === 0 ? [cfg, old[1]] : [old[0], cfg]));
     setBack(b);
-    setExtra(!p.lite && hasExtras(def) ? { def, cfg } : null);
+    // The style's bar replaces the effect's own edge extras, its elements replace the effect's own pieces (nothing is drawn twice).
+    const cdef: FxDef = st ? { ...def, extra: st.bar.mode === 'effect' ? def.extra : 'none', deco: st.els.mode === 'effect' ? def.deco : undefined } : def;
+    setExtra(!p.lite && hasExtras(cdef) ? { def: cdef, cfg } : null);
+    setStudioNow(!p.lite && st && studioHasExtras(st) ? { def, cfg, style: st } : null);
     fxLog(`prepare layer ${b} <- #${next} effect ${e} (${s.backLoaded ? 'already loaded' : 'loading'})`);
     p.onEffect?.(e);
     if (s.backLoaded) tryStart();
@@ -156,6 +167,7 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
     setPhase('idle');
     setBack((1 - s.front) as 0 | 1);
     setExtra(null);
+    setStudioNow(null);
     const avg = stats.frames ? stats.sumMs / stats.frames : 0;
     fxLog(`transition effect ${s.effect}: ${stats.frames} frames, avg ${avg.toFixed(1)} ms, dropped ${stats.dropped}, slow(>32ms) ${stats.slow}`);
     // Evidence for the device classification (lib/deviceTier.ts): one janky transition proves nothing, several in a row do. The admin
@@ -198,7 +210,7 @@ function Engine({ images, fx, rtl, run, force, lowEnd, record, avail, layout, on
   const extraNow = phase === 'running' || extra ? extra : null;
   return (
     <RevealStack W={size.w} H={size.h} pr={pr} v={drv.v} uris={uris} cfgs={cfgs} back={back} raster={phase === 'running'}
-      extra={extraNow} accent={colors.primary} onLoad={onLoad} onError={onError} />
+      extra={extraNow} studio={phase === 'running' || studioNow ? studioNow : null} accent={accent} onLoad={onLoad} onError={onError} />
   );
 }
 
@@ -226,6 +238,9 @@ export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, st
   const lowEnd = device.low;
   const record = shouldRecord(device);
   const key = useStore((s) => availKey(s.doc.settings.toolCards));
+  const studioKey = useStore((s) => studioKeyOf(s.doc.settings.toolCards));
+  const globalStudio = useMemo(() => activeStudio(studioKey ? JSON.parse(studioKey) : null), [studioKey]);
+  const studio = useMemo(() => effectiveStudio(globalStudio, fx), [globalStudio, fx]);
   const avail = useMemo(() => availFromKey(key), [key]);
   const [layout, setLayout] = useState<Size>({ w: 0, h: 0 });
   const run = visible || !!force;
@@ -235,7 +250,7 @@ export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, st
   const videoExtras = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoExtras);
   const videoQuality = useStore((s) => resolveGlobal(s.doc.settings.toolCards).videoQuality);
   const [videoFailed, setVideoFailed] = useState<string | null>(null);
-  const status = videoStatus(video?.uri, video?.sig, videoSignature(images, cardEffectList(fx, avail, false), fx.hold, fx.speed, VIDEO_RTL, videoExtras, videoQuality));
+  const status = videoStatus(video?.uri, video?.sig, videoSignature(images, cardEffectList(fx, avail, false, studio), fx.hold, fx.speed, VIDEO_RTL, videoExtras, videoQuality, studioSig(studio)));
   const playVideo = !force && !!video?.uri && videoFailed !== video.uri && shouldPlayVideo(videoMode, lowEnd, status === 'ready');
   const failVideo = useCallback(() => setVideoFailed(video?.uri ?? null), [video?.uri]);
 
@@ -253,7 +268,7 @@ export function CardStage({ images, fx, rtl, force, video, onReady, onEffect, st
       {near && playVideo && video ? (
         <CardVideo uri={video.uri} poster={images[0]} run={run} onReady={onReady} onFail={failVideo} />
       ) : near && images.length > 0 && layout.w > 0 ? (
-        <Engine key={sig} images={images} fx={fx} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} record={record} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
+        <Engine key={sig} images={images} fx={fx} studio={studio} rtl={rtl} run={run} force={!!force} lowEnd={lowEnd} record={record} avail={avail} layout={layout} onReady={onReady} onEffect={onEffect} />
       ) : null}
     </View>
   );

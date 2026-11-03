@@ -1,7 +1,8 @@
-import { FX, FX_FADE, ease, layerFrame, layerGeometry, makeCfg } from './toolCardFx';
+import { backMotion, ease, frontMotion, layerFrame, layerGeometry, motionOrigin, type Cfg } from './toolCardFx';
 import { frames, planTimeline, qualityPreset } from './cardVideoPlan';
 import { apiBlob } from './backend';
-import { drawExtras } from './cardVideoExtras';
+import { cfgFor, drawExtras } from './cardVideoExtras';
+import { studioHasExtras, studioMoves } from './fxStudio';
 import type { RenderOptions, RenderSupport } from './cardVideoRender';
 
 export type { RenderOptions, RenderSupport } from './cardVideoRender';
@@ -48,9 +49,17 @@ async function loadBitmap(url: string): Promise<ImageBitmap> {
 }
 
 /** Draws one picture covering the whole W x H canvas (object-fit: cover). Pictures keep their own ratio, so they are centre-filled exactly like the live card does. */
-function drawCover(ctx: CanvasRenderingContext2D, img: ImageBitmap, W: number, H: number) {
+function drawCover(ctx: CanvasRenderingContext2D, img: ImageBitmap, W: number, H: number, m?: { s: number; tx: number; ty: number }, o?: { x: number; y: number }) {
   const s = Math.max(W / img.width, H / img.height);
   const w = img.width * s, h = img.height * s;
+  if (m && (m.s !== 1 || m.tx !== 0 || m.ty !== 0) && o) {
+    // The Studio's photo motion: translate, then zoom about the photo's own origin (same order as the live transform list).
+    ctx.save();
+    ctx.translate(m.tx, m.ty); ctx.translate(o.x, o.y); ctx.scale(m.s, m.s); ctx.translate(-o.x, -o.y);
+    ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+    ctx.restore();
+    return;
+  }
   ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
 }
 
@@ -59,10 +68,12 @@ function drawCover(ctx: CanvasRenderingContext2D, img: ImageBitmap, W: number, H
  * Same maths as the live engine (lib/toolCardFx.ts): the window is the clipping container (rect or circle) moved by the container transform;
  * the photo inside has the exact inverse transform, so it never moves: drawing it untransformed inside the clip is the same picture.
  */
-function drawTransition(ctx: CanvasRenderingContext2D, front: ImageBitmap, back: ImageBitmap, effect: number, rtl: boolean, W: number, H: number, u: number) {
-  const cfg = makeCfg(FX[effect] ?? FX[FX_FADE], rtl);
-  drawCover(ctx, front, W, H);
-  const f = layerFrame(cfg, W, H, 1, ease(cfg.e, u));
+function drawTransition(ctx: CanvasRenderingContext2D, front: ImageBitmap, back: ImageBitmap, cfg: Cfg, W: number, H: number, u: number) {
+  const q = ease(cfg.e, u, cfg.ep);
+  const o = motionOrigin(cfg, W, H);
+  // The covered photo keeps growing / is pushed while the incoming one covers it (Studio photo motion; identity without a style).
+  drawCover(ctx, front, W, H, frontMotion(cfg, W, H, q), o);
+  const f = layerFrame(cfg, W, H, 1, q);
   if (f.o <= 0) return;
   const g = layerGeometry(cfg, W, H).box as { left: number; top: number; width: number; height: number; borderRadius?: number; transformOrigin?: string };
   const [ox, oy] = String(g.transformOrigin ?? '50% 50%').split(' ').map((p, i) => (p.endsWith('%') ? (parseFloat(p) / 100) * (i ? g.height : g.width) : parseFloat(p)));
@@ -82,7 +93,7 @@ function drawTransition(ctx: CanvasRenderingContext2D, front: ImageBitmap, back:
   ctx.clip();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = Math.min(1, Math.max(0, f.o));
-  drawCover(ctx, back, W, H);
+  drawCover(ctx, back, W, H, backMotion(cfg, q), o);
   ctx.restore();
 }
 
@@ -96,6 +107,11 @@ const breathe = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 export async function renderCardVideo(o: RenderOptions): Promise<Blob> {
   const preset = qualityPreset(o.quality);
   const plan = planTimeline(o.images.length, o.effects, o.hold, o.speed, preset.fps);
+  // A style that neither moves anything nor draws anything is the plain effect.
+  const studio = o.studio && (studioMoves(o.studio) || studioHasExtras(o.studio)) ? o.studio : null;
+  const cursors = new Map<unknown, number>();
+  plan.segments.filter((x) => x.kind === 'transition').forEach((x, k) => cursors.set(x, k));
+  const cursor = (seg: unknown) => cursors.get(seg) ?? 0;
   if (!plan.segments.length) throw new Error('VIDEO_NOTHING_TO_RENDER');
   if (plan.duration > 60) throw new Error('VIDEO_TOO_LONG');
   const support = await canRenderVideo({ width: o.width, height: o.height });
@@ -121,9 +137,11 @@ export async function renderCardVideo(o: RenderOptions): Promise<Blob> {
       abort();
       if (f.seg.kind === 'hold') drawCover(ctx, bitmaps[f.seg.from], o.width, o.height);
       else {
-        drawTransition(ctx, bitmaps[f.seg.from], bitmaps[f.seg.to], f.seg.effect, o.rtl, o.width, o.height, f.u);
-        // Optional: every animated element of the transition (edge line, knob, doors, ring, star badges ...), exactly like the live card.
-        if (o.extras) drawExtras(ctx, f.seg.effect, o.rtl, o.width, o.height, f.u, o.accent ?? '#1D9E75');
+        // Number of the transition in the loop: the style's direction modes (alternate / random) depend on it, exactly like the live card.
+        const { def, cfg } = cfgFor(f.seg.effect, o.rtl, studio, cursor(f.seg));
+        drawTransition(ctx, bitmaps[f.seg.from], bitmaps[f.seg.to], cfg, o.width, o.height, f.u);
+        // Optional: every animated element of the transition (edge line, knob, doors, ring, star badges ...) and the style's tint / bar / pieces, exactly like the live card.
+        if (o.extras) drawExtras(ctx, def, cfg, o.width, o.height, f.u, o.accent ?? '#1D9E75', studio);
       }
       await source.add(f.t, f.dur);
       done++;

@@ -11,6 +11,7 @@
  */
 import type { Media, ToolCardFx, ToolCardGradient, ToolCardsGlobal, VideoMode, VideoQuality } from '@/data/types';
 import { cleanVideoQuality } from './cardVideoPlan';
+import { activeStudio, cleanStudio, studioKey, type StudioStyle } from './fxStudio';
 import { DEFAULT_ENABLED, DEFAULT_LOW_END, FX_FADE, FX_MAX, clampHold, clampSpeed, effectiveEffect, enabledIds, resolveAvail, type FxAvail } from './toolCardFx';
 
 export { FX_IDS, HOLD_MAX, HOLD_MIN, HOLD_STEP, SPEED_MAX, SPEED_MIN, SPEED_STEP, clampHold, clampSpeed } from './toolCardFx';
@@ -32,7 +33,7 @@ export const GRADIENT_STRENGTH: Record<ToolCardGradient, number> = { soft: 0.55,
 export const GRADIENT_MID = 0.55;
 
 /* ------------------------------ resolved settings ------------------------------ */
-export interface CardGlobal { height: number; textZone: 'top' | 'bottom'; textPlacement: 'inside' | 'outside'; videoMode: VideoMode; videoExtras: boolean; videoQuality: VideoQuality }
+export interface CardGlobal { height: number; textZone: 'top' | 'bottom'; textPlacement: 'inside' | 'outside'; videoMode: VideoMode; videoExtras: boolean; videoQuality: VideoQuality; /** The global Animation Studio style (null = none). */ studio: StudioStyle | null }
 export interface ResolvedFx {
   mode: 'single' | 'multiple';
   /** Multiple mode: the kept effect ids (0 = cross-fade). `null` = never edited = every ENABLED effect. */
@@ -43,6 +44,8 @@ export interface ResolvedFx {
   hold: number;
   speed: number;
   gradient: ToolCardGradient;
+  /** This card's own Animation Studio style (undefined = the card uses the global one). */
+  studio?: StudioStyle;
 }
 
 const snap = (v: number) => Math.round(v / HEIGHT_STEP) * HEIGHT_STEP;
@@ -53,8 +56,20 @@ export const clampHeight = (v: unknown) => {
 
 /** The one global layout. Missing or invalid values fall back to 220px / bottom / text inside the picture. */
 export function resolveGlobal(g?: ToolCardsGlobal): CardGlobal {
-  return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom', textPlacement: g?.textPlacement === 'outside' ? 'outside' : 'inside', videoMode: g?.videoMode === 'always' || g?.videoMode === 'off' ? g.videoMode : 'lowEnd', videoExtras: g?.videoExtras === true, videoQuality: cleanVideoQuality(g?.videoQuality) };
+  return { height: clampHeight(g?.height), textZone: g?.textZone === 'top' ? 'top' : 'bottom', textPlacement: g?.textPlacement === 'outside' ? 'outside' : 'inside', videoMode: g?.videoMode === 'always' || g?.videoMode === 'off' ? g.videoMode : 'lowEnd', videoExtras: g?.videoExtras === true, videoQuality: cleanVideoQuality(g?.videoQuality), studio: activeStudio(g?.studio) };
 }
+
+/** Stable string of the global style ('' = none): select THIS from the store so a card re-renders only when the style really changes. */
+export const studioKeyOf = (g?: ToolCardsGlobal): string => studioKey(g?.studio);
+/** The style a card really uses: its own when it has one (a default-valued own style means "plain"), else the global one. */
+export function effectiveStudio(globalStudio: StudioStyle | null, fx: ResolvedFx): StudioStyle | null {
+  return fx.studio !== undefined ? activeStudio(fx.studio) : globalStudio;
+}
+/**
+ * Writes a change of the global tools-card settings WITHOUT losing the keys `resolveGlobal` does not return (the transition availability
+ * lists and the Animation Studio style): the stored object is the base, the patch goes on top.
+ */
+export const patchGlobal = (stored: ToolCardsGlobal | undefined, patch: Partial<ToolCardsGlobal>): ToolCardsGlobal => ({ ...(stored ?? {}), ...patch });
 
 /**
  * Stable string of the availability settings. A component that selects THIS from the store re-renders only when the
@@ -89,6 +104,7 @@ export function resolveFx(fx?: ToolCardFx): ResolvedFx {
     hold: clampHold(fx?.hold ?? fx?.pause),
     speed: clampSpeed(fx?.speed),
     gradient: fx?.gradient === 'soft' || fx?.gradient === 'strong' ? fx.gradient : 'medium',
+    studio: fx?.studio !== undefined ? cleanStudio(fx.studio) : undefined,
   };
 }
 
@@ -102,12 +118,17 @@ export const requestedEffects = (fx: ResolvedFx, enabled: number[]): number[] =>
  * The effects a card really plays, in order, after the availability rules (and, on a low-end phone, the low-end rules). Empty = still image.
  * Shared by the live engine and by the video renderer (which renders with `lowEnd = false`: a video costs the phone nothing, so it carries the full animation).
  */
-export function cardEffectList(fx: ResolvedFx, avail: FxAvail, lowEnd: boolean): number[] {
+export function cardEffectList(fx: ResolvedFx, avail: FxAvail, lowEnd: boolean, studio?: StudioStyle | null): number[] {
+  // The Animation Studio's main transition replaces the card's own list: one transition on every card (it still follows the low-end rule).
+  if (studio && studio.force > 0 && studio.force <= FX_MAX) return [effectiveEffect(studio.force, forceAvail(avail, studio.force), lowEnd)];
   const requested = requestedEffects(fx, enabledIds(avail));
   // Never edited and every effect disabled by the admin: the cross-fade (always available) plays.
   if (fx.mode === 'multiple' && fx.effects === null && requested.length === 0) return [FX_FADE];
   return requested.map((id) => effectiveEffect(id, avail, lowEnd));
 }
+
+/** A forced transition counts as enabled (the admin chose it explicitly); the low-end permission stays what the admin set. */
+const forceAvail = (a: FxAvail, id: number): FxAvail => (a.enabled.has(id) ? a : { enabled: new Set([...a.enabled, id]), lowEnd: a.lowEnd });
 
 /** Stored shape for a card: drops any legacy per-card height / text zone / text placement / pause (those are global or renamed) and undefined keys. */
 export function cleanFx(fx: ToolCardFx): ToolCardFx {

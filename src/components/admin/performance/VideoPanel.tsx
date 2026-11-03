@@ -12,7 +12,8 @@ import { toast } from '@/store/useToast';
 import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import { mediaUploadsEnabled, uploadBlob } from '@/lib/media';
-import { availFromKey, availKey, cardEffectList, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
+import { availFromKey, availKey, cardEffectList, effectiveStudio, imageHeight, mediaFx, resolveGlobal, slideshowImages } from '@/lib/toolCards';
+import { accentOf, studioSig } from '@/lib/fxStudio';
 import { VIDEO_QUALITY_ORDER, VIDEO_RTL, qualityPreset, videoSignature, videoSize, videoStatus, type VideoStatus } from '@/lib/cardVideoPlan';
 import { canRenderVideo, renderCardVideo, type RenderSupport } from '@/lib/cardVideoRender';
 import type { Tool, VideoMode, VideoQuality } from '@/data/types';
@@ -53,10 +54,12 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
   const cards = useMemo(() => tools.filter((x) => slideshowImages(x.media).length >= 2).map((tool) => {
     const fx = mediaFx(tool.media);
     const images = slideshowImages(tool.media);
-    const effects = cardEffectList(fx, avail, false);
-    const sig = videoSignature(images, effects, fx.hold, fx.speed, VIDEO_RTL, extras, quality);
-    return { tool, images, fx, effects, sig, status: videoStatus(tool.media.video, tool.media.videoSig, sig) as VideoStatus };
-  }), [tools, avail, extras, quality]);
+    // The card's Animation Studio style (its own, else the global one): it changes the picture of the video, so it is part of the signature.
+    const studio = effectiveStudio(global.studio, fx);
+    const effects = cardEffectList(fx, avail, false, studio);
+    const sig = videoSignature(images, effects, fx.hold, fx.speed, VIDEO_RTL, extras, quality, studio ? studioSig(studio) : '');
+    return { tool, images, fx, effects, sig, studio, status: videoStatus(tool.media.video, tool.media.videoSig, sig) as VideoStatus };
+  }), [tools, avail, extras, quality, global.studio]);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [jobs, setJobs] = useState<Record<string, Job>>({});
@@ -94,7 +97,7 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
       const id = c.tool.id;
       try {
         setJob(id, { state: 'run', pct: 0 });
-        const blob = await renderCardVideo({ images: c.images, effects: c.effects, hold: c.fx.hold, speed: c.fx.speed, rtl: VIDEO_RTL, extras, quality, accent: colors.primary, width: size.width, height: size.height, signal: ctl.signal, onProgress: (d, total) => setJob(id, { state: 'run', pct: d / total }) });
+        const blob = await renderCardVideo({ images: c.images, effects: c.effects, hold: c.fx.hold, speed: c.fx.speed, rtl: VIDEO_RTL, extras, quality, accent: accentOf(c.studio, colors.primary), studio: c.studio, width: size.width, height: size.height, signal: ctl.signal, onProgress: (d, total) => setJob(id, { state: 'run', pct: d / total }) });
         setJob(id, { state: 'upload', pct: 1 });
         const url = mediaUploadsEnabled ? await uploadBlob(blob) : await toDataUrl(blob);
         // Assigned straight away: the card's video type is this file from now on (the latest media is read again: the admin may have edited the card meanwhile).

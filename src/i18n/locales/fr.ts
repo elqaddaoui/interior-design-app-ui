@@ -308,6 +308,7 @@ const fr = {
       theme: 'Thème',
       interface: 'Interface & menus',
       performance: 'Performance',
+      studio: 'Studio d’animation',
       chats: 'Conversations',
       notifications: 'Notifications',
     },

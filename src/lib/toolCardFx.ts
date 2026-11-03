@@ -218,25 +218,46 @@ export interface Cfg {
   ax: number; ay: number;
   /** 1 = the angle is a multiple of 90: the travel is rounded to whole physical pixels. */
   snap: number;
-  /** Easing: 0 ease-in-out cubic, 1 easeOutBack, 2 easeOutExpo, 3 easeOutElastic, 4 easeOutBounce, 5 ease-in-out quint. */
-  e: 0 | 1 | 2 | 3 | 4 | 5;
+  /** Easing: 0 ease-in-out cubic, 1 easeOutBack, 2 easeOutExpo, 3 easeOutElastic, 4 easeOutBounce, 5 ease-in-out quint, 6 cubic-bezier, 7 spring, 8 linear, 9 anticipate, 10 steps. */
+  e: number;
+  /** Easing parameters: cubic-bezier [x1, y1, x2, y2], spring [wobbles, damping], steps [n]. Unused by the other easings. */
+  ep: number[];
+  /** Photo motion (Animation Studio): arrival zoom of the incoming photo, departure zoom of the covered photo, push of the covered photo along a wipe (share of the edge speed). */
+  zi: number; zo: number; pu: number;
 }
-export const FADE_CFG: Cfg = { k: 0, a0: 0, a1: 0, ox: 0.5, oy: 0.5, ax: 0, ay: 0, snap: 0, e: 0 };
+export const FADE_CFG: Cfg = { k: 0, a0: 0, a1: 0, ox: 0.5, oy: 0.5, ax: 0, ay: 0, snap: 0, e: 0, ep: [0, 0, 0, 0], zi: 0, zo: 0, pu: 0 };
 
-/** Effect definition -> Cfg, mirrored for RTL. */
-export function makeCfg(def: FxDef, rtl: boolean): Cfg {
+/** What the Animation Studio may override on an effect's own window maths (null / undefined = keep the effect's own value). */
+export interface CfgOverride {
+  e?: number; ep?: number[];
+  /** Wipe: direction of travel (degrees, LTR). Spin: the angle the window starts rotated by. */
+  angle?: number | null;
+  /** Wipe: the angle starts `sweep` degrees away from `angle` and eases to it. */
+  sweep?: number | null;
+  ox?: number | null; oy?: number | null;
+  zi?: number; zo?: number; pu?: number;
+}
+
+/** Effect definition -> Cfg, mirrored for RTL. `ov` = the Animation Studio's overrides (easing, angle, origin, photo motion). */
+export function makeCfg(def: FxDef, rtl: boolean, ov?: CfgOverride | null): Cfg {
   const mirrorA = (a: number) => (rtl ? 180 - a : a);
   const mirrorX = (x: number) => (rtl ? 1 - x : x);
-  const e = ({ inOut: 0, back: 1, expo: 2, elastic: 3, bounce: 4, snap: 5 } as const)[def.ease] ?? 0;
+  const e = ov?.e ?? ({ inOut: 0, back: 1, expo: 2, elastic: 3, bounce: 4, snap: 5 } as const)[def.ease] ?? 0;
+  const ep = ov?.ep && ov.ep.length ? [ov.ep[0] ?? 0, ov.ep[1] ?? 0, ov.ep[2] ?? 0, ov.ep[3] ?? 0] : [0, 0, 0, 0];
+  const zi = ov?.zi ?? 0, zo = ov?.zo ?? 0;
+  const num = (v: number | null | undefined, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
   if (def.kind === 'wipe') {
-    const a1 = mirrorA(def.angle ?? 0);
-    const a0 = def.swingFrom === undefined ? a1 : mirrorA(def.swingFrom);
-    return { k: 1, a0, a1, ox: 0.5, oy: 0.5, ax: 0, ay: 0, snap: a0 === a1 && Math.abs(a1) % 90 === 0 ? 1 : 0, e };
+    const base = num(ov?.angle, def.angle ?? 0);
+    const a1 = mirrorA(base);
+    const swing = ov?.sweep != null ? (ov.sweep === 0 ? undefined : base + ov.sweep) : def.swingFrom;
+    const a0 = swing === undefined ? a1 : mirrorA(swing);
+    return { k: 1, a0, a1, ox: 0.5, oy: 0.5, ax: 0, ay: 0, snap: a0 === a1 && Math.abs(a1) % 90 === 0 ? 1 : 0, e, ep, zi, zo, pu: a0 === a1 ? ov?.pu ?? 0 : 0 };
   }
-  if (def.kind === 'rect') return { k: 2, a0: 0, a1: 0, ox: mirrorX(def.ox ?? 0.5), oy: def.oy ?? 0.5, ax: def.sx ? 1 : 0, ay: def.sy ? 1 : 0, snap: 0, e };
-  if (def.kind === 'spin') return { k: 4, a0: rtl ? -(def.angle ?? 90) : (def.angle ?? 90), a1: 0, ox: mirrorX(def.ox ?? 0.5), oy: def.oy ?? 0.5, ax: 1, ay: 1, snap: 0, e };
-  if (def.kind === 'circle') return { k: 3, a0: 0, a1: 0, ox: mirrorX(def.ox ?? 0.5), oy: def.oy ?? 0.5, ax: 0, ay: 0, snap: 0, e };
-  return FADE_CFG;
+  const ox = mirrorX(num(ov?.ox, def.ox ?? 0.5)), oy = num(ov?.oy, def.oy ?? 0.5);
+  if (def.kind === 'rect') return { k: 2, a0: 0, a1: 0, ox, oy, ax: def.sx ? 1 : 0, ay: def.sy ? 1 : 0, snap: 0, e, ep, zi, zo, pu: 0 };
+  if (def.kind === 'spin') { const a = num(ov?.angle, def.angle ?? 90); return { k: 4, a0: rtl ? -a : a, a1: 0, ox, oy, ax: 1, ay: 1, snap: 0, e, ep, zi, zo, pu: 0 }; }
+  if (def.kind === 'circle') return { k: 3, a0: 0, a1: 0, ox, oy, ax: 0, ay: 0, snap: 0, e, ep, zi, zo, pu: 0 };
+  return { ...FADE_CFG, e, ep, zi, zo };
 }
 
 /** Rect / circle grow from this scale (never lower: the counter-scale of the photo stays at most 5x). */
@@ -256,7 +277,7 @@ const clamp01 = (v: number) => {
  *  0 = ease-in-out cubic, 1 = easeOutBack (overshoots 1 a little, then settles), 2 = easeOutExpo, 3 = elastic (damped rubber-band wobble, overshoot up to ~1.3),
  *  4 = easeOutBounce, 5 = ease-in-out quint (snappy). All return exactly 0 at 0 and exactly 1 at 1.
  */
-export function ease(kind: number, u: number): number {
+export function ease(kind: number, u: number, ep?: number[]): number {
   'worklet';
   if (u <= 0) return 0;
   if (u >= 1) return 1;
@@ -273,7 +294,35 @@ export function ease(kind: number, u: number): number {
     const t = u - 2.625 / d1; return n1 * t * t + 0.984375;
   }
   if (kind === 5) return u < 0.5 ? 16 * u * u * u * u * u : 1 - Math.pow(-2 * u + 2, 5) / 2;
+  if (kind === 6) {
+    // cubic-bezier(x1, y1, x2, y2) like CSS: bisection on x (monotone because x1, x2 are kept in 0..1), then y.
+    const x1 = ep ? ep[0] : 0.4, y1 = ep ? ep[1] : 0, x2 = ep ? ep[2] : 0.2, y2 = ep ? ep[3] : 1;
+    let lo = 0, hi = 1, t = u;
+    for (let i = 0; i < 16; i++) {
+      t = (lo + hi) / 2;
+      const m = 1 - t;
+      const x = 3 * m * m * t * x1 + 3 * m * t * t * x2 + t * t * t;
+      if (x < u) lo = t; else hi = t;
+    }
+    const m = 1 - t;
+    return 3 * m * m * t * y1 + 3 * m * t * t * y2 + t * t * t;
+  }
+  if (kind === 7) {
+    // Spring: damped oscillation with `wobbles` whole swings; cos((w + 1/2) pi) = 0 at u = 1, so it settles on exactly 1.
+    const w = ep ? Math.round(ep[0]) : 3, d = ep ? ep[1] : 3.6;
+    return 1 - Math.exp(-d * u) * Math.cos((w + 0.5) * Math.PI * u);
+  }
+  if (kind === 8) return u;
+  if (kind === 9) { const c2 = 1.70158 * 1.525; return u < 0.5 ? (Math.pow(2 * u, 2) * ((c2 + 1) * 2 * u - c2)) / 2 : (Math.pow(2 * u - 2, 2) * ((c2 + 1) * (2 * u - 2) + c2) + 2) / 2; }
+  if (kind === 10) { const n = ep ? Math.max(2, Math.round(ep[0])) : 5; return Math.min(1, (Math.floor(u * n) + 1) / n); }
   return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+}
+
+/** Highest value the easing reaches over the transition (>= 1): sizes the wipe container's trailing spare so an overshoot never exposes the covered picture. */
+export function maxQ(c: Cfg): number {
+  let m = 1;
+  for (let i = 1; i < 96; i++) m = Math.max(m, ease(c.e, i / 96, c.ep));
+  return m;
 }
 
 /**
@@ -299,9 +348,10 @@ export interface LayerFrame {
   /** Container opacity. */
   o: number;
   /** Container transform and the exact inverse transform of the photo inside it. */
-  ct: ({ rotate: string } | { translateX: number } | { scaleX: number } | { scaleY: number })[];
-  it: ({ rotate: string } | { translateX: number } | { scaleX: number } | { scaleY: number })[];
+  ct: Tr[];
+  it: Tr[];
 }
+export type Tr = { rotate: string } | { translateX: number } | { translateY: number } | { scaleX: number } | { scaleY: number } | { scale: number };
 
 /**
  * The state of a layer at progress `q` (0 = START, 1 = FULL), computed from scratch on every frame (no keyframes).
@@ -334,6 +384,50 @@ export function layerFrame(c: Cfg, W: number, H: number, pr: number, q: number):
   return { o: clamp01(q), ct: [{ translateX: 0 }], it: [{ translateX: 0 }] };
 }
 
+/* ------------------------------ photo motion (Animation Studio) ------------------------------ */
+/** Extra motion of a photo inside its window: zoom about `motionOrigin` + a translation in card pixels. Identity = { s: 1, tx: 0, ty: 0 }. */
+export interface PhotoMotion { s: number; tx: number; ty: number }
+
+/** The point the photo zoom is about: the same point as the photo's own transform origin (card centre for wipes, the window origin for rect / circle / spin). */
+export function motionOrigin(c: Cfg, W: number, H: number) {
+  'worklet';
+  if (c.k >= 2) return { x: Math.round(c.ox * W), y: Math.round(c.oy * H) };
+  return { x: Math.round(W / 2), y: Math.round(H / 2) };
+}
+
+/** The INCOMING photo: arrives zoomed in by `zi` and settles to 1 while the window opens. Never below 1, so the photo always covers the window. */
+export function backMotion(c: Cfg, q: number): PhotoMotion {
+  'worklet';
+  const e = q < 0 ? 0 : q > 1 ? 1 : q;
+  return { s: 1 + c.zi * (1 - e), tx: 0, ty: 0 };
+}
+
+/**
+ * The COVERED photo: it keeps growing by `zo` while the incoming one covers it and, on a wipe, it is pushed along the edge's direction of travel
+ * (`pu` = share of the edge travel, 0..1). The push never exceeds the part already covered by the incoming picture, so no gap ever shows.
+ */
+export function frontMotion(c: Cfg, W: number, H: number, q: number): PhotoMotion {
+  'worklet';
+  const e = q < 0 ? 0 : q > 1 ? 1 : q;
+  let tx = 0, ty = 0;
+  if (c.k === 1 && c.pu > 0) {
+    const a = (c.a1 * Math.PI) / 180;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const ext = Math.abs(ca) * W + Math.abs(sa) * H;
+    const R = Math.ceil(Math.sqrt(W * W + H * H) / 2) + 4;
+    const te = ext / 2 - R + 2 * R * e;
+    const sh = c.pu * (te < 0 ? 0 : te > ext ? ext : te);
+    tx = ca * sh; ty = sa * sh;
+  }
+  return { s: 1 + c.zo * e, tx, ty };
+}
+
+/** Transform list for a photo motion (appended to the photo's inverse transform; translation first, then the zoom about the photo's origin). */
+export function motionTransform(m: PhotoMotion): Tr[] {
+  'worklet';
+  return [{ translateX: m.tx }, { translateY: m.ty }, { scale: m.s }];
+}
+
 /** Opacity of a rect / circle extra: in with the container, out during the last 15% (so nothing pops away when the reveal ends). */
 export function extraRamp(q: number) {
   'worklet';
@@ -358,9 +452,9 @@ export function layerGeometry(c: Cfg, W: number, H: number): LayerGeo {
     // L wide, 2L tall; its right-centre edge (the pivot) sits on the card centre: the window is everything behind the moving edge.
     const L = 2 * wipeR(W, H);
     const { x, y } = wipePivot(W, H);
-    // The trailing side is R / 2 longer than the travel needs: an elastic ease overshoots (q up to ~1.3; the spare is a full R then) and a back ease a little (~1.1), and without this spare the
+    // The trailing side is R / 2 longer than the travel needs: an elastic / spring ease overshoots (q up to ~1.3; the spare is a full R then; the Studio's spring / bezier eases get a spare computed from their real maximum, see maxQ) and a back ease a little (~1.1), and without this spare the
     // container's far end would leave the card edge uncovered for a moment and the previous picture would show through.
-    const T = c.e === 3 ? wipeR(W, H) : Math.ceil(wipeR(W, H) / 2);
+    const T = c.e === 3 ? wipeR(W, H) : c.e <= 5 ? Math.ceil(wipeR(W, H) / 2) : Math.ceil(wipeR(W, H) * Math.max(0.5, 2 * (maxQ(c) - 1) + 0.25));
     return {
       // borderRadius 1 forces an anti-aliased clip path on Android (a plain rect clip is hard-edged once rotated).
       box: { position: 'absolute', left: x - L - T, top: y - L, width: L + T, height: 2 * L, overflow: 'hidden', borderRadius: 1, transformOrigin: '100% 50%' },
@@ -407,10 +501,12 @@ export function farCorners(ax: number, ay: number, ox: number, oy: number): numb
 export const hasExtras = (def: FxDef) => def.extra !== 'none' || !!def.deco;
 
 /** How many pieces an effect shows (0 for every effect without a `deco`). */
-export function decoCount(def: FxDef): number {
+export function decoCount(def: FxDef, cfg?: Cfg): number {
   const d = def.deco;
   if (!d) return 0;
-  return d.path === 'far' ? farCorners(def.kind === 'spin' || def.sx ? 1 : 0, def.kind === 'spin' || def.sy ? 1 : 0, def.ox ?? 0.5, def.oy ?? 0.5).length : d.n;
+  if (d.path !== 'far') return d.n;
+  // `cfg` carries the Studio's origin override; without it the effect's own origin is used.
+  return cfg ? farCorners(cfg.ax, cfg.ay, cfg.ox, cfg.oy).length : farCorners(def.kind === 'spin' || def.sx ? 1 : 0, def.kind === 'spin' || def.sy ? 1 : 0, def.ox ?? 0.5, def.oy ?? 0.5).length;
 }
 
 /** Colour of piece `i`: white, the accent colour, or alternating (mix). */
@@ -421,17 +517,17 @@ export const decoColor = (d: Deco, i: number, accent: string) => (d.color === 'a
  * object). It uses the very same maths as the window it rides (wipe edge / iris ring / growing or turning rect), so it can never drift from
  * it, and only moves through transform + opacity: no layout, no mask, no blur.
  */
-export function decoAt(d: Deco, c: Cfg, W: number, H: number, p: number, i: number): Badge {
+export function decoAt(d: Deco, c: Cfg, W: number, H: number, p: number, i: number, spread = 1, turn = 0.75): Badge {
   'worklet';
   const TAU = 2 * Math.PI;
-  const q = ease(c.e, p);
+  const q = ease(c.e, p, c.ep);
   const e = q < 0 ? 0 : q > 1 ? 1 : q;
   const s = MIN_SCALE + (1 - MIN_SCALE) * e;
   const ramp = Math.min(1, e / FADE_IN) * (1 - Math.min(1, Math.max(0, (e - (1 - FADE_IN)) / FADE_IN)));
   const pp = p < 0 ? 0 : p > 1 ? 1 : p;
   const n = d.n < 1 ? 1 : d.n;
   const bar = d.shape === 'bar';
-  const spin = 270 * pp + i * 30;
+  const spin = turn * 360 * pp + i * 30;
   if (c.k === 1) {
     const R = Math.ceil(Math.sqrt(W * W + H * H) / 2) + 4;
     const dist0 = -R + 2 * R * q;
@@ -440,8 +536,8 @@ export function decoAt(d: Deco, c: Cfg, W: number, H: number, p: number, i: numb
     const ar = (c.a1 * Math.PI) / 180;
     // Length of the card along the wipe edge: pieces are spread over 80% of it.
     const extent = Math.abs(Math.sin(ar)) * W + Math.abs(Math.cos(ar)) * H;
-    const gap = d.size * 1.6;
-    const step = (0.8 * extent) / Math.max(1, n - 1);
+    const gap = d.size * 1.6 * spread;
+    const step = (0.8 * extent * spread) / Math.max(1, n - 1);
     let back = 0, dy = 0, sc = 1, op = 1;
     if (d.path === 'tail') { back = i * gap; sc = 1 - 0.17 * i; op = 1 - 0.22 * i; }
     else if (d.path === 'beads') { dy = (i - (n - 1) / 2) * step; sc = 0.85 + 0.15 * Math.sin(TAU * (pp * 2 + i / n)); }
