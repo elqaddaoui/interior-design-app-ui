@@ -4,6 +4,7 @@ import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, 
 import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
 import type { ChatAudio } from '@/data/types';
+import { audioMimeOf } from '@/lib/audioMime';
 
 /** A voice note is capped so its base64 stays far below the server's 4 MB request limit (mono 64 kbit/s is about 0.5 MB per minute). */
 export const MAX_VOICE_MS = 120000;
@@ -32,8 +33,8 @@ function blobToDataUrl(blob: Blob, mime: string): Promise<string> {
 /** What the server verifies and stores: the recorded file as a data URL (its real type is checked from the bytes there). */
 async function recordingToDataUrl(uri: string): Promise<string> {
   const blob = await (await fetch(uri)).blob();
-  // Web: the browser knows its container (webm/ogg/mp4). Native: the preset records AAC in an MP4 container (.m4a).
-  const mime = Platform.OS === 'web' ? (blob.type && blob.type.startsWith('audio/') ? blob.type : blob.type.startsWith('video/webm') ? 'audio/webm' : 'audio/webm') : 'audio/mp4';
+  // Web: the browser knows its container (webm / ogg / mp4), read from the file's own first bytes. Native: the preset records AAC in an MP4 container (.m4a).
+  const mime = Platform.OS === 'web' ? audioMimeOf(blob.type, new Uint8Array(await blob.slice(0, 16).arrayBuffer())) : 'audio/mp4';
   return blobToDataUrl(blob, mime);
 }
 

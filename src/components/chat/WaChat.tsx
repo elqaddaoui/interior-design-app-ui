@@ -21,6 +21,15 @@ import type { ChatMessage, Conversation } from '@/data/types';
 
 const MAX_IMAGES = 10;
 
+/**
+ * Web only: Enter sends, Shift+Enter adds a line. Not while an input method is composing (Arabic / Chinese / Japanese keyboards use Enter to
+ * confirm a word) and not on touch screens, where the on-screen Enter key means "new line" and the send button is right there.
+ */
+function enterSends(e: { key?: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number } | undefined) {
+  if (Platform.OS !== 'web' || !e || e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return false;
+  return !(typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
+}
+
 function Dot({ d }: { d: number }) {
   const v = useSharedValue(0.3);
   useEffect(() => { v.value = withDelay(d, withRepeat(withSequence(withTiming(1, { duration: 350 }), withTiming(0.3, { duration: 350 })), -1)); }, [d, v]);
@@ -286,7 +295,7 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
           <View className="flex-1 flex-row items-end bg-surface2 rounded-3xl ps-1 pe-2" style={{ minHeight: 48 }}>
             <Pressable testID="chat-attach" accessibilityRole="button" accessibilityLabel={t('assistant.attach')} onPress={() => setPanel((v) => !v)} className="h-12 w-10 items-center justify-center"><Icon name={panel ? 'close' : 'paperclip'} size={22} tone="muted" /></Pressable>
             <TextInput testID="chat-input" value={text} onChangeText={setText} onFocus={() => setPanel(false)} placeholder={staged.length ? t('md.chat.caption') : t('assistant.placeholder')} placeholderTextColor={colors.muted} multiline
-              onKeyPress={(e: any) => { if (Platform.OS === 'web' && e.nativeEvent?.key === 'Enter' && !e.nativeEvent?.shiftKey) { e.preventDefault?.(); void send(); } }}
+              onKeyPress={(e: any) => { if (enterSends(e.nativeEvent)) { e.preventDefault?.(); void send(); } }}
               style={{ fontFamily, flex: 1, color: colors.fg, fontSize: 16, maxHeight: 110, paddingVertical: 13, outlineStyle: 'none' } as any} />
             {!text.trim() && !staged.length ? <Pressable testID="chat-camera" accessibilityRole="button" accessibilityLabel={t('md.chat.camera')} onPress={() => addPictures('camera')} className="h-12 w-9 items-center justify-center"><Icon name="camera-outline" size={22} tone="muted" /></Pressable> : null}
           </View>
