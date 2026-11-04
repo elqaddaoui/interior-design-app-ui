@@ -7,6 +7,8 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Icon } from '@/components/ui/Icon';
 import { Sheet } from '@/components/ui/Sheet';
+import { ImageViewer } from '@/components/ui/ImageViewer';
+import { VoiceBubble, useVoicePlayback } from '@/components/chat/voice';
 import { Txt, useAppFont } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
@@ -20,7 +22,7 @@ import { useTheme } from '@/theme/ThemeProvider';
 
 const preview = (chat: AdminConversation, photo: string) => {
   const last = chat.messages[chat.messages.length - 1];
-  return last ? (last.text || `📷 ${photo}`) : '';
+  return last ? (last.text || (last.audio ? '🎤' : `📷 ${photo}`)) : '';
 };
 
 function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
@@ -30,7 +32,10 @@ function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
   const chat = useAdminChats(s => s.chats.find(c => c.id === id));
   const [text, setText] = useViewState('admin-chat-reply', '');
   const [busy, setBusy] = React.useState(false);
+  const [viewer, setViewer] = React.useState<number | null>(null);
+  const playback = useVoicePlayback();
   if (!chat) return <Sheet visible={false} onClose={onClose}><View /></Sheet>;
+  const pictures = chat.messages.filter(m => m.image);
   const send = async () => {
     const value = text.trim();
     if (!value || busy) return;
@@ -57,11 +62,13 @@ function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
       {chat.messages.map(m => (
         <View key={m.id} testID={`admin-msg-${m.role}`} className={`mb-2 max-w-[86%] ${m.role === 'user' ? 'self-start' : 'self-end'}`}>
           <View className={`rounded-2xl px-3 py-2 ${m.role === 'admin' ? 'bg-primary rounded-ee-md' : m.role === 'user' ? 'bg-surface2 rounded-es-md' : 'bg-soft rounded-ee-md'}`}>
-            {m.image ? <Image source={{ uri: m.image }} style={{ width: 200, height: 140, borderRadius: 12, marginBottom: m.text ? 8 : 0 }} contentFit="cover" /> : null}
+            {m.image ? <Pressable testID={`admin-image-${m.id}`} accessibilityRole="imagebutton" accessibilityLabel={t('md.viewer.open')} onPress={() => setViewer(Math.max(0, pictures.findIndex(x => x.id === m.id)))} className="active:opacity-90"><Image source={{ uri: m.image }} style={{ width: 200, height: 140, borderRadius: 12, marginBottom: m.text ? 8 : 0 }} contentFit="cover" /></Pressable> : null}
+            {m.audio ? <VoiceBubble id={m.id} audio={m.audio} playback={playback} own={m.role === 'admin'} /> : null}
             {m.text ? <Txt className={`text-[14px] leading-[20px] ${m.role === 'admin' ? 'text-onprimary' : ''}`}>{m.text}</Txt> : null}
           </View>
         </View>
       ))}
+      <ImageViewer items={pictures.map(m => ({ uri: m.image as string, label: m.role === 'user' ? chat.clientName || t('inbox.guest') : t('inbox.team') }))} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)} />
     </Sheet>
   );
 }

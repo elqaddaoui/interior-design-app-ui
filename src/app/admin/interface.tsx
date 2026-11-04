@@ -62,6 +62,16 @@ export default function InterfaceAdmin() {
         <Txt className="font-bold text-[17px] my-3">{t('improve.exitSettings')}</Txt>
         {(['exitTitle', 'exitMessage'] as const).map((key) => <Field key={key} f={{ key, kind: 'ltext', label: t(`improve.${key}`), multiline: key === 'exitMessage' }} value={settings[key]} ctx={{ s: store, L, t }} onChange={(value) => set({ [key]: value })} />)}
       </Card>
+      <Card className="p-3 mb-3">
+        <View className="flex-row items-center justify-between gap-3">
+          <View className="flex-1">
+            <Txt className="font-semibold">{t('md.chat.title')}</Txt>
+            <Txt className="text-muted text-[12px] leading-[19px] mt-1">{t('md.chat.hint')}</Txt>
+            <Txt testID="setting-waChat-state" className="text-[12px] leading-[19px] font-bold mt-1 text-primary">{settings.waChat !== false ? t('md.chat.on') : t('md.chat.off')}</Txt>
+          </View>
+          <Toggle testID="setting-waChat" label={t('md.chat.title')} value={settings.waChat !== false} onValueChange={(value) => set({ waChat: value })} />
+        </View>
+      </Card>
       <LoaderSettings settings={settings} set={set} />
       <Card className="p-3 mb-3">
         <Txt className="font-extrabold text-[17px]">{t('admin.iface.userNav')}</Txt>

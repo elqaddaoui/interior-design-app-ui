@@ -32,7 +32,7 @@ function payloadFor(request, language, event = 'request') {
   // Assistant chat: a client wrote (-> admins, opens that conversation) or an admin replied (-> the client, opens the chat).
   if (event === 'reply') return { title: text.reply, body: trim(request.text, 120) || text.replyBody, requestId: String(request.id), phone: '', lang, dir, url: `/chat/${encodeURIComponent(request.id)}`, actions: [{ action: 'open', title: text.open }] };
   if (event === 'chat') {
-    const preview = trim(request.text, 100) || '📷';
+    const preview = trim(request.text, 100) || (request.audio ? '🎤' : '📷');
     return { title: text.chat, body: `${trim(request.name, 60) || text.guest}: ${preview}`, requestId: String(request.id), phone: phone(request.whatsapp), lang, dir, url: `/admin/chats?target=${encodeURIComponent(request.id)}&open=${encodeURIComponent(request.id)}`, actions: [{ action: 'open', title: text.open }, { action: 'call', title: text.call }] };
   }
   if (event === 'ready') return { title: text.ready, body: text.readyBody, requestId: String(request.id), phone: '', lang, dir, url: '/history', actions: [{ action: 'open', title: text.open }] };

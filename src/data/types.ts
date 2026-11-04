@@ -221,10 +221,44 @@ export interface RenderRequest {
   status: RequestStatus;
   autoSent?: boolean;
   historyId?: Id;
+  /** Which model made `aiResult` (set by the server on a generation). */
+  aiModel?: { engine?: string; model?: string; label?: string };
+  /** Admin only (the server strips it for clients): everything the generation really used. */
+  aiRun?: AiRun;
   createdAt: number;
 }
 
-export interface ChatMessage { id: Id; role: 'user' | 'assistant' | 'admin'; text: string; image?: string; createdAt: number }
+/** Record of one generation, written by the server (server/imagegen/index.js). */
+export interface AiRun {
+  at?: number;
+  size?: string;
+  durationMs?: number;
+  failed?: boolean;
+  english?: string;
+  photo?: { width?: number; height?: number; bytes?: number } | null;
+  inputs?: {
+    tool?: { id?: string; title?: LText };
+    room?: { id?: string; title?: LText } | null;
+    style?: { id?: string; title?: LText } | null;
+    palette?: { id?: string; title?: LText; colors?: string[]; isSurprise?: boolean } | null;
+    inspiration?: { id?: string; image?: string } | null;
+    requestedModel?: { id?: string; name?: string; engine?: string; modelName?: string } | null;
+  };
+  tried?: { engine?: string; model?: string; label?: string; requested?: boolean; referenceSent?: boolean; ok?: boolean; ms?: number; status?: number }[];
+  used?: { engine?: string; model?: string; label?: string; referenceSent?: boolean } | null;
+  prompt?: string;
+  applied?: {
+    task?: string; intent?: string; mode?: string; style?: string; room?: string;
+    colors?: { hex: string; name?: string; role?: string }[];
+    colorSource?: 'custom' | 'preset' | 'surprise' | 'none';
+    reference?: boolean;
+    brief?: { original?: string; english?: string } | null;
+  };
+}
+
+/** A voice note: `uri` is an /api/media URL (or a local file while sending), `durationMs` is optional. */
+export interface ChatAudio { uri: string; durationMs?: number }
+export interface ChatMessage { id: Id; role: 'user' | 'assistant' | 'admin'; text: string; image?: string; audio?: ChatAudio; createdAt: number }
 export interface Conversation { id: Id; userId: Id; title: string; messages: ChatMessage[]; updatedAt: number }
 
 /* ---- single documents ---- */
@@ -297,6 +331,8 @@ export interface AppSettings {
   autoTranslate?: boolean;
   /** Let clients switch between the AI models a tool allows (default off: the admin's model is used). */
   aiModelPicker?: boolean;
+  /** New WhatsApp-style chat page for clients (voice notes, fast image preview). On unless false. */
+  waChat?: boolean;
   /** Bulk/reorder operations must be explicitly enabled per content panel. */
   bulkPanels?: string[];
 }

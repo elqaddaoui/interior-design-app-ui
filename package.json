@@ -10,6 +10,8 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "babel-preset-expo": "^57.0.14",
     "expo": "~57.0.27",
+    "expo-asset": "~57.0.20",
+    "expo-audio": "~57.0.5",
     "expo-constants": "~57.0.21",
     "expo-crypto": "~57.0.4",
     "expo-device": "~57.0.2",
@@ -76,7 +78,8 @@
     "gen:seed": "sucrase-node scripts/gen-seed.ts",
     "postinstall": "node scripts/postinstall.js",
     "check:toolcards": "sucrase-node scripts/check-toolcard-fx.ts",
-    "check:studio": "node scripts/check-studio-browser.js"
+    "check:studio": "node scripts/check-studio-browser.js",
+    "check:voice": "sucrase-node scripts/check-voice-mime.ts"
   },
   "private": true,
   "engines": {

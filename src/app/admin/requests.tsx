@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Icon } from '@/components/ui/Icon';
 import { MediaView } from '@/components/ui/MediaView';
+import { RequestInfo, RequestViewer, Shot, useRequestShots } from '@/components/admin/RequestDetail';
 import { Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
@@ -38,14 +39,56 @@ function Choices({ r }: { r: RenderRequest }) {
   const L = useL();
   const { t } = useT();
   const d = r.draft;
+  const run = r.aiRun;
+  const used = run?.used || r.aiModel;
   const parts = [
     s.tools.find((x) => x.id === d.toolId) && L(s.tools.find((x) => x.id === d.toolId)!.title),
     d.roomTypeId && L(s.roomTypes.find((x) => x.id === d.roomTypeId)?.title),
     d.styleId && L(s.styles.find((x) => x.id === d.styleId)?.title),
-    d.mode, d.paletteId && L(s.palettes.find((x) => x.id === d.paletteId)?.title),
-    d.modelId && s.models.find((x) => x.id === d.modelId)?.name,
+    (run ? run.applied?.mode : d.mode) && t(`md.req.mode${(run ? run.applied?.mode : d.mode) === 'renovation' ? 'Renovation' : 'Restyle'}`).replace(/ \(.*\)$/, ''),
+    d.paletteId && L(s.palettes.find((x) => x.id === d.paletteId)?.title),
   ].filter(Boolean) as string[];
-  return <Txt className="text-muted text-[13px] leading-[21px]" aria-label={t('admin.f.choices')}>{parts.join(' · ') || '—'}</Txt>;
+  const colors = run?.applied?.colors?.map((c) => c.hex) || d.colors || [];
+  return (
+    <View className="gap-1.5" aria-label={t('admin.f.choices')}>
+      <Txt className="text-muted text-[13px] leading-[21px]">{parts.join(' · ') || '—'}</Txt>
+      {colors.length || used || d.prompt ? (
+        <View className="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+          {colors.length ? <View className="flex-row gap-1">{colors.map((hex, i) => <View key={`${hex}${i}`} style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: hex, borderWidth: 1, borderColor: 'rgba(128,128,128,0.4)' }} />)}</View> : null}
+          {used ? <View className="flex-row items-center gap-1" style={{ maxWidth: '100%' }}><Icon name="creation-outline" size={13} tone="primary" /><Txt className="text-[12px] leading-[18px] text-primary font-semibold" numberOfLines={1} style={{ writingDirection: 'ltr' }}>{used.label || used.model}</Txt></View> : null}
+          {d.prompt ? <View className="flex-row items-center gap-1" style={{ maxWidth: '100%' }}><Icon name="text-box-outline" size={13} tone="muted" /><Txt className="text-muted text-[12px] leading-[18px]" numberOfLines={1} style={{ flexShrink: 1 }}>{d.prompt}</Txt></View> : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** The request's pictures side by side (client photo / AI result / delivered design). A tap opens the viewer; the button opens it as before/after. */
+function Shots({ r, onOpen }: { r: RenderRequest; onOpen: (index: number) => void }) {
+  const { t } = useT();
+  const shots = useRequestShots(r);
+  const at = (uri?: string) => Math.max(0, shots.findIndex((x) => x.uri === uri));
+  return (
+    <View testID="req-shots" className="mt-1">
+      <View className="flex-row flex-wrap gap-2.5">
+        <Shot testID="req-shot-photo" uri={r.photoUri} label={t('md.viewer.before')} onOpen={() => onOpen(at(r.photoUri))} />
+        <Shot testID="req-shot-ai" uri={r.aiResult} label={t('md.viewer.after')} onOpen={() => onOpen(at(r.aiResult))} />
+        {r.finalResult ? <Shot testID="req-shot-final" uri={r.finalResult} label={t('md.viewer.final')} onOpen={() => onOpen(at(r.finalResult))} /> : null}
+      </View>
+      {r.photoUri && r.aiResult ? <Button testID="req-compare" icon="compare" title={t('md.viewer.compare')} variant="soft" size="sm" className="self-start mt-2.5" onPress={() => onOpen(at(r.photoUri))} /> : null}
+    </View>
+  );
+}
+
+/** List thumbnail: result (or photo) with a tap target of its own that opens the same before/after viewer as the details. */
+function Thumb({ r, onOpen }: { r: RenderRequest; onOpen: () => void }) {
+  const { t } = useT();
+  return (
+    <Pressable testID={`req-thumb-${r.id}`} onPress={onOpen} accessibilityRole="imagebutton" accessibilityLabel={t('md.viewer.compare')} hitSlop={4} className="active:opacity-80">
+      <MediaView uri={r.aiResult || r.photoUri} className="rounded-lg" style={{ width: 52, height: 52 }} />
+      {r.aiResult && r.photoUri ? <View className="absolute -bottom-1 -end-1 w-5 h-5 rounded-full bg-primary items-center justify-center"><Icon name="compare" size={12} tone="onprimary" /></View> : null}
+    </Pressable>
+  );
 }
 
 function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
@@ -53,6 +96,7 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const { t } = useT();
   const r = s.requests.find((x) => x.id === id);
   const [final, setFinal] = useViewState('final', '');
+  const [shot, setShot] = React.useState<number | null>(null);
   const record = React.useRef(id);
   React.useEffect(() => { if (record.current !== id) { record.current = id; setFinal(r?.finalResult ?? ''); } }, [id, r?.finalResult, setFinal]);
   const dirty = !!r && final !== (r.finalResult ?? '');
@@ -73,12 +117,9 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   return (
     <Sheet visible={!!id} onClose={close} title={t('admin.req.details')} wide>
       <View className="flex-row items-center justify-between mb-2"><View><Txt className="text-[16px] font-extrabold">{r.name}</Txt><Txt className="text-muted">{r.whatsapp}</Txt></View><Badge s={r.status} /></View>
-      <Choices r={r} />
-      <View className="flex-row gap-2.5 mt-3">
-        <View className="flex-1"><Txt className="text-[12px] font-semibold text-muted mb-1">{t('admin.f.photo')}</Txt><MediaView uri={r.photoUri} className="rounded-xl" style={{ aspectRatio: 4 / 3, maxHeight: 180 }} /></View>
-        <View className="flex-1"><Txt className="text-[12px] font-semibold text-muted mb-1">{t('admin.f.aiResult')}</Txt><MediaView uri={r.aiResult} className="rounded-xl" style={{ aspectRatio: 4 / 3, maxHeight: 180 }} /></View>
-      </View>
-      <View className="mt-3"><ImageField label={t('admin.req.uploadFinal')} value={final} onChange={setFinal} /></View>
+      <Shots r={r} onOpen={setShot} />
+      <RequestInfo r={r} onOpenShot={setShot} />
+      <View className="mt-4"><ImageField label={t('admin.req.uploadFinal')} value={final} onChange={setFinal} /></View>
       <Button title={t('common.save')} variant="soft" size="sm" onPress={saveFinal} className="self-start mb-3" />
       <Button testID="req-call" icon="phone" title={t('push.call')} variant="soft" onPress={() => Linking.openURL(`tel:${r.whatsapp.replace(/[^\d+]/g, '')}`)} className="mb-2" />
       <Button testID="req-wa" icon="whatsapp" title={t('admin.req.openWa')} variant="ink" onPress={open} className="mb-2" />
@@ -86,6 +127,7 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
         <Button testID="req-processing" title={t('admin.req.markProcessing')} variant="soft" className="flex-1" disabled={r.status === 'processing'} onPress={() => set('processing')} />
         <Button testID="req-delivered" title={t('admin.req.markDelivered')} className="flex-1" disabled={r.status === 'delivered'} onPress={() => set('delivered', final ? { finalResult: final } : {})} />
       </View>
+      <RequestViewer r={r} index={shot} onIndex={setShot} onClose={() => setShot(null)} />
     </Sheet>
   );
 }
@@ -96,6 +138,8 @@ export default function Requests() {
   const s = useStore();
   const [open, setOpen] = useViewState<string | null>('open', null);
   const [filter, setFilter] = useViewState<RequestStatus | 'all'>('filter', 'all');
+  const [preview, setPreview] = React.useState<string | null>(null);
+  const previewRow = s.requests.find((x) => x.id === preview);
   const { target, open: requestedOpen, call } = useLocalSearchParams<{ target?: string; open?: string; call?: string }>();
   useFocusEffect(React.useCallback(() => {
     if (backendEnabled) void useStore.getState().reload('requests');
@@ -148,7 +192,7 @@ export default function Requests() {
           ) : null}
           {rows.map((r) => (
             <SearchTarget key={r.id} id={r.id}><RightClick items={() => menuOf(r)}><Pressable testID={`req-${r.id}`} onPress={() => setOpen(r.id)} className="px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3">
-              <MediaView uri={r.aiResult || r.photoUri} className="rounded-lg" style={{ width: 48, height: 48 }} />
+              <Thumb r={r} onOpen={() => setPreview(r.id)} />
               {desktop ? (<>
                 <Txt className="font-bold" style={{ flex: 1.2 }} numberOfLines={1}>{r.name}</Txt>
                 <Txt className="text-muted text-[13px]" style={{ flex: 1.1 }}>{r.whatsapp}</Txt>
@@ -169,6 +213,7 @@ export default function Requests() {
         </Card>
       )}
       <Detail id={open} onClose={() => setOpen(null)} />
+      {previewRow ? <RequestViewer r={previewRow} index={previewRow.photoUri ? 0 : 0} onClose={() => setPreview(null)} /> : null}
     </AdminPage>
   );
 }

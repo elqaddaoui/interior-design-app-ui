@@ -186,3 +186,73 @@ test('admin: engine keys are write-only; an admin model with an engine runs firs
 });
 
 test.after(closeShared);
+
+/**
+ * Fidelity: six different generations. For each, every choice the client entered must be (a) inside the prompt that really
+ * reaches the model, in a form the model can follow, and (b) recorded in `aiRun` so the admin sees exactly what was used.
+ */
+test('fidelity: six different generations follow every entered choice and the admin record shows them', async () => {
+  const api = fakeApi();
+  const { backend, auth, admin } = await setup({ POLLINATIONS_API_KEY: 'sk_test_key_123456' }, api);
+  const run = async (id, body) => {
+    const created = await call(backend, '/api/requests', { method: 'POST', headers: auth, body: { id, ...body } });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const out = await call(backend, '/api/ai/render', { method: 'POST', headers: auth, body: { id } });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    const sent = api.calls[api.calls.length - 1];
+    const listed = await call(backend, '/api/requests', { headers: admin });
+    const row = (Array.isArray(listed.body) ? listed.body : listed.body.requests || []).find(r => r.aiResult === out.body.imageUri);
+    assert.ok(row, `admin sees ${id}: ${JSON.stringify(listed.body.map(r => Object.keys(r)))}`);
+    return { sent, prompt: sent.body.prompt, row, aiRun: row.aiRun };
+  };
+  const base = { photoUri, draft: { toolId: 'tool_interior', roomTypeId: 'rt_living', styleId: 'st_modern', mode: 'restyle' } };
+  try {
+    // 1. photo + custom colours + client brief, restyle
+    const a = await run('fid-claim-000001', { ...base, draft: { ...base.draft, styleId: 'st_scandi', colors: ['#1C2E5A', '#F2EFEA'], prompt: 'add a big green plant near the window' } });
+    assert.match(a.prompt, /#1C2E5A/); assert.match(a.prompt, /#F2EFEA/);
+    assert.match(a.prompt, /big green plant near the window/); assert.match(a.prompt, /Scandinavian/); assert.match(a.prompt, /living room/);
+    assert.match(a.prompt, /MODE restyle/); assert.match(a.prompt, /FINAL CHECK/);
+    assert.equal(a.aiRun.applied.colorSource, 'custom'); assert.equal(a.aiRun.applied.mode, 'restyle');
+    assert.deepEqual(a.aiRun.applied.colors.map(c => c.hex), ['#1C2E5A', '#F2EFEA']);
+    assert.equal(a.aiRun.applied.brief.original, 'add a big green plant near the window');
+    assert.ok(a.aiRun.used && a.aiRun.tried.length >= 1, 'model used + tried chain recorded');
+
+    // 2. photo + renovation + preset palette (no custom colours)
+    const b = await run('fid-claim-000002', { ...base, draft: { ...base.draft, roomTypeId: 'rt_kitchen', styleId: 'st_luxury', mode: 'renovation', paletteId: 'pal_earth' } });
+    assert.match(b.prompt, /MODE renovation/); assert.doesNotMatch(b.prompt, /MODE restyle/);
+    assert.match(b.prompt, /kitchen/); assert.match(b.prompt, /#B5651D/);
+    assert.equal(b.aiRun.applied.colorSource, 'preset'); assert.equal(b.aiRun.applied.mode, 'renovation');
+
+    // 3. paint tool: the tool's job (wall colours) wins over restyle/renovation, colours are applied to walls
+    const c = await run('fid-claim-000003', { ...base, draft: { ...base.draft, toolId: 'tool_paint', colors: ['#2E7D32'], prompt: 'only the main wall' } });
+    assert.match(c.prompt, /#2E7D32/); assert.match(c.prompt, /wall/i); assert.match(c.prompt, /only the main wall/);
+    assert.doesNotMatch(c.prompt, /MODE (restyle|renovation)/, 'no contradicting mode paragraph for the paint tool');
+    assert.equal(c.aiRun.applied.intent, 'paint');
+
+    // 4. text only, Arabic (Darija) brief: offline translation fails, the original text is still sent and recorded
+    const d = await run('fid-claim-000004', { photoUri: '', draft: { toolId: 'tool_interior', roomTypeId: 'rt_bedroom', styleId: 'st_moroccan', source: 'text', colors: ['#B5651D'], prompt: 'بغيت بيت نعاس هادية بزليج' } });
+    assert.match(d.sent.url, /\/images\/generations$/); assert.equal(d.sent.body.image, undefined);
+    assert.match(d.prompt, /بزليج/); assert.match(d.prompt, /#B5651D/); assert.match(d.prompt, /bedroom/); assert.match(d.prompt, /Moroccan/);
+    assert.doesNotMatch(d.prompt, /same camera position/);
+    assert.equal(d.aiRun.applied.brief.original, 'بغيت بيت نعاس هادية بزليج');
+    assert.equal(d.aiRun.inputs.requestedModel === undefined || typeof d.aiRun.inputs.requestedModel === 'string' || d.aiRun.inputs.requestedModel === null, true);
+
+    // 5. exterior: the building is the subject, not "the room"
+    const e = await run('fid-claim-000005', { ...base, draft: { ...base.draft, toolId: 'tool_exterior', roomTypeId: 'rt_garden', styleId: 'st_farm', colors: ['#F2EFEA'], prompt: 'add a wooden pergola' } });
+    assert.match(e.prompt, /wooden pergola/); assert.match(e.prompt, /#F2EFEA/);
+    assert.equal(e.aiRun.applied.intent, 'exterior');
+    assert.doesNotMatch(e.prompt, /interior of the room/i);
+
+    // 6. inspiration reference: the multi-image model gets photo + reference; the prompt says the reference is style only
+    await call(backend, '/api/admin/content/inspirations/ins_fid', { method: 'PUT', headers: admin, body: { id: 'ins_fid', categoryId: 'x', image: `data:image/png;base64,${png(600, 400).toString('base64')}`, order: 1, visible: true } });
+    const f = await run('fid-claim-000006', { ...base, draft: { ...base.draft, styleId: 'st_boho', inspirationId: 'ins_fid', colors: ['#112233'], prompt: 'keep the sofa' } });
+    assert.equal(f.sent.body.image.length, 2, 'photo + inspiration');
+    assert.match(f.prompt, /STYLE REFERENCE ONLY/); assert.match(f.prompt, /#112233/); assert.match(f.prompt, /keep the sofa/);
+    assert.equal(f.aiRun.applied.reference, true);
+
+    // The six runs are different prompts, none empty, and the client-facing API never exposes the admin record.
+    assert.equal(new Set([a, b, c, d, e, f].map(x => x.prompt)).size, 6);
+    const mine = await call(backend, '/api/user/requests', { headers: auth });
+    assert.equal(JSON.stringify(mine.body).includes('aiRun'), false);
+  } finally { backend.server.emit('close'); }
+});

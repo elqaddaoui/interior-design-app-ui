@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
 import { Screen } from '@/components/ui/Screen';
 import { Txt } from '@/components/ui/Txt';
-import { ChatView } from '@/components/ChatView';
+import { ChatSwitch } from '@/components/chat/ChatSwitch';
 import { waLink } from '@/lib/share';
 import { useBp } from '@/hooks/useBp';
 
@@ -37,7 +37,7 @@ export default function Assistant() {
   return (
     <View className="flex-1 bg-bg" style={{ paddingTop: desktop ? 0 : insets.top }}>
       <View className="w-full self-center flex-1" style={{ maxWidth: 820 }}>
-        <ChatView key={key} conversationId={cid} onCreated={setCid} header={
+        <ChatSwitch key={key} conversationId={cid} onCreated={setCid} header={
           <View className="flex-row items-center justify-between h-14 px-4">
             <Txt className="text-[22px] font-black">{t('tabs.assistant')}</Txt>
             <View className="flex-row items-center gap-2">

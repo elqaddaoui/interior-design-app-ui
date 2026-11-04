@@ -52,6 +52,12 @@
       ],
       "expo-video",
       [
+        "expo-audio",
+        {
+          "microphonePermission": "Dwira needs the microphone to record voice messages."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#FBDD2D",

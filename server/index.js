@@ -72,6 +72,13 @@ function mergeConversation(value, existing) {
   const known = new Map((existing?.messages || []).map(m => [m.id, m]));
   const sent = value.messages.filter(m => m && typeof m.id === 'string' && typeof m.text === 'string' && m.text.length <= 4000 && ['user', 'assistant'].includes(m.role));
   const kept = (existing?.messages || []).filter(m => m.role === 'admin');
+  // A voice note is `{ uri, durationMs }` (the data URL is replaced by /api/media/... before this runs); anything else is dropped.
+  for (const m of sent) {
+    if (m.audio == null) continue;
+    const ok = m.audio && typeof m.audio.uri === 'string' && m.audio.uri.length <= 300 && /^(?:\/api\/media\/|https?:\/\/)/.test(m.audio.uri);
+    if (ok) m.audio = { uri: m.audio.uri, ...(Number.isFinite(m.audio.durationMs) ? { durationMs: Math.max(0, Math.min(600000, Math.round(m.audio.durationMs))) } : {}) };
+    else delete m.audio;
+  }
   value.messages = [...sent, ...kept].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   return sent.filter(m => m.role === 'user' && !known.has(m.id));
 }
@@ -123,7 +130,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   const apiLimit = Math.max(300, Math.min(5000, Number(env.API_RATE_LIMIT) || 300));
   const buckets = new Map();
   const rowOf = row => JSON.parse(row.data);
-  const publicRow = ({ clientHash: ignored, clientRequestId: ignored2, ...row }) => row;
+  // `aiRun` (the full prompt and the models tried) is for the admin; the owner's own app never needs it.
+  const publicRow = ({ clientHash: ignored, clientRequestId: ignored2, ...row }, isAdmin = true) => { if (!isAdmin) delete row.aiRun; return row; };
 
   /** Queue a notification. `kind`: request (new demand -> admins) | lead (new client -> admins) | ready (design delivered -> its owner). */
   async function enqueue(kind, jobId, payload) {
@@ -195,6 +203,17 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const headers = { 'Content-Type': file.mime, ETag: etag, 'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable', ...(file.mime === 'image/svg+xml' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) };
           if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag, 'Cache-Control': headers['Cache-Control'] }); return res.end(); }
           if (req.method === 'HEAD') { res.writeHead(200, { ...headers, 'Content-Length': file.size ?? file.body.length }); return res.end(); }
+          // Audio/video players seek with Range requests (Safari refuses to play without them).
+          headers['Accept-Ranges'] = 'bytes';
+          const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+          if (range && (range[1] || range[2])) {
+            const total = file.body.length;
+            let start = range[1] ? Number(range[1]) : Math.max(0, total - Number(range[2]));
+            let end = range[1] && range[2] ? Math.min(Number(range[2]), total - 1) : total - 1;
+            if (start >= total || start > end) { res.writeHead(416, { 'Content-Range': `bytes */${total}` }); return res.end(); }
+            res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 });
+            return res.end(file.body.subarray(start, end + 1));
+          }
           return sendBuffer(req, res, 200, headers, file.body);
         }
         const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : url.pathname === '/api/chat/reply' ? 'chat' : 'api';
@@ -310,7 +329,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         if (url.pathname === '/api/user/requests' && req.method === 'GET') {
           requireUser();
-          return json(200, (await db.query('SELECT data FROM requests WHERE user_id=$1 ORDER BY created_at DESC', [client.id])).map(row => publicRow(rowOf(row))));
+          return json(200, (await db.query('SELECT data FROM requests WHERE user_id=$1 ORDER BY created_at DESC', [client.id])).map(row => publicRow(rowOf(row), false)));
         }
         // ---- Visitors: assistant chats without an account or any personal detail, stored under the device token ----
         const guestChat = url.pathname.match(/^\/api\/guest\/conversations(?:\/([A-Za-z0-9_-]{1,100}))?$/);
@@ -335,7 +354,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
             await sync.bump('chats', `g:${clientHash}`);
             if (fresh.length) {
               const last = fresh[fresh.length - 1], jobId = `chat:${saved.id}:${last.id}`;
-              await enqueue('chat', jobId, { id: saved.id, name: '', whatsapp: '', text: last.text });
+              await enqueue('chat', jobId, { id: saved.id, name: '', whatsapp: '', text: last.text, audio: !!last.audio });
               await withTimeout(pump(jobId), Number(env.PUSH_WAIT_MS) || 8000);
             }
             return json(200, saved);
@@ -368,7 +387,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
             if (fresh.length) {
               // Tell the admins about the newest message; the link opens exactly this conversation.
               const last = fresh[fresh.length - 1], jobId = `chat:${saved.id}:${last.id}`;
-              await enqueue('chat', jobId, { id: saved.id, name: client.name, whatsapp: client.whatsapp, text: last.text });
+              await enqueue('chat', jobId, { id: saved.id, name: client.name, whatsapp: client.whatsapp, text: last.text, audio: !!last.audio });
               await sync.bump('chats');
               await withTimeout(pump(jobId), Number(env.PUSH_WAIT_MS) || 8000);
             }
@@ -616,7 +635,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           // The demand is already durable. Serverless functions freeze after the response, so send the
           // notification now (bounded) instead of in the background; failures stay queued for retry.
           if (inserted.length) await withTimeout(pump(request.id), Number(env.PUSH_WAIT_MS) || 8000);
-          return json(201, publicRow(stored));
+          return json(201, publicRow(stored, false));
         }
         if (url.pathname === '/api/requests' && req.method === 'GET') {
           admin();
@@ -631,7 +650,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const found = (await db.query('SELECT data FROM requests WHERE id=$1', [match[1]]))[0];
           const request = found && rowOf(found);
           if (!request || (!session && (!client || request.userId !== client.id))) throw fail(404, 'Not found');
-          if (req.method === 'GET') return json(200, publicRow(request));
+          if (req.method === 'GET') return json(200, publicRow(request, !!session));
           if (req.method === 'DELETE') { admin(); await db.query('DELETE FROM outbox WHERE request_id=$1', [request.id]); await db.query('DELETE FROM requests WHERE id=$1', [request.id]); await sync.bump('requests', ...touch(request.userId, 'requests')); return json(200, { ok: true }); }
           if (req.method === 'PATCH') {
             const body = await readBody(req), patch = {};
@@ -664,7 +683,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
               const item = owner && result.historyId && (await clients.getSpaceItem(owner, 'history', result.historyId));
               if (item) await clients.putSpace(owner, 'history', { ...item, after: result.finalResult || result.aiResult, status: 'done' }, item.id);
             }
-            return json(200, publicRow(result));
+            return json(200, publicRow(result, !!session));
           }
         }
         throw fail(404, 'API route not found');

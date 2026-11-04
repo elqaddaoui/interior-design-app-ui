@@ -11,6 +11,8 @@ import { services, VISITOR } from '@/data/repositories';
 import { useL, useT } from '@/i18n';
 import { Icon } from '@/components/ui/Icon';
 import { Sheet } from '@/components/ui/Sheet';
+import { ImageViewer } from '@/components/ui/ImageViewer';
+import { VoiceBubble, useVoicePlayback } from '@/components/chat/voice';
 import { pickPhoto } from '@/lib/photo';
 import { uid } from '@/lib/uid';
 import { replyDelayMs, typeStep } from '@/lib/chatPace';
@@ -42,6 +44,8 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const [attach, setAttach] = useState(false);
+  const [viewer, setViewer] = useState<number | null>(null);
+  const playback = useVoicePlayback();
   const list = useRef<FlatList>(null);
   const [local, setLocal] = useState<ChatMessage[]>([]);
   const messages = conv?.messages ?? local;
@@ -116,7 +120,7 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
       {header}
       <FlatList
         ref={list}
-        extraData={typing}
+        extraData={[typing, playback.activeId, playback.playingId, playback.seconds]}
         scrollEventThrottle={16}
         onScroll={(event) => { if (!restoring.current) setOffset(event.nativeEvent.contentOffset.y); }}
         onContentSizeChange={() => { if (restoring.current) restore(); }}
@@ -134,7 +138,8 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
           <Animated.View entering={FadeInDown.duration(250)} className={`mb-2.5 max-w-[82%] ${m.role === 'user' ? 'self-end' : 'self-start'}`}>
             {m.role === 'admin' ? <View testID={`chat-admin-${m.id}`} className="flex-row items-center gap-1 mb-1 ms-1"><Icon name="face-agent" size={14} tone="primary" /><Txt className="text-[11px] font-bold text-primary">{t('inbox.team')}</Txt></View> : null}
             <View className={`rounded-2xl px-3.5 py-2.5 ${m.role === 'user' ? 'bg-primary rounded-ee-md' : m.role === 'admin' ? 'bg-surface2 rounded-es-md border border-primary/40' : 'bg-surface2 rounded-es-md'}`}>
-              {m.image ? <Image source={{ uri: m.image }} style={{ width: 200, height: 140, borderRadius: 12, marginBottom: m.text ? 8 : 0 }} contentFit="cover" /> : null}
+              {m.image ? <Pressable testID={`chat-image-${m.id}`} accessibilityRole="imagebutton" onPress={() => setViewer(Math.max(0, messages.filter((x) => x.image).findIndex((x) => x.id === m.id)))}><Image source={{ uri: m.image }} style={{ width: 200, height: 140, borderRadius: 12, marginBottom: m.text ? 8 : 0 }} contentFit="cover" /></Pressable> : null}
+              {m.audio ? <VoiceBubble id={m.id} audio={m.audio} playback={playback} own={m.role === 'user'} /> : null}
               {m.text ? <Txt className={`text-[15px] leading-[22px] ${m.role === 'user' ? 'text-onprimary' : ''}`}>{typing && typing.id === m.id ? m.text.slice(0, typing.shown) : m.text}</Txt> : null}
             </View>
           </Animated.View>
@@ -161,6 +166,7 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
           ))}
         </View>
       </Sheet>
+      <ImageViewer items={messages.filter((m) => m.image).map((m) => ({ uri: m.image as string }))} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)} />
     </KeyboardAvoidingView>
   );
 }
