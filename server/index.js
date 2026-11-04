@@ -486,6 +486,10 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         if (url.pathname === '/api/admin/ai/status' && req.method === 'GET') { admin(); return json(200, await imagegen.status()); }
         if (url.pathname === '/api/admin/ai/keys' && req.method === 'PATCH') { admin(); return json(200, await imagegen.setKeys(await readBody(req))); }
+        // ---- Prompt cards: the admin decides the final prompt and pictures sent to the image model (per tool or for all tools). ----
+        if (url.pathname === '/api/admin/prompt-rules' && req.method === 'GET') { admin(); return json(200, await imagegen.rulesInfo()); }
+        if (url.pathname === '/api/admin/prompt-rules' && req.method === 'PUT') { admin(); return json(200, await imagegen.setRules(await readBody(req))); }
+        if (url.pathname === '/api/admin/prompt-rules/preview' && req.method === 'POST') { admin(); return json(200, await imagegen.previewPrompt(await readBody(req))); }
         if (url.pathname === '/api/admin/chat/status' && req.method === 'GET') { admin(); return json(200, await chat.status()); }
         if (url.pathname === '/api/admin/chat/keys' && req.method === 'PATCH') { admin(); return json(200, await chat.setKeys(await readBody(req))); }
         if (url.pathname === '/api/admin/clients/bulk' && req.method === 'POST') {

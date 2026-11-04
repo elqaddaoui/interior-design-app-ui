@@ -11,7 +11,9 @@
  * that can do the job. A model that fails (quota, outage, bad key) rests for a while and the next one takes over, so one
  * provider hitting its free limit never breaks a render. `fetch` is injectable for tests.
  */
-const { buildBrief, normalizeColors, ROOM_EN, clean } = require('./prompt');
+const { buildBrief, normalizeColors, ROOM_EN, clean, unknownPlaceholders } = require('./prompt');
+const { cleanRules, resolveRules, defaultRules } = require('./rules');
+const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS } = require('./blocks');
 const { sniffMime, imageSize, fitSize } = require('./image');
 
 const KEY_RE = /^[A-Za-z0-9_.\-]{12,300}$/;
@@ -134,13 +136,13 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   }
   const dataUri = image => `data:${image.mime};base64,${image.body.toString('base64')}`;
 
-  async function callEngine(candidate, { prompt, photo, reference, size, signal }) {
+  async function callEngine(candidate, { prompt, photo, references = [], size, signal }) {
     const headers = { Authorization: `Bearer ${candidate.key}`, 'Content-Type': 'application/json' };
     const withImage = !!photo;
     let body;
     if (withImage) {
       const images = [{ image_url: dataUri(photo) }];
-      if (reference && candidate.cap.refs > 1) images.push({ image_url: dataUri(reference) });
+      for (const extra of references) images.push({ image_url: dataUri(extra) });
       body = { model: candidate.model, prompt, image: images, n: 1, size: `${size.width}x${size.height}`, response_format: 'b64_json' };
     } else body = { model: candidate.model, prompt, n: 1, size: `${size.width}x${size.height}`, response_format: 'b64_json' };
     const url = `${candidate.base}/images/${withImage ? 'edits' : 'generations'}`;
@@ -176,6 +178,90 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     } catch { return ''; }
   }
 
+  /* ------------------------------------------------------------ the admin's prompt rules (Admin > Prompt cards) */
+  let rulesCache = { at: 0, value: null };
+  async function loadRules() {
+    if (rulesCache.value && clock() - rulesCache.at < 15000) return rulesCache.value;
+    let value = defaultRules();
+    try { const row = (await db.query("SELECT value FROM settings WHERE key='prompt_rules'"))[0]; if (row) value = cleanRules(JSON.parse(row.value)); } catch { /* none stored: the defaults */ }
+    rulesCache = { at: clock(), value };
+    return value;
+  }
+  async function setRules(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail(400, 'INVALID_RULES');
+    const value = cleanRules(input);
+    await db.query("INSERT INTO settings(key,value) VALUES('prompt_rules',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(value)]);
+    rulesCache = { at: clock(), value };
+    return rulesInfo();
+  }
+  /** What the admin screen needs: the saved rules, the default wording of every block and what each {placeholder} means. */
+  async function rulesInfo() {
+    const blocks = Object.fromEntries(Object.entries(BLOCKS).map(([id, def]) => [id, def.variants]));
+    return { rules: await loadRules(), catalog: { order: DEFAULT_ORDER, blocks, placeholders: PLACEHOLDERS } };
+  }
+
+  /* ------------------------------------------------------------ plan (what a generation is made of) and compose (what one model receives) */
+  /**
+   * Everything a generation is made of, resolved from the stored choices: content (tool, room, style, palette, inspiration), the admin's
+   * rules for that tool, and the extra pictures the rules allow (each loaded once). `photo` is the client's photo, or a placeholder
+   * { size } in a preview. Nothing here calls an image engine.
+   */
+  async function plan({ draft, photo, rules, translate = true, loadPictures = true }) {
+    const snapshot = await content.snapshot(true), c = snapshot.collections;
+    const style = c.styles?.find(x => x.id === draft.styleId), room = c.roomTypes?.find(x => x.id === draft.roomTypeId), palette = c.palettes?.find(x => x.id === draft.paletteId);
+    const tool = c.tools?.find(x => x.id === draft.toolId);
+    const row = c.models?.find(x => x.id === draft.modelId) || undefined;
+    const inspiration = draft.inspirationId ? c.inspirations?.find(x => x.id === draft.inspirationId) : null;
+    // A custom palette typed by the person wins over the preset one; "Surprise me" lets the model choose.
+    const custom = normalizeColors(draft.colors);
+    const preset = palette && !palette.isSurprise ? normalizeColors(palette.colors) : [];
+    const colors = custom.length ? custom : preset;
+    const colorSource = custom.length ? 'custom' : preset.length ? 'preset' : 'none';
+    const english = translate ? await toEnglish(clean(draft.prompt, 500)) : '';
+    // The admin's rules for this tool. They may be limited to generations that start from an Explore picture.
+    const stored = rules || await loadRules();
+    const explore = !!draft.inspirationId;
+    const limited = stored.appliesTo === 'explore' && !explore;
+    const active = resolveRules(limited ? defaultRules() : stored, draft.toolId, explore);
+    // The extra pictures the rules ask for. Order = priority when a model takes fewer pictures than asked.
+    const wanted = [];
+    if (photo) {
+      if (active.images.inspiration === 'image') wanted.push({ role: 'inspiration', uri: inspiration?.image || '', missing: inspiration ? 'noPicture' : 'noChoice' });
+      if (active.images.style !== 'text') wanted.push({ role: 'style', uri: style?.image || '', missing: style ? 'noPicture' : 'noChoice' });
+      if (active.images.room !== 'text') wanted.push({ role: 'room', uri: room?.image || '', missing: room ? 'noPicture' : 'noChoice' });
+    }
+    const extras = [];
+    for (const item of wanted) {
+      const entry = { role: item.role, uri: item.uri || '', image: null, why: '' };
+      if (!item.uri) entry.why = item.missing;
+      else if (loadPictures) { entry.image = await loadImage(item.uri, { trustedHttps: true }).catch(() => null); if (!entry.image) entry.why = 'unreadable'; }
+      extras.push(entry);
+    }
+    // Why a requested picture is not part of the generation although the admin asked for it, for the pictures switched off or text-only.
+    const off = [];
+    if (active.images.inspiration === 'off' && inspiration) off.push({ role: 'inspiration', uri: inspiration.image || '', why: 'off' });
+    if (!photo) for (const role of ['style', 'room']) if (active.images[role] !== 'text') off.push({ role, uri: (role === 'style' ? style : room)?.image || '', why: 'textOnly' });
+    const base = {
+      photo: !!photo, toolId: draft.toolId, toolTitle: lt(tool?.title, 'fr') + ' ' + lt(tool?.title, 'ar'), roomGroup: tool?.roomGroup || room?.group,
+      roomTypeId: draft.roomTypeId, roomTitle: ROOM_EN[draft.roomTypeId] || clean(lt(room?.title), 60), styleId: draft.styleId, styleTitle: lt(style?.title),
+      mode: draft.mode, colors, colorSource, paletteName: lt(palette?.title), surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt, promptEnglish: english, rules: active,
+    };
+    return { c, tool, room, style, palette, inspiration, row, base, english, active, extras, off, explore, limited, stored, size: fitSize(photo?.size, active.output.maxSide || Number(env.IMAGEGEN_MAX_SIDE) || 1024) };
+  }
+  /** What one model really receives: it takes `cap.refs - 1` extra pictures at most, and the prompt only speaks of the pictures that are sent. */
+  function compose(planned, cap) {
+    const room = Math.max(0, (cap?.refs || 1) - 1);
+    const usable = planned.extras.filter(x => x.image || planned.preview);
+    const sent = usable.slice(0, room);
+    const images = [
+      ...planned.extras.map(x => ({ role: x.role, uri: x.uri, mode: x.role === 'inspiration' ? planned.active.images.inspiration : planned.active.images[x.role], sent: sent.includes(x), why: sent.includes(x) ? '' : x.why || (usable.includes(x) ? 'model' : 'unreadable') })),
+      ...planned.off.map(x => ({ role: x.role, uri: x.uri, mode: x.why === 'off' ? 'off' : planned.active.images[x.role], sent: false, why: x.why })),
+    ];
+    const brief = buildBrief({ ...planned.base, imageRoles: sent.map(x => x.role) });
+    return { brief, images, references: sent.map(x => x.image).filter(Boolean) };
+  }
+  const recordImages = images => images.map(({ role, uri, mode, sent, why }) => ({ role, mode, sent, ...(why ? { why } : {}), ...(uri ? { uri } : {}) }));
+
   /**
    * Builds the prompt from the stored request (authoritative: nothing the client says at render time is trusted) and runs the chain.
    * The prompt is rebuilt for EVERY model that is tried, because what a model can take decides what the prompt may claim (a model that
@@ -186,32 +272,17 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const draft = request.draft || {};
     if (request.aiResult && /^\/api\/media\//.test(request.aiResult) && request.aiModel) return { imageUri: request.aiResult, ...request.aiModel, cached: true };
     const started = clock();
-    const snapshot = await content.snapshot(true), c = snapshot.collections;
-    const style = c.styles?.find(x => x.id === draft.styleId), room = c.roomTypes?.find(x => x.id === draft.roomTypeId), palette = c.palettes?.find(x => x.id === draft.paletteId);
-    const tool = c.tools?.find(x => x.id === draft.toolId);
-    const row = c.models?.find(x => x.id === draft.modelId) || undefined;
-    const inspiration = draft.inspirationId ? c.inspirations?.find(x => x.id === draft.inspirationId) : null;
     const photo = request.photoUri ? await loadImage(request.photoUri) : null;
     if (request.photoUri && !photo) throw fail(422, 'PHOTO_UNREADABLE');
-    const reference = inspiration?.image ? await loadImage(inspiration.image, { trustedHttps: true }).catch(() => null) : null;
-    // A custom palette typed by the person wins over the preset one; "Surprise me" lets the model choose.
-    const custom = normalizeColors(draft.colors);
-    const preset = palette && !palette.isSurprise ? normalizeColors(palette.colors) : [];
-    const colors = custom.length ? custom : preset;
-    const colorSource = custom.length ? 'custom' : preset.length ? 'preset' : 'none';
-    const english = await toEnglish(clean(draft.prompt, 500));
-    const base = {
-      photo: !!photo, toolId: draft.toolId, toolTitle: lt(tool?.title, 'fr') + ' ' + lt(tool?.title, 'ar'), roomGroup: tool?.roomGroup || room?.group,
-      roomTitle: ROOM_EN[draft.roomTypeId] || clean(lt(room?.title), 60), styleId: draft.styleId, styleTitle: lt(style?.title),
-      mode: draft.mode, colors, colorSource, paletteName: lt(palette?.title), surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt, promptEnglish: english,
-    };
-    const size = fitSize(photo?.size, Number(env.IMAGEGEN_MAX_SIDE) || 1024);
+    const planned = await plan({ draft, photo });
+    const { tool, room, style, palette, inspiration, row, english, size } = planned;
     const list = await candidates(row, !!photo);
     if (!list.length) throw fail(503, (await status()).live ? 'NO_PROVIDER' : 'AI_NOT_CONFIGURED');
     // The inputs as the admin will see them: titles are stored as they were at generation time, so a later rename or deletion changes nothing.
     const run = {
       at: started, size: `${size.width}x${size.height}`, photo: photo ? { width: photo.size?.width || 0, height: photo.size?.height || 0, bytes: photo.body.length } : null,
       english: english || undefined, tried: [],
+      rules: { explore: planned.explore, appliesTo: planned.stored.appliesTo, applied: !planned.limited, scope: planned.active.scope },
       inputs: {
         tool: tool ? { id: tool.id, title: tool.title } : { id: draft.toolId }, room: room ? { id: room.id, title: room.title } : draft.roomTypeId ? { id: draft.roomTypeId } : null,
         style: style ? { id: style.id, title: style.title } : draft.styleId ? { id: draft.styleId } : null, palette: palette ? { id: palette.id, title: palette.title, colors: palette.colors, isSurprise: !!palette.isSurprise } : null,
@@ -225,18 +296,17 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     for (const candidate of list) {
       const left = deadline - clock();
       if (left < (env.VERCEL ? 4000 : 6000)) break;
-      // What this model really receives: the photo, and the style picture only when it takes more than one image.
-      const sendReference = !!(photo && reference && candidate.cap.refs > 1);
-      const brief = buildBrief({ ...base, hasReference: sendReference });
-      run.prompt = brief.prompt; run.applied = brief.applied;
-      const step = { engine: candidate.engine, model: candidate.model, label: candidate.label, requested: !!candidate.requested, referenceSent: sendReference, ok: false };
+      // What this model really receives: the photo, and the extra pictures the rules ask for as far as it can take them.
+      const { brief, images, references } = compose(planned, candidate.cap);
+      run.prompt = brief.prompt; run.applied = brief.applied; run.images = recordImages(images);
+      const step = { engine: candidate.engine, model: candidate.model, label: candidate.label, requested: !!candidate.requested, referenceSent: references.length > 0, imagesSent: references.length, ok: false };
       const t0 = clock();
       try {
-        const out = await callEngine(candidate, { prompt: brief.prompt, photo, reference: sendReference ? reference : null, size, signal: Math.min(left, Number(env.IMAGEGEN_ATTEMPT_MS) || (env.VERCEL ? 24000 : 40000)) });
+        const out = await callEngine(candidate, { prompt: brief.prompt, photo, references: photo ? references : [], size, signal: Math.min(left, Number(env.IMAGEGEN_ATTEMPT_MS) || (env.VERCEL ? 24000 : 40000)) });
         const imageUri = await media.storeMedia({ body: out.bytes, mime: out.mime });
         cooling.delete(`${candidate.engine}|${candidate.model}`);
         step.ok = true; step.ms = clock() - t0; run.tried.push(step);
-        run.used = { engine: candidate.engine, model: candidate.model, label: candidate.label, referenceSent: sendReference };
+        run.used = { engine: candidate.engine, model: candidate.model, label: candidate.label, referenceSent: references.length > 0, imagesSent: references.length };
         run.durationMs = clock() - started;
         return { imageUri, engine: candidate.engine, model: candidate.model, label: candidate.label, cached: false, run };
       } catch (error) {
@@ -250,6 +320,46 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     }
     run.durationMs = clock() - started; run.failed = true;
     throw Object.assign(fail(503, 'NO_PROVIDER'), { lastStatus, run });
+  }
+
+  /**
+   * Admin > Prompt cards: a FAKE generation. It runs exactly the steps of a real one (content lookup, rules of the tool, pictures,
+   * prompt, model choice, size) and stops before the image engine, so the admin sees the final prompt and the pictures that would be
+   * sent. `body.rules` previews unsaved edits. Draft fields follow the wizard; `body.explore` fills style and room the way the Explore
+   * picture does ("Use this style").
+   */
+  async function previewPrompt(body) {
+    const id = value => (typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value) ? value : undefined);
+    const input = body && typeof body === 'object' ? body : {};
+    const snapshot = await content.snapshot(true), c = snapshot.collections;
+    const inspiration = id(input.inspirationId) ? c.inspirations?.find(x => x.id === input.inspirationId) : null;
+    const category = inspiration ? c.categories?.find(x => x.id === inspiration.categoryId) : null;
+    const draft = {
+      toolId: id(input.toolId), roomTypeId: id(input.roomTypeId) || (inspiration ? category?.roomTypeId : undefined), styleId: id(input.styleId) || (inspiration ? inspiration.styleId : undefined),
+      mode: input.mode === 'renovation' ? 'renovation' : 'restyle', paletteId: id(input.paletteId), modelId: id(input.modelId),
+      prompt: clean(input.prompt, 500) || undefined, colors: normalizeColors(input.colors), inspirationId: inspiration ? inspiration.id : undefined,
+    };
+    if (!draft.toolId || !c.tools?.some(x => x.id === draft.toolId)) throw fail(404, 'TOOL_NOT_FOUND');
+    const withPhoto = input.source !== 'text';
+    const planned = await plan({ draft, photo: withPhoto ? { size: { width: 1280, height: 960 } } : null, rules: input.rules ? cleanRules(input.rules) : undefined, loadPictures: false });
+    planned.preview = true;
+    // The model that would run first, with or without a key (a preview works before any engine is configured).
+    const list = await candidates(planned.row, withPhoto);
+    const first = list[0];
+    const fallback = chainOf(withPhoto)[0];
+    const model = first ? { label: first.label, model: first.model, engine: first.engine, refs: first.cap.refs, live: true } : { label: capability('pollinations', fallback).title, model: fallback, engine: 'pollinations', refs: capability('pollinations', fallback).refs, live: false };
+    const { brief, images } = compose(planned, { refs: model.refs });
+    const templates = Object.values(planned.active.blocks.items).flatMap(item => Object.values(item.texts || {}));
+    const unknown = [...new Set(templates.flatMap(unknownPlaceholders))];
+    const warnings = [];
+    if (unknown.length) warnings.push({ code: 'unknownPlaceholder', items: unknown });
+    if (images.some(x => x.why === 'model')) warnings.push({ code: 'modelImages', items: [model.label] });
+    if (brief.prompt.length > 4000) warnings.push({ code: 'long', items: [String(brief.prompt.length)] });
+    return {
+      prompt: brief.prompt, blocks: brief.blocks, applied: brief.applied, images, model, size: `${planned.size.width}x${planned.size.height}`, chars: brief.prompt.length,
+      source: withPhoto ? 'photo' : 'text', explore: planned.explore, appliesTo: planned.stored.appliesTo, ruled: !planned.limited, scope: planned.active.scope, warnings,
+      draft: { toolId: draft.toolId, roomTypeId: draft.roomTypeId || '', styleId: draft.styleId || '', inspirationId: draft.inspirationId || '' },
+    };
   }
 
   /** Idempotent per request: a second call returns the stored result (or joins the one in flight) and never generates twice. */
@@ -295,6 +405,6 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     });
     return { live, models, chain: { image: chainOf(true).map(m => capability('pollinations', m).title), text: chainOf(false).map(m => capability('pollinations', m).title) } };
   }
-  return { renderRequest, status, setKeys, publicStatus, buildPrompt: input => buildBrief(input).prompt, buildBrief };
+  return { renderRequest, status, setKeys, publicStatus, rulesInfo, setRules, previewPrompt, buildPrompt: input => buildBrief(input).prompt, buildBrief };
 }
 module.exports = { createImageGen, ENGINES, CATALOG, capability };

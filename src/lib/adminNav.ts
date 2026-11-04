@@ -26,6 +26,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
   ] },
   { key: 'ai', items: [
     { key: 'models', icon: 'robot-outline', href: '/admin/models' },
+    { key: 'promptCards', icon: 'text-box-outline', href: '/admin/prompt-cards' },
     { key: 'assistant', icon: 'message-text-outline', href: '/admin/assistant' },
   ] },
   { key: 'appearance', items: [

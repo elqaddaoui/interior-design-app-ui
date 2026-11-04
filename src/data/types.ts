@@ -244,8 +244,11 @@ export interface AiRun {
     inspiration?: { id?: string; image?: string } | null;
     requestedModel?: { id?: string; name?: string; engine?: string; modelName?: string } | null;
   };
-  tried?: { engine?: string; model?: string; label?: string; requested?: boolean; referenceSent?: boolean; ok?: boolean; ms?: number; status?: number }[];
-  used?: { engine?: string; model?: string; label?: string; referenceSent?: boolean } | null;
+  tried?: { engine?: string; model?: string; label?: string; requested?: boolean; referenceSent?: boolean; imagesSent?: number; ok?: boolean; ms?: number; status?: number }[];
+  used?: { engine?: string; model?: string; label?: string; referenceSent?: boolean; imagesSent?: number } | null;
+  /** Pictures that were candidates for the model besides the client's photo, and whether each one really travelled. */
+  images?: PromptImage[];
+  rules?: { explore?: boolean; appliesTo?: 'all' | 'explore'; applied?: boolean; scope?: Partial<Record<PromptSection, 'tool' | 'global'>> };
   prompt?: string;
   applied?: {
     task?: string; intent?: string; mode?: string; style?: string; room?: string;
@@ -253,7 +256,39 @@ export interface AiRun {
     colorSource?: 'custom' | 'preset' | 'surprise' | 'none';
     reference?: boolean;
     brief?: { original?: string; english?: string } | null;
+    images?: string[]; styleMode?: string; roomMode?: string; rules?: boolean; blocksOff?: string[];
   };
+}
+
+/* ---- Prompt cards (admin): what the admin decides about the prompt and pictures sent to the image model ---- */
+export type PromptSection = 'rules' | 'images' | 'blocks' | 'output';
+export type PromptPicture = 'text' | 'image' | 'both';
+export type PromptImageRole = 'inspiration' | 'style' | 'room';
+export interface PromptImage { role: PromptImageRole; uri?: string; mode?: string; sent: boolean; why?: string }
+export interface PromptBlockItem { on?: false; texts?: Record<string, string> }
+export interface PromptSet {
+  rules: { text: string; exploreText: string; withGlobal?: boolean };
+  images: { room: PromptPicture; style: PromptPicture; inspiration: 'image' | 'off' };
+  blocks: { order: string[]; items: Record<string, PromptBlockItem> };
+  output: { brief: 'both' | 'english' | 'original'; maxSide: number };
+}
+export interface PromptRules {
+  v: 1;
+  appliesTo: 'all' | 'explore';
+  global: PromptSet;
+  tools: Record<Id, Partial<PromptSet>>;
+  vocab: { styles: Record<Id, string>; rooms: Record<Id, string> };
+}
+export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; placeholders: string[] } }
+export interface PromptPreview {
+  prompt: string;
+  blocks: { id: string; variant: string; text: string; custom?: boolean }[];
+  images: PromptImage[];
+  model: { label?: string; model?: string; engine?: string; refs?: number; live?: boolean };
+  size: string; chars: number; source: 'photo' | 'text'; explore: boolean; appliesTo: 'all' | 'explore'; ruled: boolean;
+  scope: Partial<Record<PromptSection, 'tool' | 'global'>>;
+  warnings: { code: string; items?: string[] }[];
+  draft: { toolId?: Id; styleId?: Id; roomTypeId?: Id; inspirationId?: Id; mode?: string };
 }
 
 /** A voice note: `uri` is an /api/media URL (or a local file while sending), `durationMs` is optional. */

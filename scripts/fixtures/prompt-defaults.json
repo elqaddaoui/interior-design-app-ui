@@ -1,0 +1,459 @@
+{
+ "photo_restyle_plain": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle"
+  },
+  "prompt": "Redesign the interior of the provided photo (a living room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style.",
+  "applied": {
+   "task": "photo",
+   "intent": null,
+   "mode": "restyle",
+   "style": "Marocain",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": null,
+   "room": "living room"
+  }
+ },
+ "photo_restyle_colors_brief": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_scandi",
+   "styleTitle": "Scandinave",
+   "mode": "restyle",
+   "colors": [
+    "#1C2E5A",
+    "#F2EFEA"
+   ],
+   "colorSource": "custom",
+   "prompt": "add a big green plant near the window"
+  },
+  "prompt": "Redesign the interior of the provided photo (a living room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nCLIENT BRIEF (the client's own request: apply every detail of it, it only yields to the STRUCTURE rules): \"add a big green plant near the window\".\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nSTYLE: Scandinavian: light oak, white walls, simple functional furniture, wool and linen, hygge lighting, a few green plants.\n\nCOLOUR PALETTE (apply with exact fidelity, do not shift the hues): #1C2E5A (navy blue) as dominant colour (walls and the largest surfaces, about 60%); #F2EFEA (off-white) as secondary colour (main furniture, rugs and curtains, about 30%). Use these exact hex colours on the surfaces they belong to; neutral materials (wood, metal, glass, plants) may stay natural. Do not introduce other strong colours.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Scandinave style; exactly these colours: #1C2E5A, #F2EFEA; the client's request: add a big green plant near the window.",
+  "applied": {
+   "task": "photo",
+   "intent": null,
+   "mode": "restyle",
+   "style": "Scandinave",
+   "colors": [
+    {
+     "hex": "#1C2E5A",
+     "name": "navy blue",
+     "role": "dominant colour (walls and the largest surfaces, about 60%)"
+    },
+    {
+     "hex": "#F2EFEA",
+     "name": "off-white",
+     "role": "secondary colour (main furniture, rugs and curtains, about 30%)"
+    }
+   ],
+   "colorSource": "custom",
+   "reference": false,
+   "brief": {
+    "original": "add a big green plant near the window",
+    "english": ""
+   },
+   "room": "living room"
+  }
+ },
+ "photo_reno_preset": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "kitchen",
+   "styleId": "st_luxury",
+   "styleTitle": "Luxe",
+   "mode": "renovation",
+   "colors": [
+    "#B5651D",
+    "#F2EFEA",
+    "#3A2E22"
+   ],
+   "colorSource": "preset",
+   "paletteName": "Earth"
+  },
+  "prompt": "Redesign the interior of the provided photo (a kitchen) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nMODE renovation: you may replace the furniture, flooring, wall finishes, lighting and decor with a new layout. Place every piece at believable real-world scale, grounded on the floor, with realistic clearances, never blocking doors, windows or circulation, and in logical positions for a kitchen (e.g. sofa facing the focal wall, bed against the solid wall).\n\nSTYLE: luxury: marble and brass details, velvet and silk upholstery, statement chandelier, symmetry, rich deep materials, designer pieces.\n\nCOLOUR PALETTE \"Earth\" (apply with exact fidelity, do not shift the hues): #B5651D (rust) as dominant colour (walls and the largest surfaces, about 60%); #F2EFEA (off-white) as secondary colour (main furniture, rugs and curtains, about 30%); #3A2E22 (walnut brown) as accent colour. Use these exact hex colours on the surfaces they belong to; neutral materials (wood, metal, glass, plants) may stay natural. Do not introduce other strong colours.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Luxe style; exactly these colours: #B5651D, #F2EFEA, #3A2E22.",
+  "applied": {
+   "task": "photo",
+   "intent": null,
+   "mode": "renovation",
+   "style": "Luxe",
+   "colors": [
+    {
+     "hex": "#B5651D",
+     "name": "rust",
+     "role": "dominant colour (walls and the largest surfaces, about 60%)"
+    },
+    {
+     "hex": "#F2EFEA",
+     "name": "off-white",
+     "role": "secondary colour (main furniture, rugs and curtains, about 30%)"
+    },
+    {
+     "hex": "#3A2E22",
+     "name": "walnut brown",
+     "role": "accent colour"
+    }
+   ],
+   "colorSource": "preset",
+   "reference": false,
+   "brief": null,
+   "room": "kitchen"
+  }
+ },
+ "photo_paint": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_paint",
+   "toolTitle": "Peinture & couleurs",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle",
+   "colors": [
+    "#2E7D32"
+   ],
+   "colorSource": "custom",
+   "prompt": "only the main wall"
+  },
+  "prompt": "Redesign the interior of the provided photo (a living room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nCLIENT BRIEF (the client's own request: apply every detail of it, it only yields to the STRUCTURE rules): \"only the main wall\".\n\nPAINT TASK: change ONLY the wall (and, if asked, ceiling) colours. Furniture, floor, decor and every object stay exactly as they are.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nCOLOUR PALETTE (apply with exact fidelity, do not shift the hues): #2E7D32 (green) as main wall colour (every wall that is being repainted). Use these exact hex colours on the surfaces they belong to; neutral materials (wood, metal, glass, plants) may stay natural. Do not introduce other strong colours.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style; exactly these colours: #2E7D32; the client's request: only the main wall.",
+  "applied": {
+   "task": "photo",
+   "intent": "paint",
+   "mode": null,
+   "style": "Marocain",
+   "colors": [
+    {
+     "hex": "#2E7D32",
+     "name": "green",
+     "role": "main wall colour (every wall that is being repainted)"
+    }
+   ],
+   "colorSource": "custom",
+   "reference": false,
+   "brief": {
+    "original": "only the main wall",
+    "english": ""
+   },
+   "room": "living room"
+  }
+ },
+ "photo_furnish": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_furnish",
+   "toolTitle": "Meubler une pièce vide",
+   "roomGroup": "interior",
+   "roomTitle": "bedroom",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle"
+  },
+  "prompt": "Redesign the interior of the provided photo (a bedroom) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nFURNISH TASK: the room is empty or nearly empty: furnish and decorate it completely, as a real designer would, while leaving the bare room itself (walls, floor, windows, doors, ceiling) unchanged.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style.",
+  "applied": {
+   "task": "photo",
+   "intent": "furnish",
+   "mode": null,
+   "style": "Marocain",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": null,
+   "room": "bedroom"
+  }
+ },
+ "photo_floorplan": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_floorplan",
+   "toolTitle": "Plan d’étage",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle"
+  },
+  "prompt": "Redesign the interior of the provided photo (a living room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nFLOOR PLAN TASK: the input is a 2D floor plan: turn it into a realistic, furnished interior render that follows the plan's walls, openings and room proportions exactly.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style.",
+  "applied": {
+   "task": "photo",
+   "intent": "floorplan",
+   "mode": null,
+   "style": "Marocain",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": null,
+   "room": "living room"
+  }
+ },
+ "photo_exterior_ref": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_exterior",
+   "toolTitle": "Design d'extérieur",
+   "roomGroup": "exterior",
+   "roomTitle": "villa exterior",
+   "styleId": "st_farm",
+   "styleTitle": "Ferme",
+   "mode": "restyle",
+   "hasReference": true,
+   "colors": [
+    "#F2EFEA"
+   ],
+   "colorSource": "custom",
+   "prompt": "add a wooden pergola"
+  },
+  "prompt": "Redesign the exterior of the provided photo (a villa exterior) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nCLIENT BRIEF (the client's own request: apply every detail of it, it only yields to the STRUCTURE rules): \"add a wooden pergola\".\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nEXTERIOR TASK: this is a building exterior: restyle the facade finishes, colours, doors, shutters, lighting and landscaping. Keep the building's volume, openings and roof exactly as they are.\n\nSTYLE: modern farmhouse: shiplap and beams, reclaimed wood, apron-front details, vintage accents, linen, matte black fixtures.\n\nThe second image is a STYLE REFERENCE ONLY: borrow its materials, colour mood, textures and decor language. Do not copy its room, layout or architecture.\n\nCOLOUR PALETTE (apply with exact fidelity, do not shift the hues): #F2EFEA (off-white) as dominant colour (walls and the largest surfaces, about 60%). Use these exact hex colours on the surfaces they belong to; neutral materials (wood, metal, glass, plants) may stay natural. Do not introduce other strong colours.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Ferme style; exactly these colours: #F2EFEA; the client's request: add a wooden pergola.",
+  "applied": {
+   "task": "photo",
+   "intent": "exterior",
+   "mode": "restyle",
+   "style": "Ferme",
+   "colors": [
+    {
+     "hex": "#F2EFEA",
+     "name": "off-white",
+     "role": "dominant colour (walls and the largest surfaces, about 60%)"
+    }
+   ],
+   "colorSource": "custom",
+   "reference": true,
+   "brief": {
+    "original": "add a wooden pergola",
+    "english": ""
+   },
+   "room": "villa exterior"
+  }
+ },
+ "photo_garden": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_garden",
+   "toolTitle": "Design de jardin",
+   "roomGroup": "exterior",
+   "roomTitle": "",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle"
+  },
+  "prompt": "Redesign the exterior of the provided photo (a garden) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nGARDEN TASK: this is an outdoor garden / terrace: redesign planting, paving, lighting and outdoor furniture. Keep the house, boundaries, slope and fixed structures as they are.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style.",
+  "applied": {
+   "task": "photo",
+   "intent": "garden",
+   "mode": "restyle",
+   "style": "Marocain",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": null,
+   "room": "garden"
+  }
+ },
+ "photo_staging_ref_brief_en": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_staging",
+   "toolTitle": "Home staging virtuel",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle",
+   "hasReference": true,
+   "prompt": "بغيت بيت هادية",
+   "promptEnglish": "I want a calm room"
+  },
+  "prompt": "Redesign the interior of the provided photo (a living room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nCLIENT BRIEF (the client's own request: apply every detail of it, it only yields to the STRUCTURE rules): \"I want a calm room\" (the client's original wording: \"بغيت بيت هادية\").\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nSTAGING TASK: virtual home staging for a property listing: neutral, appealing, uncluttered furniture and decor that shows the space at its best.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nThe second image is a STYLE REFERENCE ONLY: borrow its materials, colour mood, textures and decor language. Do not copy its room, layout or architecture.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style; the client's request: I want a calm room.",
+  "applied": {
+   "task": "photo",
+   "intent": "staging",
+   "mode": "restyle",
+   "style": "Marocain",
+   "colors": [],
+   "colorSource": "none",
+   "reference": true,
+   "brief": {
+    "original": "بغيت بيت هادية",
+    "english": "I want a calm room"
+   },
+   "room": "living room"
+  }
+ },
+ "photo_custom_style_surprise": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_custom_x",
+   "styleTitle": "Art déco",
+   "mode": "restyle",
+   "surprise": true
+  },
+  "prompt": "Redesign the interior of the provided photo (a living room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nSTYLE: Art déco style.\n\nCOLOUR PALETTE: choose a harmonious, tasteful palette of 3 to 4 colours that suits the style.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Art déco style.",
+  "applied": {
+   "task": "photo",
+   "intent": null,
+   "mode": "restyle",
+   "style": "Art déco",
+   "colors": [],
+   "colorSource": "surprise",
+   "reference": false,
+   "brief": null,
+   "room": "living room"
+  }
+ },
+ "text_plain": {
+  "input": {
+   "photo": false,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "bedroom",
+   "styleId": "st_boho",
+   "styleTitle": "Boho",
+   "mode": "restyle",
+   "prompt": "a calm bedroom"
+  },
+  "prompt": "Create a photorealistic interior design photograph of a bedroom.\n\nDESCRIPTION FROM THE CLIENT (this is the main brief: follow every detail of it): \"a calm bedroom\".\n\nCOMPOSITION: wide-angle eye-level architectural photograph with straight vertical lines, a coherent space with believable proportions, furniture at real-world scale placed logically (nothing floating, nothing blocking doors or windows), natural light.\n\nSTYLE: bohemian: layered patterned textiles, rattan and macrame, many plants, eclectic art, warm earthy colours, vintage rugs.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Boho style; the client's request: a calm bedroom.",
+  "applied": {
+   "task": "text",
+   "intent": null,
+   "mode": null,
+   "style": "Boho",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": {
+    "original": "a calm bedroom",
+    "english": ""
+   },
+   "room": "bedroom"
+  }
+ },
+ "text_surprise_luxury": {
+  "input": {
+   "photo": false,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "living room",
+   "styleId": "st_luxury",
+   "styleTitle": "Luxe",
+   "mode": "restyle",
+   "surprise": true
+  },
+  "prompt": "Create a photorealistic interior design photograph of a living room.\n\nCOMPOSITION: wide-angle eye-level architectural photograph with straight vertical lines, a coherent space with believable proportions, furniture at real-world scale placed logically (nothing floating, nothing blocking doors or windows), natural light.\n\nSTYLE: luxury: marble and brass details, velvet and silk upholstery, statement chandelier, symmetry, rich deep materials, designer pieces.\n\nCOLOUR PALETTE: choose a harmonious, tasteful palette of 3 to 4 colours that suits the style.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Luxe style.",
+  "applied": {
+   "task": "text",
+   "intent": null,
+   "mode": null,
+   "style": "Luxe",
+   "colors": [],
+   "colorSource": "surprise",
+   "reference": false,
+   "brief": null,
+   "room": "living room"
+  }
+ },
+ "text_arabic_colors": {
+  "input": {
+   "photo": false,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "bedroom",
+   "styleId": "st_moroccan",
+   "styleTitle": "Marocain",
+   "mode": "restyle",
+   "colors": [
+    "#B5651D"
+   ],
+   "colorSource": "custom",
+   "prompt": "بغيت بيت نعاس هادية بزليج"
+  },
+  "prompt": "Create a photorealistic interior design photograph of a bedroom.\n\nDESCRIPTION FROM THE CLIENT (this is the main brief: follow every detail of it): \"بغيت بيت نعاس هادية بزليج\".\n\nCOMPOSITION: wide-angle eye-level architectural photograph with straight vertical lines, a coherent space with believable proportions, furniture at real-world scale placed logically (nothing floating, nothing blocking doors or windows), natural light.\n\nSTYLE: Moroccan: zellige tiles, carved plaster and arches, brass lanterns, handwoven berber rugs, low majlis seating, cedar and tadelakt textures.\n\nCOLOUR PALETTE (apply with exact fidelity, do not shift the hues): #B5651D (rust) as dominant colour (walls and the largest surfaces, about 60%). Use these exact hex colours on the surfaces they belong to; neutral materials (wood, metal, glass, plants) may stay natural. Do not introduce other strong colours.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.\n\nFINAL CHECK: the picture must show the Marocain style; exactly these colours: #B5651D; the client's request: بغيت بيت نعاس هادية بزليج.",
+  "applied": {
+   "task": "text",
+   "intent": null,
+   "mode": null,
+   "style": "Marocain",
+   "colors": [
+    {
+     "hex": "#B5651D",
+     "name": "rust",
+     "role": "dominant colour (walls and the largest surfaces, about 60%)"
+    }
+   ],
+   "colorSource": "custom",
+   "reference": false,
+   "brief": {
+    "original": "بغيت بيت نعاس هادية بزليج",
+    "english": ""
+   },
+   "room": "bedroom"
+  }
+ },
+ "text_no_style": {
+  "input": {
+   "photo": false,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "",
+   "styleId": "",
+   "styleTitle": "",
+   "mode": "restyle"
+  },
+  "prompt": "Create a photorealistic interior design photograph of a room.\n\nCOMPOSITION: wide-angle eye-level architectural photograph with straight vertical lines, a coherent space with believable proportions, furniture at real-world scale placed logically (nothing floating, nothing blocking doors or windows), natural light.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.",
+  "applied": {
+   "task": "text",
+   "intent": null,
+   "mode": null,
+   "style": "",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": null,
+   "room": "room"
+  }
+ },
+ "photo_no_style_no_room": {
+  "input": {
+   "photo": true,
+   "toolId": "tool_interior",
+   "toolTitle": "Design d'intérieur التصميم الداخلي",
+   "roomGroup": "interior",
+   "roomTitle": "",
+   "styleTitle": "",
+   "mode": "restyle"
+  },
+  "prompt": "Redesign the interior of the provided photo (a room) into a photorealistic, professionally photographed result.\n\nSTRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.\n\nMODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.\n\nQUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.",
+  "applied": {
+   "task": "photo",
+   "intent": null,
+   "mode": "restyle",
+   "style": "",
+   "colors": [],
+   "colorSource": "none",
+   "reference": false,
+   "brief": null,
+   "room": "room"
+  }
+ }
+}

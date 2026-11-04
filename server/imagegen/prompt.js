@@ -58,62 +58,98 @@ function normalizeColors(list) {
 const ROLES = ['dominant colour (walls and the largest surfaces, about 60%)', 'secondary colour (main furniture, rugs and curtains, about 30%)', 'accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour'];
 const PAINT_ROLES = ['main wall colour (every wall that is being repainted)', 'second wall colour (feature wall, or the wall beside the first)', 'trim, ceiling or accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour'];
 const rolesOf = (colors, intent) => colors.map((hex, i) => ({ hex, name: colorName(hex), role: (intent?.key === 'paint' ? PAINT_ROLES : ROLES)[i] }));
-function colorBlock(roles, { surprise, paletteName, source }) {
-  if (roles.length) {
-    return [
-      `COLOUR PALETTE${source === 'preset' && paletteName ? ` "${clean(paletteName, 40)}"` : ''} (apply with exact fidelity, do not shift the hues): ${roles.map(r => `${r.hex} (${r.name}) as ${r.role}`).join('; ')}.`,
-      'Use these exact hex colours on the surfaces they belong to; neutral materials (wood, metal, glass, plants) may stay natural. Do not introduce other strong colours.',
-    ].join(' ');
-  }
-  return surprise ? 'COLOUR PALETTE: choose a harmonious, tasteful palette of 3 to 4 colours that suits the style.' : '';
-}
+const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS, IMAGE_ROLES } = require('./blocks');
+const { resolveRules, defaultRules } = require('./rules');
+const NTH = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
+let defaultResolved;
+const defaults = () => defaultResolved ||= resolveRules(defaultRules(), '');
+/** "{name}" -> value. Unknown names are left untouched (the admin preview reports them). */
+const fill = (template, ctx) => String(template).replace(/\{([A-Za-z]+)\}/g, (all, key) => (Object.prototype.hasOwnProperty.call(ctx, key) ? String(ctx[key]) : all));
+const unknownPlaceholders = template => [...new Set([...String(template).matchAll(/\{([A-Za-z]+)\}/g)].map(m => m[1]).filter(name => !PLACEHOLDERS.includes(name)))];
 
 /**
  * Builds the prompt AND the record of what was applied (shown to the admin on the request, so the admin sees exactly what the model was asked).
- * input: { photo, hasReference, toolId, toolTitle, roomGroup, roomTitle, styleId, styleTitle, mode, colors, colorSource, paletteName, surprise,
- *          prompt, promptEnglish }
+ * input: { photo, toolId, toolTitle, roomGroup, roomTitle, styleId, styleTitle, mode, colors, colorSource, paletteName, surprise,
+ *          prompt, promptEnglish, imageRoles, hasReference, rules }
  * `roomTitle` / `styleTitle` are English labels when known (the seeded ids carry them) or the admin's own title.
+ * `imageRoles` = the extra pictures that REALLY travel with the photo, in order (any of 'inspiration', 'style', 'room'). `hasReference` is the
+ * older way to say ['inspiration']. `rules` = the admin's resolved Prompt cards rules (rules.js); without it the defaults apply and the text
+ * is exactly the one the app always sent (scripts/fixtures/prompt-defaults.json).
  * Order matters for models that only read the first tokens: task, the client's own words, style and colours first; long rules after.
+ * Returns { prompt, applied, blocks } where `blocks` lists every block in prompt order (id, text, custom wording?) for the admin preview.
  */
 function buildBrief(input) {
+  const R = input.rules || defaults();
+  const wanted = Array.isArray(input.imageRoles) ? input.imageRoles : input.hasReference ? ['inspiration'] : [];
+  const roles = wanted.filter((role, i) => input.photo && IMAGE_ROLES.includes(role) && wanted.indexOf(role) === i);
+  const has = role => roles.includes(role);
+  const nthOf = role => NTH[1 + roles.indexOf(role)] || 'next';
+  // A picture only replaces the words when it really travels with the photo; otherwise the words stay (text-only fallback).
+  const styleMode = has('style') ? R.images.style : 'text';
+  const roomMode = has('room') ? R.images.room : 'text';
   const group = input.roomGroup === 'exterior' ? 'exterior' : 'interior';
   const intent = intentOf(input);
-  const noun = clean(input.roomTitle, 60) || (intent?.key === 'garden' ? 'garden' : group === 'exterior' ? 'building exterior' : 'room');
+  const typed = clean(R.vocab?.rooms?.[input.roomTypeId], 60) || clean(input.roomTitle, 60);
+  const noun = (roomMode === 'image' ? '' : typed) || (intent?.key === 'garden' ? 'garden' : group === 'exterior' ? 'building exterior' : 'room');
   const style = clean(input.styleTitle, 60);
-  const styleLine = STYLE_NOTES[input.styleId] || (style ? `${style} style` : '');
-  const colors = normalizeColors(input.colors);
-  const roles = rolesOf(colors, intent);
+  const notes = clean(R.vocab?.styles?.[input.styleId], 400) || STYLE_NOTES[input.styleId] || (style ? `${style} style` : '');
+  const styleLine = styleMode === 'image' ? '' : notes;
+  const colorRoles = rolesOf(normalizeColors(input.colors), intent);
   const user = clean(input.prompt, 500);
   const english = clean(input.promptEnglish, 700);
+  const briefMode = R.output.brief;
   // The client's words as the model should read them: English when it could be translated, with the original wording kept next to it.
-  const words = english && english.toLowerCase() !== user.toLowerCase() ? `"${english}" (the client's original wording: "${user}")` : `"${user}"`;
-  const parts = [];
+  const words = !user ? '' : briefMode === 'original' || !english ? `"${user}"` : briefMode === 'english' ? `"${english}"` : english.toLowerCase() !== user.toLowerCase() ? `"${english}" (the client's original wording: "${user}")` : `"${user}"`;
+  const must = [styleLine && `the ${style || 'chosen'} style`, colorRoles.length && `exactly these colours: ${colorRoles.map(r => r.hex).join(', ')}`, user && `the client's request: ${briefMode === 'original' ? user : english || user}`].filter(Boolean);
+  const paletteKind = colorRoles.length ? 'colors' : input.surprise ? 'surprise' : '';
+  const rulesList = R.rulesText ? R.rulesText.split('\n').map(line => line.trim()).filter(Boolean).map(line => (/^([-*\u2022]|\d+[.)])\s/.test(line) ? line : `- ${line}`)).join('\n') : '';
+  const ctx = {
+    room: noun, group, style, styleNotes: styleLine || notes, mode: input.mode === 'renovation' ? 'renovation' : 'restyle', tool: clean(input.toolTitle, 120),
+    brief: words, briefOriginal: user, briefEnglish: english, colors: colorRoles.map(r => `${r.hex} (${r.name}) as ${r.role}`).join('; '), colorsHex: colorRoles.map(r => r.hex).join(', '),
+    palette: clean(input.paletteName, 40), paletteLabel: input.colorSource === 'preset' && input.paletteName ? ` "${clean(input.paletteName, 40)}"` : '', nth: 'second', rules: rulesList, mustList: must.join('; '),
+  };
+  const made = {}; // block id -> { variant, text, custom }
+  /** One block: the situation picks the variant, the admin's switch / wording decides the text. A switched-off block is simply absent. */
+  const put = (id, variant, extra = {}, auto = '') => {
+    const item = R.blocks.items[id];
+    if (item?.on === false) return;
+    const custom = item?.texts?.[variant] || '';
+    let text = fill(custom || auto || BLOCKS[id].variants[variant] || '', { ...ctx, ...extra }).trim();
+    // The admin's own wording of the rules block may forget {rules}: the rules are then appended, never lost.
+    if (id === 'rules' && custom && !/\{rules\}/.test(custom)) text = `${text}\n${rulesList}`;
+    if (text) made[id] = { variant, text, custom: !!custom };
+  };
   if (input.photo) {
-    parts.push(`Redesign the ${group} of the provided photo (a ${noun}) into a photorealistic, professionally photographed result.`);
-    parts.push('STRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.');
-    if (user) parts.push(`CLIENT BRIEF (the client's own request: apply every detail of it, it only yields to the STRUCTURE rules): ${words}.`);
+    put('task', 'photo');
+    put('structure', 'default');
+    if (user) put('brief', 'photo');
     // A tool that defines the job itself (paint, furnish, floor plan) is not contradicted by the generic restyle / renovation switch.
-    if (!intent?.lockMode) {
-      if (input.mode === 'renovation') parts.push('MODE renovation: you may replace the furniture, flooring, wall finishes, lighting and decor with a new layout. Place every piece at believable real-world scale, grounded on the floor, with realistic clearances, never blocking doors, windows or circulation, and in logical positions for a ' + noun + ' (e.g. sofa facing the focal wall, bed against the solid wall).');
-      else parts.push('MODE restyle: keep the existing furniture where it is, with the same placement, size and shape. Change only its finishes, upholstery, materials, colours, textiles and the decor, so it looks like the same room, restyled.');
-    }
+    if (!intent?.lockMode) put('mode', input.mode === 'renovation' ? 'renovation' : 'restyle');
   } else {
-    parts.push(`Create a photorealistic ${group} design photograph of a ${noun}.`);
-    if (user) parts.push(`DESCRIPTION FROM THE CLIENT (this is the main brief: follow every detail of it): ${words}.`);
-    parts.push('COMPOSITION: wide-angle eye-level architectural photograph with straight vertical lines, a coherent space with believable proportions, furniture at real-world scale placed logically (nothing floating, nothing blocking doors or windows), natural light.');
+    put('task', 'text');
+    if (user) put('brief', 'text');
+    put('composition', 'default');
   }
-  if (intent) parts.push(intent.text);
-  if (styleLine) parts.push(`STYLE: ${styleLine}.`);
-  if (input.hasReference) parts.push('The second image is a STYLE REFERENCE ONLY: borrow its materials, colour mood, textures and decor language. Do not copy its room, layout or architecture.');
-  const palette = colorBlock(roles, { surprise: input.surprise, paletteName: input.paletteName, source: input.colorSource });
-  if (palette) parts.push(palette);
-  parts.push('QUALITY: high-end interior photography, realistic materials with accurate textures, soft natural lighting with consistent shadows and reflections, sharp detail, balanced exposure. No text, no watermark, no people, no distortion, no extra windows or doors, no cartoon or illustration look.');
-  // Recency: the requirements most often dropped by models, repeated last in one line.
-  const must = [styleLine && `the ${style || 'chosen'} style`, roles.length && `exactly these colours: ${roles.map(r => r.hex).join(', ')}`, user && `the client's request: ${english || user}`].filter(Boolean);
-  if (must.length) parts.push(`FINAL CHECK: the picture must show ${must.join('; ')}.`);
+  if (intent || R.blocks.items.intent?.texts?.default) put('intent', 'default', {}, intent?.text || '');
+  if (styleLine) put('style', 'default');
+  if (has('inspiration')) put('reference', 'default', { nth: nthOf('inspiration') });
+  if (has('style')) put('styleImage', styleMode === 'both' ? 'both' : 'image', { nth: nthOf('style') });
+  if (has('room')) put('roomImage', roomMode === 'both' ? 'both' : 'image', { nth: nthOf('room') });
+  if (paletteKind) put('palette', paletteKind);
+  put('quality', 'default');
+  if (rulesList) put('rules', 'default');
+  if (must.length) put('finalCheck', 'default');
+  const order = R.blocks.order.length ? R.blocks.order : DEFAULT_ORDER;
+  const list = order.filter(id => made[id]).map(id => ({ id, ...made[id] }));
   return {
-    prompt: parts.join('\n\n'),
-    applied: { task: input.photo ? 'photo' : 'text', intent: intent?.key || null, mode: input.photo && !intent?.lockMode ? (input.mode === 'renovation' ? 'renovation' : 'restyle') : null, style: styleLine ? (style || input.styleId || '') : '', colors: roles, colorSource: roles.length ? (input.colorSource || 'custom') : input.surprise ? 'surprise' : 'none', reference: !!input.hasReference, brief: user ? { original: user, english: english && english !== user ? english : '' } : null, room: noun },
+    prompt: list.map(block => block.text).join('\n\n'),
+    blocks: list,
+    applied: {
+      task: input.photo ? 'photo' : 'text', intent: intent?.key || null, mode: input.photo && !intent?.lockMode ? (input.mode === 'renovation' ? 'renovation' : 'restyle') : null,
+      style: styleLine || styleMode === 'image' ? (style || input.styleId || '') : '', colors: colorRoles, colorSource: colorRoles.length ? (input.colorSource || 'custom') : input.surprise ? 'surprise' : 'none',
+      reference: has('inspiration'), brief: user ? { original: user, english: english && english !== user ? english : '' } : null, room: noun,
+      images: roles, styleMode, roomMode, rules: !!rulesList, blocksOff: order.filter(id => R.blocks.items[id]?.on === false),
+    },
   };
 }
 const buildPrompt = input => buildBrief(input).prompt;
@@ -122,4 +158,4 @@ const ROOM_EN = {
   rt_nursery: 'child\'s bedroom', rt_garage: 'garage', rt_entry: 'entrance hall', rt_laundry: 'laundry room', rt_office: 'office', rt_homeoffice: 'home office', rt_study: 'study',
   rt_house: 'house exterior', rt_villa: 'villa exterior', rt_garden: 'garden', rt_terrace: 'terrace', rt_pool: 'pool area', rt_building: 'apartment building exterior',
 };
-module.exports = { ROOM_EN, buildPrompt, buildBrief, intentOf, normalizeColors, colorName, clean, STYLE_NOTES };
+module.exports = { ROOM_EN, buildPrompt, buildBrief, intentOf, normalizeColors, colorName, clean, STYLE_NOTES, INTENTS, unknownPlaceholders };

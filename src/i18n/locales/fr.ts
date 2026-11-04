@@ -304,6 +304,7 @@ const fr = {
       palettes: 'Palettes',
       models: 'Modèles IA',
       assistant: 'Assistant',
+      promptCards: 'Cartes de prompt',
       branding: 'Marque',
       theme: 'Thème',
       interface: 'Interface & menus',
