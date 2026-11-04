@@ -11,7 +11,7 @@
  * that can do the job. A model that fails (quota, outage, bad key) rests for a while and the next one takes over, so one
  * provider hitting its free limit never breaks a render. `fetch` is injectable for tests.
  */
-const { buildPrompt, normalizeColors, ROOM_EN, clean } = require('./prompt');
+const { buildBrief, normalizeColors, ROOM_EN, clean } = require('./prompt');
 const { sniffMime, imageSize, fitSize } = require('./image');
 
 const KEY_RE = /^[A-Za-z0-9_.\-]{12,300}$/;
@@ -160,12 +160,32 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   }
 
   /**
+   * The client's own words in English. Image models follow English far better than Darija / Arabic, so a brief written in Arabic
+   * script is translated once (free keyless text model) and BOTH versions go into the prompt. On any failure the original is used.
+   */
+  async function toEnglish(text) {
+    if (!text || !/[\u0600-\u06FF]/.test(text)) return '';
+    try {
+      const response = await timed('https://text.pollinations.ai/openai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'openai-fast', temperature: 0.1, messages: [
+        { role: 'system', content: 'You translate interior-design requests written in Moroccan Darija, Arabic or French into plain, precise English for an image generator. Keep every detail (objects, colours, materials, positions, numbers). Reply with ONLY the English text, no quotes, no comments.' },
+        { role: 'user', content: text },
+      ] }) }, 7000);
+      if (!response.ok) return '';
+      const out = clean((await response.json())?.choices?.[0]?.message?.content, 700);
+      return out && !/[\u0600-\u06FF]/.test(out) ? out : '';
+    } catch { return ''; }
+  }
+
+  /**
    * Builds the prompt from the stored request (authoritative: nothing the client says at render time is trusted) and runs the chain.
-   * Returns { imageUri, engine, model, label, cached }.
+   * The prompt is rebuilt for EVERY model that is tried, because what a model can take decides what the prompt may claim (a model that
+   * accepts one picture never receives the style reference, so its prompt never mentions one).
+   * Returns { imageUri, engine, model, label, cached, run } where `run` is the full record of the generation (stored on the request).
    */
   async function generate({ request, userId }) {
     const draft = request.draft || {};
     if (request.aiResult && /^\/api\/media\//.test(request.aiResult) && request.aiModel) return { imageUri: request.aiResult, ...request.aiModel, cached: true };
+    const started = clock();
     const snapshot = await content.snapshot(true), c = snapshot.collections;
     const style = c.styles?.find(x => x.id === draft.styleId), room = c.roomTypes?.find(x => x.id === draft.roomTypeId), palette = c.palettes?.find(x => x.id === draft.paletteId);
     const tool = c.tools?.find(x => x.id === draft.toolId);
@@ -175,34 +195,61 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     if (request.photoUri && !photo) throw fail(422, 'PHOTO_UNREADABLE');
     const reference = inspiration?.image ? await loadImage(inspiration.image, { trustedHttps: true }).catch(() => null) : null;
     // A custom palette typed by the person wins over the preset one; "Surprise me" lets the model choose.
-    const colors = normalizeColors(draft.colors?.length ? draft.colors : palette && !palette.isSurprise ? palette.colors : []);
-    const prompt = buildPrompt({
-      photo: !!photo, hasReference: !!reference, toolId: draft.toolId, roomTitle: ROOM_EN[draft.roomTypeId] || clean(lt(room?.title), 60), styleId: draft.styleId, styleTitle: lt(style?.title),
-      mode: draft.mode, colors, surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt,
-    });
+    const custom = normalizeColors(draft.colors);
+    const preset = palette && !palette.isSurprise ? normalizeColors(palette.colors) : [];
+    const colors = custom.length ? custom : preset;
+    const colorSource = custom.length ? 'custom' : preset.length ? 'preset' : 'none';
+    const english = await toEnglish(clean(draft.prompt, 500));
+    const base = {
+      photo: !!photo, toolId: draft.toolId, toolTitle: lt(tool?.title, 'fr') + ' ' + lt(tool?.title, 'ar'), roomGroup: tool?.roomGroup || room?.group,
+      roomTitle: ROOM_EN[draft.roomTypeId] || clean(lt(room?.title), 60), styleId: draft.styleId, styleTitle: lt(style?.title),
+      mode: draft.mode, colors, colorSource, paletteName: lt(palette?.title), surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt, promptEnglish: english,
+    };
     const size = fitSize(photo?.size, Number(env.IMAGEGEN_MAX_SIDE) || 1024);
     const list = await candidates(row, !!photo);
     if (!list.length) throw fail(503, (await status()).live ? 'NO_PROVIDER' : 'AI_NOT_CONFIGURED');
+    // The inputs as the admin will see them: titles are stored as they were at generation time, so a later rename or deletion changes nothing.
+    const run = {
+      at: started, size: `${size.width}x${size.height}`, photo: photo ? { width: photo.size?.width || 0, height: photo.size?.height || 0, bytes: photo.body.length } : null,
+      english: english || undefined, tried: [],
+      inputs: {
+        tool: tool ? { id: tool.id, title: tool.title } : { id: draft.toolId }, room: room ? { id: room.id, title: room.title } : draft.roomTypeId ? { id: draft.roomTypeId } : null,
+        style: style ? { id: style.id, title: style.title } : draft.styleId ? { id: draft.styleId } : null, palette: palette ? { id: palette.id, title: palette.title, colors: palette.colors, isSurprise: !!palette.isSurprise } : null,
+        inspiration: inspiration ? { id: inspiration.id, image: inspiration.image } : null,
+        requestedModel: row ? { id: row.id, name: row.name, engine: row.engine || '', modelName: row.modelName || '' } : null,
+      },
+    };
     // Vercel kills a function after 30 s (vercel.json): stay inside it there; long-running hosts get a generous budget.
     const deadline = clock() + (Number(env.IMAGEGEN_BUDGET_MS) || (env.VERCEL ? 25000 : 54000));
     let lastStatus = 0;
     for (const candidate of list) {
       const left = deadline - clock();
       if (left < (env.VERCEL ? 4000 : 6000)) break;
+      // What this model really receives: the photo, and the style picture only when it takes more than one image.
+      const sendReference = !!(photo && reference && candidate.cap.refs > 1);
+      const brief = buildBrief({ ...base, hasReference: sendReference });
+      run.prompt = brief.prompt; run.applied = brief.applied;
+      const step = { engine: candidate.engine, model: candidate.model, label: candidate.label, requested: !!candidate.requested, referenceSent: sendReference, ok: false };
+      const t0 = clock();
       try {
-        const out = await callEngine(candidate, { prompt, photo, reference, size, signal: Math.min(left, Number(env.IMAGEGEN_ATTEMPT_MS) || (env.VERCEL ? 24000 : 40000)) });
+        const out = await callEngine(candidate, { prompt: brief.prompt, photo, reference: sendReference ? reference : null, size, signal: Math.min(left, Number(env.IMAGEGEN_ATTEMPT_MS) || (env.VERCEL ? 24000 : 40000)) });
         const imageUri = await media.storeMedia({ body: out.bytes, mime: out.mime });
         cooling.delete(`${candidate.engine}|${candidate.model}`);
-        return { imageUri, engine: candidate.engine, model: candidate.model, label: candidate.label, cached: false, prompt: undefined };
+        step.ok = true; step.ms = clock() - t0; run.tried.push(step);
+        run.used = { engine: candidate.engine, model: candidate.model, label: candidate.label, referenceSent: sendReference };
+        run.durationMs = clock() - started;
+        return { imageUri, engine: candidate.engine, model: candidate.model, label: candidate.label, cached: false, run };
       } catch (error) {
         lastStatus = error.statusCode || lastStatus;
         const code = error.statusCode;
+        step.ms = clock() - t0; step.status = code || 0; run.tried.push(step);
         // 404 / 422: this model does not exist here or cannot do this job -> next model. Everything else rests it briefly.
         if (code === 404 || code === 422 || code === 400) { cooling.set(`${candidate.engine}|${candidate.model}`, clock() + 600000); continue; }
         cooling.set(`${candidate.engine}|${candidate.model}`, clock() + (code === 429 ? 60000 : code === 401 || code === 403 || code === 402 ? 300000 : 20000));
       }
     }
-    throw Object.assign(fail(503, 'NO_PROVIDER'), { lastStatus });
+    run.durationMs = clock() - started; run.failed = true;
+    throw Object.assign(fail(503, 'NO_PROVIDER'), { lastStatus, run });
   }
 
   /** Idempotent per request: a second call returns the stored result (or joins the one in flight) and never generates twice. */
@@ -216,12 +263,18 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     perClient.set(client.id, (perClient.get(client.id) || 0) + 1);
     const job = (async () => {
       const request = JSON.parse(found.data);
-      const result = await generate({ request, userId: client.id });
+      let result;
+      try { result = await generate({ request, userId: client.id }); }
+      catch (error) {
+        // Keep what was asked and which models failed: the admin sees it on the request (no result is stored, the client can retry).
+        if (error.run) await db.query('UPDATE requests SET data=$1 WHERE id=$2', [JSON.stringify({ ...request, aiRun: error.run }), key]).catch(() => {});
+        throw error;
+      }
       if (!result.cached) {
         await db.tx(async q => {
           const row = (await q('SELECT data FROM requests WHERE id=$1 FOR UPDATE', [key]))[0];
           if (!row) return;
-          const next = { ...JSON.parse(row.data), aiResult: result.imageUri, aiModel: { engine: result.engine, model: result.model, label: result.label } };
+          const next = { ...JSON.parse(row.data), aiResult: result.imageUri, aiModel: { engine: result.engine, model: result.model, label: result.label }, aiRun: result.run };
           await q('UPDATE requests SET data=$1 WHERE id=$2', [JSON.stringify(next), key]);
         });
         if (sync) await sync.bump('requests', `c:${client.id}`, `c:${client.id}:requests`).catch(() => {});
@@ -242,6 +295,6 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     });
     return { live, models, chain: { image: chainOf(true).map(m => capability('pollinations', m).title), text: chainOf(false).map(m => capability('pollinations', m).title) } };
   }
-  return { renderRequest, status, setKeys, publicStatus, buildPrompt };
+  return { renderRequest, status, setKeys, publicStatus, buildPrompt: input => buildBrief(input).prompt, buildBrief };
 }
 module.exports = { createImageGen, ENGINES, CATALOG, capability };

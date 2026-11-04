@@ -15,6 +15,10 @@ const net = require('node:net');
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif', 'image/svg+xml'];
 const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime'];
+// Voice notes recorded in the chat (Chrome/Firefox: webm or ogg, Safari/iOS/Android: mp4/m4a/aac, some: wav/mp3).
+const AUDIO_TYPES = ['audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/aac'];
+const AUDIO_ALIASES = { 'audio/x-m4a': 'audio/mp4', 'audio/m4a': 'audio/mp4', 'audio/x-wav': 'audio/wav', 'audio/wave': 'audio/wav', 'audio/mp3': 'audio/mpeg', 'audio/x-aac': 'audio/aac', 'video/webm': 'audio/webm' };
+const audioType = mime => AUDIO_ALIASES[mime] || mime;
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_IMAGE_MAX = 10 * 1024 * 1024;
 
@@ -110,11 +114,30 @@ function sniff(buffer) {
   return '';
 }
 
+/** Magic bytes of the audio containers the chat records. Returns '' when unknown. */
+function sniffAudio(buffer) {
+  if (startsWith(buffer, [0x1a, 0x45, 0xdf, 0xa3])) return 'audio/webm';
+  if (startsWith(buffer, [0x66, 0x74, 0x79, 0x70], 4)) return 'audio/mp4';
+  if (startsWith(buffer, [0x4f, 0x67, 0x67, 0x53])) return 'audio/ogg';
+  if (startsWith(buffer, [0x52, 0x49, 0x46, 0x46]) && startsWith(buffer, [0x57, 0x41, 0x56, 0x45], 8)) return 'audio/wav';
+  if (startsWith(buffer, [0x49, 0x44, 0x33])) return 'audio/mpeg';
+  if (buffer.length > 1 && buffer[0] === 0xff && (buffer[1] & 0xf6) === 0xf0) return 'audio/aac'; // ADTS
+  if (buffer.length > 1 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) return 'audio/mpeg'; // MPEG frame sync
+  return '';
+}
+
 /**
  * Confirms that `buffer` really is media of an allowed type. Returns the trusted MIME type (the sniffed one wins over a
  * wrong declaration) or throws a policy error.
  */
 function verifyMedia(buffer, declared, kind) {
+  if (kind === 'audio') {
+    const found = sniffAudio(buffer);
+    if (!found) throw policy('NOT_AUDIO');
+    const claimed = audioType(declared);
+    if (claimed && claimed !== found && !(AUDIO_TYPES.includes(claimed) && ['audio/aac', 'audio/mpeg'].includes(found) && ['audio/aac', 'audio/mpeg'].includes(claimed))) throw policy('TYPE_MISMATCH');
+    return found;
+  }
   const allowed = kind === 'video' ? VIDEO_TYPES : IMAGE_TYPES;
   const actual = sniff(buffer);
   if (!actual || !allowed.includes(actual)) throw policy(kind === 'video' ? 'NOT_A_VIDEO' : 'NOT_AN_IMAGE');
@@ -175,4 +198,4 @@ async function downloadRemote(input, { kind = 'image', maxBytes = DEFAULT_IMAGE_
   } finally { clearTimeout(timer); }
 }
 
-module.exports = { downloadRemote, parseRemoteUrl, isPrivateAddress, safeLookup, sniff, verifyMedia, IMAGE_TYPES, VIDEO_TYPES };
+module.exports = { downloadRemote, parseRemoteUrl, isPrivateAddress, safeLookup, sniff, sniffAudio, audioType, verifyMedia, IMAGE_TYPES, VIDEO_TYPES, AUDIO_TYPES };

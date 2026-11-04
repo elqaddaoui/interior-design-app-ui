@@ -438,3 +438,34 @@ test('end to end with a real S3-compatible endpoint (skipped unless R2_TEST_ENDP
     assert.equal((await fetch(photo.headers.location)).status, 200);
   } finally { backend.server.emit('close'); }
 });
+
+test('voice notes: a chat audio data URL is verified from its bytes, stored as media, served with Range support; fake audio is refused', async () => {
+  const { backend } = await setup();
+  try {
+    const who = await call(backend, '/api/user/login', { method: 'POST', headers: native, body: { name: 'Voice Client', phone: '0661000088' } });
+    const headers = { 'x-user-token': who.body.token };
+    const webm = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(3000, 5)]);
+    const send = (id, audio) => call(backend, '/api/user/conversations', { method: 'POST', headers, body: { title: 'Voice', updatedAt: 1, messages: [{ id, role: 'user', text: '', audio, createdAt: 1 }] } });
+    // MediaRecorder reports `;codecs=opus` in its type: it must still be accepted.
+    const ok = await send('v1', { uri: `data:audio/webm;codecs=opus;base64,${webm.toString('base64')}`, durationMs: 4321.7 });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    const audio = ok.body.messages[0].audio;
+    assert.match(audio.uri, /^\/api\/media\/[a-f0-9]{32}\.weba$/);
+    assert.equal(audio.durationMs, 4322);
+    const file = await call(backend, audio.uri);
+    assert.equal(file.status, 200);
+    assert.equal(file.headers['content-type'], 'audio/webm');
+    assert.equal(file.headers['accept-ranges'], 'bytes');
+    const part = await call(backend, audio.uri, { headers: { range: 'bytes=0-9' } });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers['content-range'], `bytes 0-9/${webm.length}`);
+    assert.equal(Buffer.from(part.raw).length, 10);
+    assert.equal((await call(backend, audio.uri, { headers: { range: 'bytes=99999-' } })).status, 416);
+    // Not audio at all, or audio bytes declared as another type: refused.
+    assert.equal((await send('v2', { uri: `data:audio/webm;base64,${Buffer.from('<html>nope</html>').toString('base64')}` })).status, 400);
+    assert.equal((await send('v3', { uri: `data:audio/mpeg;base64,${webm.toString('base64')}` })).status, 400);
+    // An audio field that is not a media URL is dropped, not stored.
+    const bad = await send('v4', { uri: 'javascript:alert(1)', durationMs: 5 });
+    assert.equal(bad.body.messages[0].audio, undefined);
+  } finally { backend.server.emit('close'); }
+});

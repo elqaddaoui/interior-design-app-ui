@@ -139,8 +139,8 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
    * Tries every configured provider (and its models) inside `budgetMs`; throws 503 NO_PROVIDER when none answers.
    */
   async function reply(history, config = {}, { budgetMs = 24000, provider: only } = {}) {
-    const turns = (Array.isArray(history) ? history : []).filter(m => m && typeof m.text === 'string' && ['user', 'assistant', 'admin'].includes(m.role) && (m.text.trim() || m.image))
-      .slice(-MAX_TURNS).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: (m.text.trim() || '').slice(0, MAX_TEXT) + (m.image ? `${m.text.trim() ? '\n' : ''}[photo attached]` : '') }));
+    const turns = (Array.isArray(history) ? history : []).filter(m => m && typeof m.text === 'string' && ['user', 'assistant', 'admin'].includes(m.role) && (m.text.trim() || m.image || m.audio))
+      .slice(-MAX_TURNS).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: (m.text.trim() || '').slice(0, MAX_TEXT) + (m.image ? `${m.text.trim() ? '\n' : ''}[photo attached]` : '') + (m.audio ? `${m.text.trim() || m.image ? '\n' : ''}[voice message]` : '') }));
     if (!turns.length || turns[turns.length - 1].role !== 'user') throw fail(400, 'INVALID_MESSAGES');
     const language = detectLanguage([...turns].reverse().find(t => t.role === 'user')?.content);
     // Providers expect the conversation to start with the user: drop any leading assistant (welcome) turns.

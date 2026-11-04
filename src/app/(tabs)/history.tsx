@@ -125,7 +125,7 @@ export default function History() {
             return (
               <Pressable key={c.id} testID={`chat-${c.id}`} onPress={() => (selecting ? toggle(c.id) : router.push({ pathname: '/chat/[id]', params: { id: c.id } }))} className="flex-row items-center gap-3 p-3 mb-2 rounded-2xl bg-surface2 active:opacity-80">
                 {selecting ? <View className={`w-6 h-6 rounded-full items-center justify-center border-2 ${on ? 'bg-primary border-primary' : 'border-line'}`}>{on ? <Icon name="check" size={14} tone="onprimary" /> : null}</View> : <View className="w-10 h-10 rounded-full bg-primary items-center justify-center"><Icon name="face-agent" size={22} tone="onprimary" /></View>}
-                <View className="flex-1"><Txt className="font-bold text-[14px]" numberOfLines={1}>{c.title}</Txt><Txt className="text-muted text-[12px]" numberOfLines={1}>{last?.text || '📷'}</Txt></View>
+                <View className="flex-1"><Txt className="font-bold text-[14px]" numberOfLines={1}>{c.title}</Txt><Txt className="text-muted text-[12px]" numberOfLines={1}>{last?.text || (last?.audio ? '🎤' : '📷')}</Txt></View>
               </Pressable>
             );
           })}

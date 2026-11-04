@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { downloadRemote, verifyMedia, IMAGE_TYPES, VIDEO_TYPES } = require('./remote-media');
+const { downloadRemote, verifyMedia, IMAGE_TYPES, VIDEO_TYPES, AUDIO_TYPES, audioType } = require('./remote-media');
 
 /**
  * All media (images and videos) of the app goes through this module.
@@ -16,13 +16,16 @@ const { downloadRemote, verifyMedia, IMAGE_TYPES, VIDEO_TYPES } = require('./rem
  * The `media` table keeps one small metadata row per file (id, mime, size, storage) so reads know where the file lives.
  */
 const PREFIX = '/api/media/';
-const DATA_URL = /^data:([a-z]+\/[a-z0-9.+-]+);base64,/i;
+// Optional parameters (`;codecs=opus`) are allowed: MediaRecorder reports them in its type.
+const DATA_URL = /^data:([a-z]+\/[a-z0-9.+-]+)(?:;[a-z0-9-]+=[a-z0-9.,"'+-]+)*;base64,/i;
 const EXT = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/svg+xml': 'svg',
   'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
+  // Voice notes. `weba` (not `webm`) keeps audio and video names apart: the extension decides the type on read.
+  'audio/webm': 'weba', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/aac': 'aac',
 };
 const MIME = Object.fromEntries(Object.entries(EXT).map(([mime, ext]) => [ext, mime]));
-const NAME = /^([a-f0-9]{32})\.(png|jpg|webp|gif|avif|svg|mp4|webm|mov)$/;
+const NAME = /^([a-f0-9]{32})\.(png|jpg|webp|gif|avif|svg|mp4|webm|mov|weba|m4a|mp3|ogg|wav|aac)$/;
 /** Native clients receive absolute media URLs; store them host-independent again. */
 /** A file of ours, written as a path or as an absolute URL (native clients). */
 const LOCAL_MEDIA = /^(?:https?:\/\/[^/]+)?\/api\/media\/([a-f0-9]{32}\.[a-z0-9]+)(?:[?#].*)?$/;
@@ -36,8 +39,8 @@ const R2_VARS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const mb = (value, fallback) => Math.max(1, Math.min(5000, Number(value) || fallback)) * 1024 * 1024;
-const limitsOf = env => ({ image: mb(env.MEDIA_MAX_IMAGE_MB, 10), video: mb(env.MEDIA_MAX_VIDEO_MB, 100) });
-const kindOf = mime => (VIDEO_TYPES.includes(mime) ? 'video' : IMAGE_TYPES.includes(mime) ? 'image' : '');
+const limitsOf = env => ({ image: mb(env.MEDIA_MAX_IMAGE_MB, 10), video: mb(env.MEDIA_MAX_VIDEO_MB, 100), audio: mb(env.MEDIA_MAX_AUDIO_MB, 8) });
+const kindOf = mime => (VIDEO_TYPES.includes(mime) ? 'video' : IMAGE_TYPES.includes(mime) ? 'image' : AUDIO_TYPES.includes(audioType(mime)) ? 'audio' : '');
 const keyOf = name => `media/${name}`;
 const idOf = body => crypto.createHash('sha256').update(body.toString('base64')).digest('hex').slice(0, 32);
 
