@@ -58,7 +58,7 @@ function normalizeColors(list) {
 const ROLES = ['dominant colour (walls and the largest surfaces, about 60%)', 'secondary colour (main furniture, rugs and curtains, about 30%)', 'accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour'];
 const PAINT_ROLES = ['main wall colour (every wall that is being repainted)', 'second wall colour (feature wall, or the wall beside the first)', 'trim, ceiling or accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour', 'accent colour'];
 const rolesOf = (colors, intent) => colors.map((hex, i) => ({ hex, name: colorName(hex), role: (intent?.key === 'paint' ? PAINT_ROLES : ROLES)[i] }));
-const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS, IMAGE_ROLES } = require('./blocks');
+const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS, IMAGE_ROLES, blockOn } = require('./blocks');
 const { resolveRules, defaultRules } = require('./rules');
 const NTH = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
 let defaultResolved;
@@ -112,7 +112,7 @@ function buildBrief(input) {
   /** One block: the situation picks the variant, the admin's switch / wording decides the text. A switched-off block is simply absent. */
   const put = (id, variant, extra = {}, auto = '') => {
     const item = R.blocks.items[id];
-    if (item?.on === false) return;
+    if (!blockOn(id, item, R.images)) return;
     const custom = item?.texts?.[variant] || '';
     let text = fill(custom || auto || BLOCKS[id].variants[variant] || '', { ...ctx, ...extra }).trim();
     // The admin's own wording of the rules block may forget {rules}: the rules are then appended, never lost.
@@ -148,7 +148,7 @@ function buildBrief(input) {
       task: input.photo ? 'photo' : 'text', intent: intent?.key || null, mode: input.photo && !intent?.lockMode ? (input.mode === 'renovation' ? 'renovation' : 'restyle') : null,
       style: styleLine || styleMode === 'image' ? (style || input.styleId || '') : '', colors: colorRoles, colorSource: colorRoles.length ? (input.colorSource || 'custom') : input.surprise ? 'surprise' : 'none',
       reference: has('inspiration'), brief: user ? { original: user, english: english && english !== user ? english : '' } : null, room: noun,
-      images: roles, styleMode, roomMode, rules: !!rulesList, blocksOff: order.filter(id => R.blocks.items[id]?.on === false),
+      images: roles, styleMode, roomMode, rules: !!rulesList, blocksOff: order.filter(id => !blockOn(id, R.blocks.items[id], R.images)),
     },
   };
 }

@@ -265,10 +265,10 @@ export type PromptSection = 'rules' | 'images' | 'blocks' | 'output';
 export type PromptPicture = 'text' | 'image' | 'both';
 export type PromptImageRole = 'inspiration' | 'style' | 'room';
 export interface PromptImage { role: PromptImageRole; uri?: string; mode?: string; sent: boolean; why?: string }
-export interface PromptBlockItem { on?: false; texts?: Record<string, string> }
+export interface PromptBlockItem { on?: boolean; texts?: Record<string, string> }
 export interface PromptSet {
-  rules: { text: string; exploreText: string; withGlobal?: boolean };
-  images: { room: PromptPicture; style: PromptPicture; inspiration: 'image' | 'off' };
+  rules: { text: string; exploreText: string };
+  images: { room: PromptPicture; style: PromptPicture };
   blocks: { order: string[]; items: Record<string, PromptBlockItem> };
   output: { brief: 'both' | 'english' | 'original'; maxSide: number };
 }
@@ -279,7 +279,7 @@ export interface PromptRules {
   tools: Record<Id, Partial<PromptSet>>;
   vocab: { styles: Record<Id, string>; rooms: Record<Id, string> };
 }
-export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; placeholders: string[] } }
+export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; off: string[]; placeholders: string[] } }
 export interface PromptPreview {
   prompt: string;
   blocks: { id: string; variant: string; text: string; custom?: boolean }[];
@@ -288,6 +288,7 @@ export interface PromptPreview {
   size: string; chars: number; source: 'photo' | 'text'; explore: boolean; appliesTo: 'all' | 'explore'; ruled: boolean;
   scope: Partial<Record<PromptSection, 'tool' | 'global'>>;
   warnings: { code: string; items?: string[] }[];
+  applied?: { colors?: { hex: string; name?: string; role?: string }[]; colorSource?: 'custom' | 'preset' | 'surprise' | 'none' };
   draft: { toolId?: Id; styleId?: Id; roomTypeId?: Id; inspirationId?: Id; mode?: string };
 }
 
@@ -364,6 +365,8 @@ export interface AppSettings {
   loaderDelayMs?: number;
   /** Fill the other two languages automatically (free translation) when one is typed in an admin form. On unless false. */
   autoTranslate?: boolean;
+  /** Show the Relooking / Renovation choice on the last step of the wizard (on unless false). Off = every generation is a Relooking. */
+  modeChoice?: boolean;
   /** Let clients switch between the AI models a tool allows (default off: the admin's model is used). */
   aiModelPicker?: boolean;
   /** New WhatsApp-style chat page for clients (voice notes, fast image preview). On unless false. */

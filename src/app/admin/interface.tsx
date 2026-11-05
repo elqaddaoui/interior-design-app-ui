@@ -72,6 +72,16 @@ export default function InterfaceAdmin() {
           <Toggle testID="setting-waChat" label={t('md.chat.title')} value={settings.waChat !== false} onValueChange={(value) => set({ waChat: value })} />
         </View>
       </Card>
+      <Card className="p-3 mb-3">
+        <View className="flex-row items-center justify-between gap-3">
+          <View className="flex-1">
+            <Txt className="font-semibold">{t('improve.modeChoice')}</Txt>
+            <Txt className="text-muted text-[12px] leading-[19px] mt-1">{t('improve.modeChoiceHint')}</Txt>
+            <Txt testID="setting-modeChoice-state" className="text-[12px] leading-[19px] font-bold mt-1 text-primary">{settings.modeChoice !== false ? t('improve.modeChoiceState') : t('improve.modeChoiceOffState')}</Txt>
+          </View>
+          <Toggle testID="setting-modeChoice" label={t('improve.modeChoice')} value={settings.modeChoice !== false} onValueChange={(value) => set({ modeChoice: value })} />
+        </View>
+      </Card>
       <LoaderSettings settings={settings} set={set} />
       <Card className="p-3 mb-3">
         <Txt className="font-extrabold text-[17px]">{t('admin.iface.userNav')}</Txt>

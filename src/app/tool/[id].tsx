@@ -33,6 +33,7 @@ export default function ToolWizard() {
   const user = useUserSession(s => s.user);
   const [checking, setChecking] = useState(false);
   const pickerOn = useStore((s) => s.doc.settings.aiModelPicker) === true;
+  const modeChoice = useStore((s) => s.doc.settings.modeChoice) !== false;
 
   // Ensure the store is primed when the route is opened directly (deep link / refresh).
   useEffect(() => { const wizard = useWizard.getState(); if (id && wizard.toolId !== id) wizard.start(id); }, [id]);
@@ -59,7 +60,7 @@ export default function ToolWizard() {
     // The AI model is chosen by the admin (tool config), never by the user.
     const allowed = d.modelId && allModels.some((m) => m.id === d.modelId && m.enabled && tool.modelIds.includes(m.id));
     const modelId = pickerOn && allowed ? d.modelId : resolveModelId(tool, allModels);
-    w.patch({ modelId, mode: d.mode ?? 'restyle' });
+    w.patch({ modelId, mode: modeChoice ? d.mode ?? 'restyle' : 'restyle' });
     // First free render => collect name + WhatsApp, the design is delivered there.
     if (!user) { router.push('/lead'); return; }
     // The admin may have granted credits since this device last synced: always check the server first.

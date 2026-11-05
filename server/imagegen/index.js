@@ -13,7 +13,7 @@
  */
 const { buildBrief, normalizeColors, ROOM_EN, clean, unknownPlaceholders } = require('./prompt');
 const { cleanRules, resolveRules, defaultRules } = require('./rules');
-const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS } = require('./blocks');
+const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS, DEFAULT_OFF } = require('./blocks');
 const { sniffMime, imageSize, fitSize } = require('./image');
 
 const KEY_RE = /^[A-Za-z0-9_.\-]{12,300}$/;
@@ -197,7 +197,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   /** What the admin screen needs: the saved rules, the default wording of every block and what each {placeholder} means. */
   async function rulesInfo() {
     const blocks = Object.fromEntries(Object.entries(BLOCKS).map(([id, def]) => [id, def.variants]));
-    return { rules: await loadRules(), catalog: { order: DEFAULT_ORDER, blocks, placeholders: PLACEHOLDERS } };
+    return { rules: await loadRules(), catalog: { order: DEFAULT_ORDER, blocks, off: DEFAULT_OFF, placeholders: PLACEHOLDERS } };
   }
 
   /* ------------------------------------------------------------ plan (what a generation is made of) and compose (what one model receives) */
@@ -217,6 +217,8 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const preset = palette && !palette.isSurprise ? normalizeColors(palette.colors) : [];
     const colors = custom.length ? custom : preset;
     const colorSource = custom.length ? 'custom' : preset.length ? 'preset' : 'none';
+    // Admin > Interface: with the Relooking / Renovation choice switched off, every generation (even an old draft) is a Relooking.
+    const modeChoice = snapshot.docs?.settings?.modeChoice !== false;
     const english = translate ? await toEnglish(clean(draft.prompt, 500)) : '';
     // The admin's rules for this tool. They may be limited to generations that start from an Explore picture.
     const stored = rules || await loadRules();
@@ -226,7 +228,8 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     // The extra pictures the rules ask for. Order = priority when a model takes fewer pictures than asked.
     const wanted = [];
     if (photo) {
-      if (active.images.inspiration === 'image') wanted.push({ role: 'inspiration', uri: inspiration?.image || '', missing: inspiration ? 'noPicture' : 'noChoice' });
+      // The Explorer picture is always sent when the client generates from Explore (it is not a setting).
+      wanted.push({ role: 'inspiration', uri: inspiration?.image || '', missing: inspiration ? 'noPicture' : 'noChoice' });
       if (active.images.style !== 'text') wanted.push({ role: 'style', uri: style?.image || '', missing: style ? 'noPicture' : 'noChoice' });
       if (active.images.room !== 'text') wanted.push({ role: 'room', uri: room?.image || '', missing: room ? 'noPicture' : 'noChoice' });
     }
@@ -237,14 +240,13 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       else if (loadPictures) { entry.image = await loadImage(item.uri, { trustedHttps: true }).catch(() => null); if (!entry.image) entry.why = 'unreadable'; }
       extras.push(entry);
     }
-    // Why a requested picture is not part of the generation although the admin asked for it, for the pictures switched off or text-only.
+    // Why a requested picture is not part of the generation although the admin asked for it (text-only generation).
     const off = [];
-    if (active.images.inspiration === 'off' && inspiration) off.push({ role: 'inspiration', uri: inspiration.image || '', why: 'off' });
     if (!photo) for (const role of ['style', 'room']) if (active.images[role] !== 'text') off.push({ role, uri: (role === 'style' ? style : room)?.image || '', why: 'textOnly' });
     const base = {
       photo: !!photo, toolId: draft.toolId, toolTitle: lt(tool?.title, 'fr') + ' ' + lt(tool?.title, 'ar'), roomGroup: tool?.roomGroup || room?.group,
       roomTypeId: draft.roomTypeId, roomTitle: ROOM_EN[draft.roomTypeId] || clean(lt(room?.title), 60), styleId: draft.styleId, styleTitle: lt(style?.title),
-      mode: draft.mode, colors, colorSource, paletteName: lt(palette?.title), surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt, promptEnglish: english, rules: active,
+      mode: modeChoice ? draft.mode : 'restyle', colors, colorSource, paletteName: lt(palette?.title), surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt, promptEnglish: english, rules: active,
     };
     return { c, tool, room, style, palette, inspiration, row, base, english, active, extras, off, explore, limited, stored, size: fitSize(photo?.size, active.output.maxSide || Number(env.IMAGEGEN_MAX_SIDE) || 1024) };
   }
@@ -254,8 +256,8 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const usable = planned.extras.filter(x => x.image || planned.preview);
     const sent = usable.slice(0, room);
     const images = [
-      ...planned.extras.map(x => ({ role: x.role, uri: x.uri, mode: x.role === 'inspiration' ? planned.active.images.inspiration : planned.active.images[x.role], sent: sent.includes(x), why: sent.includes(x) ? '' : x.why || (usable.includes(x) ? 'model' : 'unreadable') })),
-      ...planned.off.map(x => ({ role: x.role, uri: x.uri, mode: x.why === 'off' ? 'off' : planned.active.images[x.role], sent: false, why: x.why })),
+      ...planned.extras.map(x => ({ role: x.role, uri: x.uri, mode: x.role === 'inspiration' ? 'image' : planned.active.images[x.role], sent: sent.includes(x), why: sent.includes(x) ? '' : x.why || (usable.includes(x) ? 'model' : 'unreadable') })),
+      ...planned.off.map(x => ({ role: x.role, uri: x.uri, mode: planned.active.images[x.role], sent: false, why: x.why })),
     ];
     const brief = buildBrief({ ...planned.base, imageRoles: sent.map(x => x.role) });
     return { brief, images, references: sent.map(x => x.image).filter(Boolean) };
