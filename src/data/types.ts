@@ -279,7 +279,7 @@ export interface PromptRules {
   tools: Record<Id, Partial<PromptSet>>;
   vocab: { styles: Record<Id, string>; rooms: Record<Id, string> };
 }
-export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; off: string[]; placeholders: string[] } }
+export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; off: string[]; placeholders: string[]; /** The English wording the app uses today for each style / room type (what an empty Vocabulary field means). */ vocab?: { styles: Record<string, string>; rooms: Record<string, string> } } }
 export interface PromptPreview {
   prompt: string;
   blocks: { id: string; variant: string; text: string; custom?: boolean }[];

@@ -78,6 +78,7 @@
     "gen:seed": "sucrase-node scripts/gen-seed.ts",
     "postinstall": "node scripts/postinstall.js",
     "check:toolcards": "sucrase-node scripts/check-toolcard-fx.ts",
+    "check:promptcards": "sucrase-node scripts/check-promptcards.ts",
     "check:studio": "node scripts/check-studio-browser.js",
     "check:voice": "sucrase-node scripts/check-voice-mime.ts"
   },
