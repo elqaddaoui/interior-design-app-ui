@@ -305,6 +305,7 @@ const ar: Dict = {
       palettes: 'لوحات الألوان',
       models: 'نماذج الذكاء الاصطناعي',
       assistant: 'المساعد',
+      promptCards: 'بطاقات البرومبت',
       branding: 'الهوية',
       theme: 'السمة',
       interface: 'الواجهة والقوائم',

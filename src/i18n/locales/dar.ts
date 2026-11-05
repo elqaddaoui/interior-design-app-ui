@@ -305,6 +305,7 @@ const dar: Dict = {
       palettes: 'لوحات الألوان',
       models: 'موديلات الذكاء الاصطناعي',
       assistant: 'المساعد',
+      promptCards: 'كارطات البرومبت',
       branding: 'الهوية',
       theme: 'الثيم',
       interface: 'الواجهة والمينيو',

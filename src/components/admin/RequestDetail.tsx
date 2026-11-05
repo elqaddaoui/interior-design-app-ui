@@ -158,6 +158,20 @@ export function RequestInfo({ r, onOpenShot }: { r: RenderRequest; onOpenShot: (
             </View>
           </Row>
         ) : null}
+        {run?.images ? (
+          <Row label={t('md.req.imagesSent')} testID="req-images">
+            <View className="gap-1.5">
+              <View className="flex-row items-center gap-1.5"><Icon name="check" size={14} tone="success" /><Txt className="text-[12px] leading-[18px] flex-1">{t('md.req.imgPhoto')}</Txt></View>
+              {run.images.map((im) => (
+                <View key={im.role} className="flex-row items-center gap-1.5">
+                  <Icon name={im.sent ? 'check' : 'close'} size={14} tone={im.sent ? 'success' : 'muted'} />
+                  <Txt className="text-[12px] leading-[18px] flex-1">{t(`md.req.imgRole.${im.role}`)} · {t(im.sent ? 'md.req.imgSent' : 'md.req.imgNotSent')}{im.why ? ` · ${t(`md.req.imgWhy.${im.why}`)}` : ''}</Txt>
+                </View>
+              ))}
+            </View>
+          </Row>
+        ) : null}
+        {run?.rules ? <Row label={t('md.req.rulesApplied')} testID="req-rules">{t(run.rules.applied ? 'md.req.rulesOn' : 'md.req.rulesOff')}</Row> : null}
         {run?.size ? <Row label={t('md.req.size')}>{run.size}</Row> : null}
         {run?.photo ? <Row label={t('md.req.photoSize')}>{`${run.photo.width}×${run.photo.height}${run.photo.bytes ? ` · ${(run.photo.bytes / 1024).toFixed(0)} KB` : ''}`}</Row> : null}
         {run?.durationMs ? <Row label={t('md.req.duration')}>{sec(run.durationMs)}</Row> : null}
