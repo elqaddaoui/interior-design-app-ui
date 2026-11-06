@@ -8,16 +8,16 @@ import { useT } from '@/i18n';
 
 /** Small building blocks of Admin > Prompt cards: one look for every control, nothing else to learn. */
 
-export function Tabs<T extends string>({ value, options, onChange }: { value: T; options: { key: T; label: string; icon: string; dot?: boolean }[]; onChange: (v: T) => void }) {
+export function Tabs<T extends string>({ value, options, onChange, prefix = 'pc' }: { value: T; options: { key: T; label: string; icon: string; dot?: boolean }[]; onChange: (v: T) => void; prefix?: string }) {
   return (
-    <View testID="pc-tabs" accessibilityRole="tablist" className="flex-row bg-surface2 rounded-2xl p-1 gap-1">
+    <View testID={`${prefix}-tabs`} accessibilityRole="tablist" className="flex-row bg-surface2 rounded-2xl p-1 gap-1">
       {options.map((o) => {
         const on = value === o.key;
         return (
-          <Pressable key={o.key} testID={`pc-tab-${o.key}`} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(o.key)} className={`flex-1 rounded-xl items-center justify-center py-2 gap-0.5 ${on ? 'bg-surface border border-line' : 'border border-transparent'}`} style={{ minWidth: 0, minHeight: 56 }}>
+          <Pressable key={o.key} testID={`${prefix}-tab-${o.key}`} accessibilityRole="tab" accessibilityState={{ selected: on }} onPress={() => onChange(o.key)} className={`flex-1 rounded-xl items-center justify-center py-2 gap-0.5 ${on ? 'bg-surface border border-line' : 'border border-transparent'}`} style={{ minWidth: 0, minHeight: 56 }}>
             <View>
               <Icon name={o.icon} size={21} tone={on ? 'primary' : 'muted'} />
-              {o.dot ? <View testID={`pc-tab-${o.key}-dot`} className="absolute w-2 h-2 rounded-full bg-primary" style={{ top: -1, end: -4 }} /> : null}
+              {o.dot ? <View testID={`${prefix}-tab-${o.key}-dot`} className="absolute w-2 h-2 rounded-full bg-primary" style={{ top: -1, end: -4 }} /> : null}
             </View>
             <Txt className={`text-[11.5px] ${on ? 'font-extrabold' : 'font-semibold text-muted'}`} numberOfLines={1}>{o.label}</Txt>
           </Pressable>
