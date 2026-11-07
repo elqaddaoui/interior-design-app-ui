@@ -24,6 +24,7 @@ import { requestLeave, useLeaveGuard } from '@/hooks/useLeaveGuard';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { PushNotifications } from '@/components/admin/PushNotifications';
 import { backendEnabled } from '@/lib/backend';
+import { markRequest } from '@/lib/requestActions';
 import type { RenderRequest, RequestStatus } from '@/data/types';
 
 const STATUSES: RequestStatus[] = ['pending', 'processing', 'delivered'];
@@ -105,12 +106,8 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const close = () => requestLeave(onClose);
   if (!r) return <Sheet visible={false} onClose={onClose}><View /></Sheet>;
   const set = async (status: RequestStatus, extra: Partial<RenderRequest> = {}) => {
-    await s.update('requests', r.id, { status, ...extra });
-    if (status === 'delivered') {
-      const out = extra.finalResult ?? r.finalResult ?? r.aiResult;
-      if (r.historyId && out && !(backendEnabled && /^[a-f0-9]{8}-/.test(r.id))) await s.update('history', r.historyId, { after: out, status: 'done' });
-      toast(t('admin.req.deliveredToast'));
-    }
+    await markRequest(r, status, extra);
+    if (status === 'delivered') toast(t('admin.req.deliveredToast'));
   };
   const saveFinal = async () => { await s.update('requests', r.id, { finalResult: final }); toast(t('admin.crud.saved')); };
   const open = () => Linking.openURL(waLink(r.whatsapp, t('admin.req.waMsg', { name: r.name })));

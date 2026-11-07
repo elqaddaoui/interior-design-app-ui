@@ -57,14 +57,15 @@ export function topUsage(i: Inputs, range: Range, pick: (d: Draft) => string | u
 }
 
 export type EventKind = 'request' | 'delivered' | 'design' | 'user';
-export interface Ev { id: string; kind: EventKind; at: number; name: string; toolId?: Id; href: string }
+/** `refId` = the record the event is about (request / history item / user), so a tap can open exactly that record. */
+export interface Ev { id: string; kind: EventKind; at: number; name: string; toolId?: Id; href: string; refId?: Id; userId?: Id }
 export function recentEvents(i: Inputs, limit = 8): Ev[] {
   const ev: Ev[] = [];
   i.requests.forEach((r) => {
-    ev.push({ id: `rq-${r.id}`, kind: r.status === 'delivered' ? 'delivered' : 'request', at: r.createdAt, name: r.name, toolId: r.draft.toolId, href: '/admin/requests' });
+    ev.push({ id: `rq-${r.id}`, kind: r.status === 'delivered' ? 'delivered' : 'request', at: r.createdAt, name: r.name, toolId: r.draft.toolId, href: '/admin/requests', refId: r.id, userId: r.userId });
   });
-  i.history.forEach((h) => { if (!h.requestId) ev.push({ id: `h-${h.id}`, kind: 'design', at: h.createdAt, name: '', toolId: h.draft.toolId, href: '/admin/requests' }); });
-  i.users.filter((u) => u.role === 'user' && u.name).forEach((u) => ev.push({ id: `u-${u.id}`, kind: 'user', at: u.createdAt, name: u.name, href: '/admin/users' }));
+  i.history.forEach((h) => { if (!h.requestId) ev.push({ id: `h-${h.id}`, kind: 'design', at: h.createdAt, name: '', toolId: h.draft.toolId, href: '/admin/requests', refId: h.id, userId: h.userId }); });
+  i.users.filter((u) => u.role === 'user' && u.name).forEach((u) => ev.push({ id: `u-${u.id}`, kind: 'user', at: u.createdAt, name: u.name, href: '/admin/users', refId: u.id, userId: u.id }));
   return ev.sort((a, b) => b.at - a.at).slice(0, limit);
 }
 

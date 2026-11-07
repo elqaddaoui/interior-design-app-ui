@@ -348,7 +348,8 @@ export type UserNavStyle = 'classic' | 'floating' | 'minimal';
 /** Startup loading screen: four built-in animations or the admin's own image (GIF / SVG / PNG / WebP). */
 export type LoaderStyle = 'ring' | 'dots' | 'pulse' | 'bars' | 'zellige' | 'arch' | 'lantern' | 'mosaic' | 'custom';
 export type LoaderAnim = 'none' | 'spin' | 'pulse';
-export type AdminNavMode = 'rail' | 'drawer' | 'top';
+/** Look of the admin side menu. Expanded / collapsed is a per-device choice made with the collapse icon, not a setting. */
+export type AdminMenuDesign = 'glide' | 'beam' | 'spotlight';
 export interface AppSettings {
   /** Master switches for push notifications, independent of each other (on unless false). */
   notifyAdmins?: boolean;
@@ -369,7 +370,9 @@ export interface AppSettings {
   /** Show the home tab filters; hiding them never hides tool cards. */
   homeTabsVisible?: boolean;
   userNavStyle: UserNavStyle;
-  adminNavMode: AdminNavMode;
+  /** Admin side-menu design (default glide) and whether its motion is on (default on). */
+  adminMenuDesign?: AdminMenuDesign;
+  adminMenuAnim?: boolean;
   arabicFont?: string;
   frenchFont?: string;
   galleryLayout?: GalleryLayout;

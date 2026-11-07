@@ -26,7 +26,7 @@ const until = async (fn, label, ms = 15000) => { const end = Date.now() + ms; fo
   await admin.page.getByTestId('admin-email').fill('admin');
   await admin.page.getByTestId('admin-password').fill('admin');
   await admin.page.getByTestId('admin-signin').click();
-  await admin.page.getByTestId('admin-push-panel').waitFor({ state: 'attached' }).catch(() => {});
+  await admin.page.getByTestId('kpi-pending').waitFor({ state: 'attached' }).catch(() => {});
   assert.equal((await api(admin.page, '/admin/session')).status, 200, 'admin session');
 
   // Client device on the home page; seeded content comes from the database.

@@ -20,9 +20,9 @@ export function Reveal({ i = 0, children, style }: { i?: number; children: React
 }
 
 /** Content card: small caps title, optional sub line and right-hand actions. */
-export function Panel({ title, sub, right, children, className = '', testID, style }: { title?: string; sub?: string; right?: React.ReactNode; children: React.ReactNode; className?: string; testID?: string; style?: ViewStyle }) {
+export function Panel({ title, sub, right, children, className = '', testID, style, fill }: { title?: string; sub?: string; right?: React.ReactNode; children: React.ReactNode; className?: string; testID?: string; style?: ViewStyle; fill?: boolean }) {
   return (
-    <View testID={testID} className={`bg-surface border border-line rounded-3xl p-4 ${className}`} style={[{ boxShadow: SHADOW } as any, style]}>
+    <View testID={testID} className={`bg-surface border border-line rounded-3xl p-4 ${className}`} style={[{ boxShadow: SHADOW } as any, fill ? { flexGrow: 1 } : null, style]}>
       {title || right ? (
         <View className="flex-row items-start justify-between mb-3.5 gap-3">
           <View className="flex-1" style={{ minWidth: 0 }}>
@@ -50,7 +50,7 @@ export function Delta({ v, testID }: { v: number; testID?: string }) {
 }
 
 /** Headline metric: icon, rolling number, change vs previous period, sparkline. `hot` = dark call-to-action variant. */
-export function Kpi({ id, icon, label, value, suffix, delta, spark, sub, active, hot, onPress }: { id: string; icon: string; label: string; value: number; suffix?: string; delta?: number; spark?: number[]; sub?: string; active?: boolean; hot?: boolean; onPress: () => void }) {
+export function Kpi({ id, icon, label, value, suffix, delta, spark, sub, active, hot, basis = 200, onPress }: { id: string; icon: string; label: string; value: number; suffix?: string; delta?: number; spark?: number[]; sub?: string; active?: boolean; hot?: boolean; basis?: number; onPress: () => void }) {
   const { colors } = useTheme();
   const n = useCountUp(value);
   const [hov, hp] = useHover();
@@ -58,7 +58,7 @@ export function Kpi({ id, icon, label, value, suffix, delta, spark, sub, active,
   return (
     <Pressable testID={`kpi-${id}`} accessibilityRole="button" accessibilityLabel={`${label}: ${value}${suffix ?? ''}`} accessibilityState={{ selected: !!active }} onPress={onPress} {...hp}
       className={`rounded-3xl border p-4 ${hot ? 'bg-ink border-ink' : active ? 'bg-surface border-ink' : 'bg-surface border-line'}`}
-      style={{ flexGrow: 1, flexBasis: 200, minWidth: 0, boxShadow: hov ? HOVER : SHADOW, transform: [{ translateY: hov ? -2 : 0 }], ...T } as any}>
+      style={{ flexGrow: 1, flexBasis: basis, minWidth: 0, boxShadow: hov ? HOVER : SHADOW, transform: [{ translateY: hov ? -2 : 0 }], ...T } as any}>
       <View className="flex-row items-center justify-between mb-3">
         <View className="flex-row items-center gap-2 flex-1" style={{ minWidth: 0 }}>
           <View className={`w-8 h-8 rounded-xl items-center justify-center ${hot ? 'bg-primary' : 'bg-soft'}`}><Icon name={icon} size={17} tone={hot ? 'onprimary' : 'fg'} /></View>

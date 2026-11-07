@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { HistoryButtons } from '@/components/admin/HistoryButtons';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -32,7 +33,7 @@ export function CrudScreen({ entity }: { entity: string }) {
   const { t } = useT();
   const L = useL();
   const s = useStore();
-  const { target } = useLocalSearchParams<{ target?: string }>();
+  const { target, add } = useLocalSearchParams<{ target?: string; add?: string }>();
   const [query, setQuery] = useViewState('query', '');
   const [editing, setEditing] = useState<any | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -64,6 +65,14 @@ export function CrudScreen({ entity }: { entity: string }) {
   const shown = editing && preview
     ? isNew ? (filtered.some((r) => r.id === preview.id) ? filtered.map((r) => r.id === preview.id ? preview : r) : [...filtered, preview]) : filtered.map((r) => r.id === preview.id ? preview : r)
     : filtered;
+  // `?add=1` (dashboard quick actions) lands directly on the empty form, once per visit.
+  const addedFromLink = useRef(false);
+  useEffect(() => {
+    if (add !== '1' || !cfg || addedFromLink.current) return;
+    addedFromLink.current = true;
+    setPreview(null); setIsNew(true); setEditing({ ...cfg.blank(ctx), id: uid(cfg.name.slice(0, 3)) });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [add, cfg]);
   if (!cfg) return null;
 
   const open = (r?: any) => { setPreview(null); setIsNew(!r); // A new item gets its id up front: the live preview row and the saved row are then the same row (never a duplicate), and retrying a save that timed out can only overwrite, not add a second copy.
@@ -197,7 +206,7 @@ export function CrudScreen({ entity }: { entity: string }) {
         onReorder={cfg.ordered && bulkEnabled && !query.trim() ? staged.drop : undefined}
         onMove={cfg.ordered && bulkEnabled && !query.trim() ? (r, d) => staged.move([r.id], d) : undefined}
         onToggle={(r) => staged.update(r.id, { visible: r.visible === false } as any)} /></RightClick>}
-      {staged.dirty ? <Card className="p-2 mt-3 flex-row items-center gap-2"><Txt className="flex-1 text-[12px]">{t('improve.previewLabel')}</Txt><Button testID="crud-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={staged.discard} /><Button testID="crud-submit" size="sm" title={t('improve.submit')} onPress={staged.save} /></Card> : null}
+      {staged.dirty ? <Card className="p-2 mt-3 flex-row items-center gap-2"><Txt className="flex-1 text-[12px]">{t('improve.previewLabel')}</Txt><HistoryButtons prefix="crud" /><Button testID="crud-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={staged.discard} /><Button testID="crud-submit" size="sm" title={t('improve.submit')} onPress={staged.save} /></Card> : null}
       <View className="h-3" />
       <FormModal visible={!!editing} title={`${isNew ? t('admin.crud.addNew') : t('admin.crud.editItem')} · ${t(`admin.nav.${cfg.navKey}`)}`}
         fields={cfg.fields(ctx)} initial={editing} onDraftChange={previewDraft} onClose={() => setEditing(null)} onSubmit={submit} />

@@ -207,7 +207,7 @@ export function UnsavedChangesHost() {
     <View testID="unsaved-differences" className="gap-3 mb-4">
       {[...new Map([...guards.values()].flatMap(guard => guard.changes?.() ?? []).map(change => [JSON.stringify([change.path, change.before, change.after]), change])).values()].map((change, index) => {
         const label = change.label ?? change.path.split('.').map(key => {
-          const settingKeys: Record<string, string> = { frenchFont: 'improve.frenchFont', arabicFont: 'improve.arabicFont', galleryLayout: 'improve.galleryLayout', appSearchEnabled: 'improve.appSearch', adminSearchEnabled: 'improve.adminSearch', exitConfirmationEnabled: 'improve.exitEnabled', autoTranslate: 'improve.autoTranslate', userNavStyle: 'admin.iface.userNav', adminNavMode: 'admin.iface.adminNav', defaultFreeCredits: 'admin.credits.defaultCredits' };
+          const settingKeys: Record<string, string> = { frenchFont: 'improve.frenchFont', arabicFont: 'improve.arabicFont', galleryLayout: 'improve.galleryLayout', appSearchEnabled: 'improve.appSearch', adminSearchEnabled: 'improve.adminSearch', exitConfirmationEnabled: 'improve.exitEnabled', autoTranslate: 'improve.autoTranslate', userNavStyle: 'admin.iface.userNav', adminMenuDesign: 'mx.design.title', adminMenuAnim: 'mx.anim.title', defaultFreeCredits: 'admin.credits.defaultCredits' };
           const translation = settingKeys[key] ?? ['admin.f.', 'improve.', 'admin.nav.'].map(prefix => prefix + key).find(candidate => i18n.exists(candidate));
           return translation ? t(translation) : key;
         }).join(' · ');

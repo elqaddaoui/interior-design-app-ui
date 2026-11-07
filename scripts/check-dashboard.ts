@@ -2,6 +2,7 @@
 import { aiHealth, audience, daypart, heatmap, insights, overview, pct, pipeline, sourceMix } from '../src/lib/analytics';
 import { areaPath, compact, donutArcs, niceMax, smoothPath, ticksFor, toPoints } from '../src/lib/chartGeo';
 import { DAY } from '../src/lib/stats';
+import { AUD_KINDS, audienceClients, clientProfile, failedRuns, pendingQueue } from '../src/lib/dashDetail';
 
 const fail = (m: string): never => { throw new Error(m); };
 const ok = (c: unknown, m: string) => { if (!c) fail(m); };
@@ -61,6 +62,22 @@ t('insights: urgent first, capped at 4, localisable parameters', () => {
   ok(k.some((x) => x.key === 'topTool' && x.id === 'tool_a' && x.pct === 100), 'top tool share');
   const drop = insights({ ...empty, history: [hist('a', 1), ...[40, 41, 42, 43].map((d, j) => hist(`o${j}`, d))] }, 30, NOW);
   ok(drop.some((x) => x.key === 'drop'), 'drop detected');
+});
+t('dashDetail: every tile count equals the list that opens behind it', () => {
+  const i = { ...empty, users: [user('u1', 50, { credits: 5, leadDone: true }), user('u2', 50, { credits: 0 }), user('u3', 50, { credits: 0, blocked: true }), { ...user('adm', 50), role: 'admin' }], history: [hist('a', 1, 'u1'), hist('b', 2, 'u1'), hist('c', 3, 'u2')], requests: [req('r', 1, 'pending', { userId: 'u3' })] };
+  const a = audience(i, 30, NOW);
+  const len = (k: any) => audienceClients(i, 30, k, NOW).length;
+  eq([len('active'), len('returning'), len('leads'), len('zero'), len('blocked')], [a.active, a.returning, a.leads, a.zeroCredits, a.blocked], 'tile counts == list lengths');
+  eq(audienceClients(i, 30, 'credits', NOW).map((x) => x.user.id), ['u1'], 'credits list = clients holding credits');
+  eq(a.creditsOut, audienceClients(i, 30, 'credits', NOW).reduce((s, x) => s + x.user.credits, 0), 'credits sum matches the tile');
+  eq(audienceClients(i, 30, 'active', NOW)[0].user.id, 'u1', 'busiest first'); eq(audienceClients(i, 30, 'returning', NOW)[0].designs, 2, 'designs counted');
+  ok(AUD_KINDS.every((k) => Array.isArray(audienceClients(empty, 30, k, NOW))), 'empty data never crashes');
+});
+t('dashDetail: pending queue, failed runs, client profile', () => {
+  const i = { ...empty, requests: [req('1', 1, 'pending'), req('2', 5, 'pending'), req('3', 2, 'delivered'), req('4', 1, 'delivered', { aiRun: { failed: true, at: at(1) } }), req('5', 90, 'delivered', { aiRun: { failed: true, at: at(90) } })], history: [hist('h', 3)] };
+  eq(pendingQueue(i, NOW).map((w) => w.request.id), ['2', '1'], 'longest wait first'); eq(pendingQueue(i, NOW).length, pipeline(i, 90, NOW).pending, 'queue == pending count');
+  eq(failedRuns(i, 30, NOW).map((r) => r.id), ['4'], 'failed runs inside the period only'); eq(failedRuns(i, 30, NOW).length, aiHealth(i, 30, NOW).failed, 'same as the AI panel');
+  const p = clientProfile({ ...i, users: [user('u1', 50)] }, 'u1'); eq(p.requests.length, 5, 'all requests of the client'); ok(p.requests[0].createdAt >= p.requests[1].createdAt, 'newest first');
 });
 t('daypart', () => { eq([daypart(6), daypart(13), daypart(21)], ['morning', 'afternoon', 'evening'], 'parts'); });
 
