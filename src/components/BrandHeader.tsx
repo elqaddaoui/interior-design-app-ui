@@ -1,22 +1,31 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { Image } from 'expo-image';
-import { Txt } from '@/components/ui/Txt';
+import { LogoView } from '@/components/brand/LogoView';
+import { specFromBranding } from '@/lib/brand/spec';
+import { useTheme } from '@/theme/ThemeProvider';
 import type { Branding } from '@/data/types';
-import { useFontFamily } from '@/lib/fonts';
 import { useStore } from '@/store/useStore';
 
-/** A single responsive wordmark/image renderer shared by desktop, mobile and preview. */
+/** A single responsive wordmark/image renderer shared by desktop, mobile and preview. Older branding documents (no `logo`) are mapped to a spec. */
 export function BrandMark({ branding }: { branding: Branding }) {
   const [failed, setFailed] = useState('');
-  const fontFamily = useFontFamily(branding.logoFont);
-  const size = Math.min(40, Math.max(18, branding.logoSize ?? 28));
-  const image = (branding.logoMode ?? (branding.logoUri ? 'image' : 'text')) === 'image' && branding.logoUri && failed !== branding.logoUri;
+  const { colors, dark } = useTheme();
+  const spec = useMemo(() => specFromBranding(branding), [branding]);
+  const mode = dark ? 'dark' : 'light';
+  const uri = spec.type === 'image' ? (mode === 'dark' && spec.image.dark ? spec.image.dark : spec.image.light) : '';
+  const ratio = mode === 'dark' && spec.image.dark ? spec.image.darkRatio : spec.image.ratio;
+  const h = Math.min(52, Math.max(16, spec.image.height));
+  if (uri && failed !== uri) {
+    return (
+      <View testID="brand-mark" style={{ maxWidth: '100%', flexShrink: 1 }}>
+        <Image accessibilityLabel={spec.name} source={{ uri }} contentFit="contain" style={{ width: Math.min(220, h * (ratio || 1)), maxWidth: '100%', height: h }} onError={() => setFailed(uri)} />
+      </View>
+    );
+  }
   return (
-    <View testID="brand-mark" className={branding.logoStyle === 'badge' ? 'bg-soft rounded-2xl px-3 py-1' : ''} style={{ maxWidth: '100%', flexShrink: 1 }}>
-      {image ? <Image accessibilityLabel={branding.appName} source={{ uri: branding.logoUri }} contentFit="contain" style={{ width: 140, maxWidth: '100%', height: 44 }} onError={() => setFailed(branding.logoUri)} /> :
-        <Txt numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ fontFamily, color: branding.logoColor || undefined, fontSize: size, fontWeight: '800', fontStyle: branding.logoItalic ? 'italic' : 'normal', letterSpacing: branding.logoSpacing ?? -0.5, lineHeight: size * 1.4 }}>{branding.appName || 'Dwira'}</Txt>}
-      {branding.logoStyle === 'signature' ? <View className="bg-primary rounded-full" style={{ height: 3, width: 28, marginTop: -2 }} /> : null}
+    <View testID="brand-mark" style={{ maxWidth: '100%', flexShrink: 1 }}>
+      <LogoView spec={uri ? { ...spec, type: 'text' } : spec} mode={mode} accent={colors.primary} maxW={220} maxH={52} />
     </View>
   );
 }

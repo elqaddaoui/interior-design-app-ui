@@ -316,7 +316,14 @@ export interface Branding {
   logoFont?: string; logoColor?: string; logoSize?: number;
   logoStyle?: 'minimal' | 'signature' | 'badge';
   logoItalic?: boolean; logoSpacing?: number;
+  /** Logo studio spec (see lib/brand/spec.ts). The fields above stay in sync for older readers. */
+  logo?: import('@/lib/brand/spec').LogoSpec;
+  /** Favicon PNG data URL / media URL generated from the logo at publish time. */
+  favicon?: string;
+  /** Published versions, newest first (max 20). */
+  versions?: BrandVersion[];
 }
+export interface BrandVersion { id: string; at: number; note: string; groups: string[]; logo: import('@/lib/brand/spec').LogoSpec }
 export type GalleryLayout = 'grid' | 'masonry' | 'editorial' | 'carousel';
 /** 'custom' or any preset id (see theme/presets.ts). */
 export type ThemeId = string;
