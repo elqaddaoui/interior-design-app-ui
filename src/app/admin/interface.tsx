@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -17,10 +17,11 @@ import { toast } from '@/store/useToast';
 import { Field } from '@/components/admin/FormModal';
 import { useStore } from '@/store/useStore';
 import { ENTITIES } from '@/admin/entities';
-import type { AdminNavMode, UserNavStyle } from '@/data/types';
+import { MENU_DESIGNS } from '@/components/admin/AdminMenu';
+import { MenuPreview } from '@/components/admin/MenuPreview';
+import type { UserNavStyle } from '@/data/types';
 
 const USER: UserNavStyle[] = ['classic', 'floating', 'minimal'];
-const ADMIN: AdminNavMode[] = ['rail', 'drawer', 'top'];
 
 function Option({ id, active, title, desc, testID, onPress, children }: { id: string; active: boolean; title: string; desc: string; testID: string; onPress: () => void; children: React.ReactNode }) {
   const { t } = useT();
@@ -42,6 +43,7 @@ export default function InterfaceAdmin() {
   const L = useL();
   const store = useStore();
   const { draft: settings, patch: set, save, discard, dirty } = useDraftDoc('settings');
+  const [exitOpen, setExitOpen] = useState(false);
   const wrap = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 12 };
   if (!contentReady) return <AdminPage title={t('admin.iface.title')}><AdminLoading /></AdminPage>;
   return (
@@ -59,8 +61,18 @@ export default function InterfaceAdmin() {
           </View>
           <Txt className="text-muted text-[12px] mt-1">{t('improve.autoTranslateHint')}</Txt>
         </View>
-        <Txt className="font-bold text-[17px] my-3">{t('improve.exitSettings')}</Txt>
-        {(['exitTitle', 'exitMessage'] as const).map((key) => <Field key={key} f={{ key, kind: 'ltext', label: t(`improve.${key}`), multiline: key === 'exitMessage' }} value={settings[key]} ctx={{ s: store, L, t }} onChange={(value) => set({ [key]: value })} />)}
+        <View className="border-t border-line mt-1 pt-2">
+          <Pressable testID="exit-edit-toggle" accessibilityRole="button" accessibilityState={{ expanded: exitOpen }} onPress={() => setExitOpen((v) => !v)} className="flex-row items-center justify-between gap-3 py-2 active:opacity-70">
+            <View className="flex-1">
+              <Txt className="font-semibold">{t('improve.exitSettings')}</Txt>
+              <Txt className="text-muted text-[12px] mt-0.5">{settings.exitConfirmationEnabled !== false ? t('improve.exitEnabled') : t('mx.anim.off')}</Txt>
+            </View>
+            <View className="flex-row items-center gap-1.5 bg-surface2 rounded-full px-3 h-9"><Icon name={exitOpen ? 'chevron-up' : 'pencil-outline'} size={16} /><Txt className="text-[12px] font-bold">{exitOpen ? t('mx.exit.close') : t('mx.exit.edit')}</Txt></View>
+          </Pressable>
+          {exitOpen ? <View testID="exit-edit-panel" className="pt-2">
+            {(['exitTitle', 'exitMessage'] as const).map((key) => <Field key={key} f={{ key, kind: 'ltext', label: t(`improve.${key}`), multiline: key === 'exitMessage' }} value={settings[key]} ctx={{ s: store, L, t }} onChange={(value) => set({ [key]: value })} />)}
+          </View> : null}
+        </View>
       </Card>
       <Card className="p-3 mb-3">
         <View className="flex-row items-center justify-between gap-3">
@@ -95,14 +107,22 @@ export default function InterfaceAdmin() {
         </View>
       </Card>
       <Card className="p-3 mb-3">
-        <Txt className="font-extrabold text-[17px]">{t('admin.iface.adminNav')}</Txt>
-        <Txt className="text-muted text-[13px] mb-4">{t('admin.iface.adminNavDesc')}</Txt>
+        <Txt className="font-extrabold text-[17px]">{t('mx.design.title')}</Txt>
+        <Txt className="text-muted text-[13px] mb-4">{t('mx.design.desc')}</Txt>
         <View style={wrap}>
-          {ADMIN.map((id) => (
-            <Option key={id} id={id} testID={`adminnav-${id}`} active={(settings.adminNavMode ?? 'drawer') === id} title={t(`admin.iface.${id}`)} desc={t(`admin.iface.${id}Desc`)} onPress={() => set({ adminNavMode: id })}>
-              <NavPreview kind="admin" id={id} />
+          {MENU_DESIGNS.map((id) => (
+            <Option key={id} id={id} testID={`menudesign-${id}`} active={(settings.adminMenuDesign ?? 'glide') === id} title={t(`mx.design.${id}`)} desc={t(`mx.design.${id}Desc`)} onPress={() => set({ adminMenuDesign: id })}>
+              <MenuPreview design={id} animated={settings.adminMenuAnim !== false} />
             </Option>
           ))}
+        </View>
+        <View className="flex-row items-center justify-between gap-3 mt-4 pt-3 border-t border-line">
+          <View className="flex-1">
+            <Txt className="font-semibold">{t('mx.anim.title')}</Txt>
+            <Txt className="text-muted text-[12px] leading-[19px] mt-1">{t('mx.anim.hint')}</Txt>
+            <Txt testID="setting-adminMenuAnim-state" className="text-[12px] leading-[19px] font-bold mt-1 text-primary">{settings.adminMenuAnim !== false ? t('mx.anim.on') : t('mx.anim.off')}</Txt>
+          </View>
+          <Toggle testID="setting-adminMenuAnim" label={t('mx.anim.title')} value={settings.adminMenuAnim !== false} onValueChange={(value) => set({ adminMenuAnim: value })} />
         </View>
       </Card>
       <Card className="p-3 mb-3">

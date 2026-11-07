@@ -25,6 +25,10 @@ const useMenu = create<{ menu: Open; open(x: number, y: number, items: MenuItem[
   close: () => set({ menu: null }),
 }));
 export const closeContextMenu = () => useMenu.getState().close();
+/** Opens the menu at a screen position (used by buttons that show a popover, e.g. the account menu). */
+export const openContextMenu = (x: number, y: number, items: MenuItem[]) => useMenu.getState().open(x, y, items);
+export const CONTEXT_MENU_WIDTH = 236;
+export const contextMenuHeight = (items: MenuItem[]) => items.reduce((sum, item) => sum + ('separator' in item ? 9 : 40), 12);
 export const sep = (key: string): MenuItem => ({ key, separator: true });
 
 const isField = (node: unknown) => {

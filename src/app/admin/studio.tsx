@@ -8,10 +8,12 @@ import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
 import { StudioPanel, TABS, applyPatch, type StudioTab } from '@/components/admin/studio/StudioPanel';
 import { StudioStage } from '@/components/admin/studio/StudioStage';
-import { Chips, Group, Sw } from '@/components/admin/studio/ui';
+import { Chips, Sw } from '@/components/admin/studio/ui';
 import { SAMPLES } from '@/components/admin/studio/samples';
 import { useT, useL } from '@/i18n';
 import { useBp } from '@/hooks/useBp';
+import { HistoryButtons } from '@/components/admin/HistoryButtons';
+import { adminHistory, useAdminHistory } from '@/store/adminHistory';
 import { useCollectionDraft, useDraftDoc } from '@/hooks/useDraftDoc';
 import { useTheme } from '@/theme/ThemeProvider';
 import { FX_FADE } from '@/lib/toolCardFx';
@@ -24,8 +26,7 @@ import { useStore } from '@/store/useStore';
 import type { Tool } from '@/data/types';
 
 const GLOBAL = '__global';
-const HISTORY_GAP_MS = 700;
-/** Clock for the undo grouping (module level: an event-handler-only call, never part of rendering). */
+/** Clock for saved looks (module level: an event-handler-only call, never part of rendering). */
 const nowMs = () => Date.now();
 
 /**
@@ -53,6 +54,7 @@ function Studio({ appRtl }: { appRtl: boolean }) {
   const [tab, setTab] = useState<StudioTab>('main');
   const [rtl, setRtl] = useState(appRtl);
   const [lowEnd, setLowEnd] = useState(false);
+  const [devOpen, setDevOpen] = useState(false);
   // The transition shown on the stage, remembered per scope (no effect needed: derived while rendering).
   const [picked, setPicked] = useState<Record<string, number>>({});
 
@@ -78,11 +80,9 @@ function Studio({ appRtl }: { appRtl: boolean }) {
   const setEffect = (id: number) => setPicked((old) => ({ ...old, [scope]: id }));
 
   /* ------------------------------ writing + history ------------------------------ */
-  // Undo / redo of the style being edited (per scope: switching scope starts a fresh history). Consecutive tweaks within HISTORY_GAP_MS
-  // (a slider drag) are one step.
-  type Hist = { scope: string; past: StudioStyle[]; future: StudioStyle[]; at: number };
-  const [hist, setHist] = useState<Hist>({ scope: GLOBAL, past: [], future: [], at: 0 });
-  const h: Hist = hist.scope === scope ? hist : { scope, past: [], future: [], at: 0 };
+  // Undo / redo is the admin's global history (the same steps as the back / forward icons of the draft bar and Ctrl+Z / Ctrl+Y): every tweak
+  // writes into the draft, consecutive tweaks within 700 ms (a slider drag) are one step, a whole look (preset, import, reset) is always its own step.
+  const hist = useAdminHistory();
 
   const write = (next: StudioStyle) => {
     const clean = cleanStudio(next);
@@ -92,27 +92,10 @@ function Studio({ appRtl }: { appRtl: boolean }) {
       tools.update(card.id, { media: { ...card.media, fx: cleanFx({ ...(card.media.fx ?? {}), studio: clean }) } });
     }
   };
-  const commit = (next: StudioStyle, fresh = false) => {
-    if (!editing) return;
-    const now = nowMs();
-    const push = fresh || now - h.at > HISTORY_GAP_MS || h.past.length === 0;
-    setHist({ scope, past: [...(push ? [...h.past, cloneStudio(editing)] : h.past)].slice(-60), future: [], at: fresh ? 0 : now });
-    write(next);
-  };
-  const change = (patch: Record<string, unknown>) => { if (editing) commit(applyPatch(editing, patch)); };
-  const replace = (s: StudioStyle) => commit(s, true);
-  const undo = () => {
-    const prev = h.past[h.past.length - 1];
-    if (!prev || !editing) return;
-    setHist({ scope, past: h.past.slice(0, -1), future: [...h.future, cloneStudio(editing)], at: 0 });
-    write(prev);
-  };
-  const redo = () => {
-    const nxt = h.future[h.future.length - 1];
-    if (!nxt || !editing) return;
-    setHist({ scope, past: [...h.past, cloneStudio(editing)], future: h.future.slice(0, -1), at: 0 });
-    write(nxt);
-  };
+  const change = (patch: Record<string, unknown>) => { if (editing) write(applyPatch(editing, patch)); };
+  const replace = (s: StudioStyle) => { adminHistory.breakGroup(); write(s); adminHistory.breakGroup(); };
+  const undo = hist.undo;
+  const redo = hist.redo;
 
   const savePreset = (name: string) => {
     if (!editing || !name.trim()) return;
@@ -139,6 +122,11 @@ function Studio({ appRtl }: { appRtl: boolean }) {
 
   const stage = (
     <View testID="studio-stage-box" style={desktop ? ({ position: 'sticky', top: 8 } as object) : ({ paddingBottom: 6 } as object)}>
+      <View className="flex-row items-center mb-2" style={{ gap: 8 }}>
+        <View className="w-2 h-2 rounded-full bg-primary" />
+        <Txt className="text-[13px] font-extrabold flex-1">{t('mx.sx.stage')}</Txt>
+        {shown && shown.force > 0 ? null : <Txt className="text-muted text-[11.5px]">{t('st.tab.main')}</Txt>}
+      </View>
       <StudioStage key={scope} style={shown} effect={effect} rtl={rtl} speed={fx?.speed ?? 1} lowEnd={lowEnd} images={images} height={stageH} accent={accent} />
       <View className="flex-row flex-wrap items-center mt-3" style={{ gap: 14 }}>
         <View className="flex-row items-center" style={{ gap: 8 }}><Toggle testID="st-rtl" label={t('st.rtl')} value={rtl} onValueChange={setRtl} /><Txt className="text-[13px] font-semibold">{t('st.rtl')}</Txt></View>
@@ -150,6 +138,7 @@ function Studio({ appRtl }: { appRtl: boolean }) {
 
   const right = (
     <View className="flex-row items-center" style={{ gap: 8 }}>
+      <HistoryButtons prefix="studio" />
       {dirty ? <Button testID="studio-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={discard} /> : null}
       <Button testID="studio-submit" size="sm" title={t('improve.submit')} disabled={!dirty} onPress={save} />
     </View>
@@ -162,7 +151,7 @@ function Studio({ appRtl }: { appRtl: boolean }) {
       <View className="mb-3" style={{ gap: 6 }}>
         <Txt className="text-[13px] font-semibold text-muted">{t('st.scopeTitle')}</Txt>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
-          <Chips testID="st-scope" value={scope} options={[{ key: GLOBAL, label: t('st.scopeGlobal') }, ...cards.map((c) => ({ key: c.id, label: L(c.title) || c.id }))]} onChange={setScope} />
+          <Chips testID="st-scope" value={scope} options={[{ key: GLOBAL, label: t('st.scopeGlobal') }, ...cards.map((c) => ({ key: c.id, label: `${L(c.title) || c.id}${mediaFx(c.media).studio ? '  ●' : ''}` }))]} onChange={setScope} />
         </ScrollView>
         {cards.length === 0 ? <Txt className="text-muted text-[12px]">{t('st.noCards')}</Txt> : null}
       </View>
@@ -172,16 +161,27 @@ function Studio({ appRtl }: { appRtl: boolean }) {
             Phone: the column itself sticks to the top of the scroll area (opaque, above the controls). */}
         <View testID="studio-stage-col" style={desktop ? { width: 520, maxWidth: '100%', alignSelf: 'stretch' } : ({ width: '100%', position: 'sticky', top: 0, zIndex: 20, backgroundColor: colors.bg } as object)}>{stage}</View>
         <View style={{ flex: desktop ? 1 : undefined, width: desktop ? undefined : '100%', minWidth: 0 }}>
-          <Group title={t('st.deviceTitle')}>
-            <Sw testID="st-instant" label={t('st.instant')} value={global.instantFirst} onChange={(v) => settings.set((old) => ({ ...old, toolCards: patchGlobal(old.toolCards, { instantFirst: v ? undefined : false }) }))} />
-            <Txt className="text-muted text-[12px] -mt-1">{t('st.instantNote')}</Txt>
-            <View className="flex-row items-center flex-wrap" style={{ gap: 8 }}>
-              <Icon name={device.low ? 'speedometer-slow' : 'speedometer'} size={18} tone={device.low ? 'danger' : 'muted'} />
-              <Txt testID="st-device" className="text-[12px] flex-1" style={{ minWidth: 160 }}>{device.low ? t('tc.devLow', { why: device.reason ? t(`tc.why.${device.reason}`) : '' }) : t('tc.devOk')}</Txt>
-              <Button testID="st-reset-detection" size="sm" variant="soft" icon="restore" title={t('tc.resetDetection')} onPress={resetLowEnd} />
-            </View>
-            <Txt testID="st-device-facts" className="text-muted text-[11px]">{factsText}{device.measured !== 'unknown' ? ` · ${t(`tc.measured.${device.measured}`)}` : ''}</Txt>
-          </Group>
+          <View className="bg-surface rounded-2xl border border-line mb-3 overflow-hidden">
+            <Pressable testID="st-device-toggle" accessibilityRole="button" accessibilityState={{ expanded: devOpen }} onPress={() => setDevOpen((v) => !v)} className="flex-row items-center px-3 active:opacity-70" style={{ gap: 10, minHeight: 52 }}>
+              <Icon name={device.low ? 'speedometer-slow' : 'speedometer'} size={20} tone={device.low ? 'danger' : 'muted'} />
+              <View className="flex-1" style={{ minWidth: 0 }}>
+                <Txt className="text-[14px] font-extrabold" numberOfLines={1}>{t('mx.sx.device')}</Txt>
+                <Txt className="text-muted text-[11.5px]" numberOfLines={1}>{`${global.instantFirst ? t('st.instant') : t('mx.sx.deviceHint')} · ${device.low ? t('tc.devLow', { why: device.reason ? t(`tc.why.${device.reason}`) : '' }) : t('tc.devOk')}`}</Txt>
+              </View>
+              <Icon name={devOpen ? 'chevron-up' : 'chevron-down'} size={20} tone="muted" />
+            </Pressable>
+            {devOpen ? (
+              <View className="px-3 pb-3" style={{ gap: 10 }}>
+                <Sw testID="st-instant" label={t('st.instant')} value={global.instantFirst} onChange={(v) => settings.set((old) => ({ ...old, toolCards: patchGlobal(old.toolCards, { instantFirst: v ? undefined : false }) }))} />
+                <Txt className="text-muted text-[12px] -mt-1">{t('st.instantNote')}</Txt>
+                <View className="flex-row items-center flex-wrap" style={{ gap: 8 }}>
+                  <Txt testID="st-device" className="text-[12px] flex-1" style={{ minWidth: 160 }}>{device.low ? t('tc.devLow', { why: device.reason ? t(`tc.why.${device.reason}`) : '' }) : t('tc.devOk')}</Txt>
+                  <Button testID="st-reset-detection" size="sm" variant="soft" icon="restore" title={t('tc.resetDetection')} onPress={resetLowEnd} />
+                </View>
+                <Txt testID="st-device-facts" className="text-muted text-[11px]">{factsText}{device.measured !== 'unknown' ? ` · ${t(`tc.measured.${device.measured}`)}` : ''}</Txt>
+              </View>
+            ) : null}
+          </View>
           {scope !== GLOBAL && editing === null ? (
             <View className="bg-surface rounded-2xl border border-line p-3" style={{ gap: 10 }}>
               <Txt className="text-muted text-[13px]">{t('st.ownNote')}</Txt>
@@ -202,7 +202,7 @@ function Studio({ appRtl }: { appRtl: boolean }) {
                 })}
               </ScrollView>
               <StudioPanel tab={tab} style={editing} effect={effect} onEffect={setEffect} onChange={change} onReplace={replace} accent={accent}
-                history={{ canUndo: h.past.length > 0, canRedo: h.future.length > 0 }} onUndo={undo} onRedo={redo}
+                history={{ canUndo: hist.canUndo, canRedo: hist.canRedo }} onUndo={undo} onRedo={redo}
                 saved={saved} onSave={savePreset} onDeleteSaved={deleteSaved} />
               {scope !== GLOBAL ? <Button testID="st-own-off" size="sm" variant="outline" icon="restore" title={t('st.ownOff')} onPress={() => { if (card) tools.update(card.id, { media: { ...card.media, fx: cleanFx({ ...(card.media.fx ?? {}), studio: undefined }) } }); }} /> : null}
             </>

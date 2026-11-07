@@ -87,7 +87,8 @@
     "check:studio": "node scripts/check-studio-browser.js",
     "check:voice": "sucrase-node scripts/check-voice-mime.ts",
     "check:brand": "sucrase-node scripts/check-brand.ts",
-    "check:dashboard": "sucrase-node scripts/check-dashboard.ts"
+    "check:dashboard": "sucrase-node scripts/check-dashboard.ts",
+    "check:history": "sucrase-node scripts/check-history.ts"
   },
   "private": true,
   "engines": {

@@ -9,6 +9,8 @@ async function login(page) {
   await page.getByTestId('admin-email').fill('admin');
   await page.getByTestId('admin-password').fill('admin');
   await page.getByTestId('admin-signin').click();
+  await page.getByTestId('kpi-pending').waitFor();
+  await page.goto(`${base}/admin/requests`); // the notifications panel lives on the requests page, not the dashboard
   await page.getByTestId('push-enable').waitFor();
 }
 async function client(name, phone) {

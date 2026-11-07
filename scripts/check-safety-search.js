@@ -22,6 +22,8 @@ async function main() {
     const message = { fr: 'Offre spéciale à conserver', ar: 'العرض الحالي مهم', dar: 'حافظ على العرض ديالك' };
     await go('/admin/interface', 'interface-submit');
     assert.equal(await page.getByTestId('exit-message').count(), 0);
+    assert.equal(await page.getByTestId('exit-edit-panel').count(), 0, 'the exit message editor is hidden until clicked');
+    await page.getByTestId('exit-edit-toggle').click();
     for (const locale of ['fr', 'ar', 'dar']) await page.getByTestId(`lt-exitMessage-${locale}`).fill(message[locale]);
     await page.getByTestId('interface-submit').click();
     await page.getByTestId('admin-draft-bar').waitFor({ state: 'hidden' });

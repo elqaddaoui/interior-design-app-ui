@@ -107,6 +107,8 @@ async function run(lang, width) {
 
 
   // 9. NEW: instant-first toggle + device card with the reset button.
+  assert.equal(await page.getByTestId('st-instant').count(), 0, 'the device panel is collapsed until clicked');
+  await page.getByTestId('st-device-toggle').click();
   await page.getByTestId('st-instant').waitFor();
   assert.equal(await page.getByTestId('st-reset-detection').isVisible(), true, 'reset detection button is visible');
   assert((await page.getByTestId('st-device').innerText()).length > 5, 'the device verdict is shown');

@@ -28,7 +28,7 @@ async function run(lang, width) {
   await shot('1-top');
   assert.equal(await page.evaluate(() => document.documentElement.dir || getComputedStyle(document.body).direction), lang === 'fr' ? 'ltr' : 'rtl', `${tag} direction`);
 
-  for (const id of ['kpi-designs', 'kpi-requests', 'kpi-users', 'kpi-pending', 'dash-chart', 'dash-heat', 'dash-insights', 'dash-pipeline', 'dash-top', 'dash-audience', 'dash-recent', 'quick-qApp', 'dash-refresh', 'dash-export'])
+  for (const id of ['kpi-designs', 'kpi-requests', 'kpi-users', 'kpi-pending', 'dash-chart', 'dash-heat', 'dash-insights', 'dash-pipeline', 'dash-top', 'dash-audience', 'dash-recent', 'dash-quick', 'quick-group-handle', 'quick-group-create', 'quick-group-manage', 'quick-requests', 'quick-app', 'dash-refresh', 'dash-export'])
     assert.ok(await page.getByTestId(id).first().count() > 0, `${tag} missing ${id}`);
 
   // No horizontal overflow of the page.
@@ -61,6 +61,32 @@ async function run(lang, width) {
   await page.getByTestId('dash-export').click();
   const f = await dl;
   assert.match(f.suggestedFilename(), /\.csv$/, `${tag} csv name`);
+
+  // The notifications panel moved to /admin/requests; quick actions replace it at the top.
+  assert.equal(await page.getByTestId('push-enable').count(), 0, `${tag} push panel must not be on the dashboard`);
+
+  // Quick-view popups show real records.
+  await page.getByTestId('dash-insights').scrollIntoViewIfNeeded();
+  const insightRow = page.getByTestId('dash-insights').locator('[role=button]').first();
+  if (await insightRow.count()) {
+    await insightRow.click();
+    await page.getByTestId('qv-insight').waitFor({ timeout: 5000 });
+    await shot('5-insight');
+    await page.keyboard.press('Escape');
+    await page.getByTestId('qv-insight').waitFor({ state: 'detached', timeout: 3000 }).catch(async () => { await page.getByTestId('sheet-close').first().click().catch(() => {}); });
+  }
+  const audAll = page.getByTestId('aud-active');
+  if (await audAll.count()) {
+    await audAll.first().scrollIntoViewIfNeeded();
+    await audAll.first().click();
+    await page.getByTestId('qv-clients').waitFor({ timeout: 5000 });
+    await page.locator('[data-testid^="qv-client-"]').first().click();
+    await page.getByTestId('qv-client').waitFor({ timeout: 5000 });
+    await shot('6-client');
+    await page.getByTestId('sheet-back').click();
+    await page.getByTestId('qv-clients').waitFor({ timeout: 3000 });
+    await page.getByTestId('sheet-close').first().click();
+  }
 
   // Refresh keeps the page alive.
   await page.getByTestId('dash-refresh').click();

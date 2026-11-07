@@ -125,7 +125,8 @@ async function main() {
         await visible(page, 'admin-password').fill('admin');
         await visible(page, 'admin-signin').click();
         for (const gone of ['spam', 'returning']) assert.equal(await page.getByTestId(`nav-${gone}`).count(), 0, `${gone} menu entry removed`);
-        await visible(page, 'push-enable').waitFor();
+        await visible(page, 'kpi-pending').waitFor();
+        assert.equal(await page.getByTestId('push-enable').count(), 0, 'notifications panel is no longer on the dashboard');
         await navigateAdmin(page, 'interface');
         await visible(page, 'layout-masonry').click();
         await navigateAdmin(page, 'tools');

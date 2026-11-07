@@ -16,6 +16,8 @@ async function login(page) {
   await page.getByTestId('admin-email').fill('admin');
   await page.getByTestId('admin-password').fill('admin');
   await page.getByTestId('admin-signin').click();
+  await page.getByTestId('kpi-pending').waitFor();
+  await page.goto(`${base}/admin/requests`); // the notifications panel lives on the requests page, not the dashboard
   await page.getByTestId('push-enable').waitFor();
 }
 async function main() {
@@ -61,6 +63,8 @@ async function main() {
   const page = await ios.newPage();
   await page.goto(`${base}/admin`);
   await page.getByTestId('admin-email').fill('admin'); await page.getByTestId('admin-password').fill('admin'); await page.getByTestId('admin-signin').click();
+  await page.getByTestId('kpi-pending').waitFor();
+  await page.goto(`${base}/admin/requests`);
   await page.getByTestId('push-status').waitFor();
   const text = await page.getByTestId('push-status').innerText();
   assert(/accueil/i.test(text), `iOS must explain Add to Home Screen, got: ${text}`);

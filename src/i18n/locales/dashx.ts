@@ -31,6 +31,16 @@ const T: Record<string, Row> = {
   f0: ['lundi', 'الاثنين', 'التنين'], f1: ['mardi', 'الثلاثاء', 'التلات'], f2: ['mercredi', 'الأربعاء', 'الأربع'], f3: ['jeudi', 'الخميس', 'الخميس'], f4: ['vendredi', 'الجمعة', 'الجمعة'], f5: ['samedi', 'السبت', 'السبت'], f6: ['dimanche', 'الأحد', 'الأحد'],
   rank: ['Classement', 'الترتيب', 'الترتيب'], seeAll: ['Tout voir', 'عرض الكل', 'شوف الكل'],
   'shell.search': ['Rechercher…', 'بحث…', 'قلّب…'], 'shell.pending': ['Demandes à traiter', 'طلبات بانتظار المعالجة', 'طلبات خاصها تتعالج'], 'shell.admin': ['Administrateur', 'المسؤول', 'المدير'], 'shell.noPending': ['Aucune demande en attente', 'لا توجد طلبات معلّقة', 'ما كاين حتى طلب معلق'],
+  'qv.client': ['Client', 'العميل', 'الكليان'], 'qv.design': ['Design', 'التصميم', 'التصميم'], 'qv.openPage': ['Ouvrir la page', 'فتح الصفحة', 'حل الصفحة'], 'qv.openFull': ['Ouvrir la fiche complète', 'فتح التفاصيل الكاملة', 'حل التفاصيل كاملة'], 'qv.allClients': ['Tous les clients', 'كل العملاء', 'كاع الكليان'],
+  'qv.count': ['{{count}} client(s)', '{{count}} عميل', '{{count}} كليان'], 'qv.noClients': ['Aucun client dans cette liste', 'لا يوجد عملاء في هذه القائمة', 'ما كاين حتى كليان فهاد اللائحة'], 'qv.noRequests': ['Aucune demande', 'لا توجد طلبات', 'ما كاين حتى طلب'], 'qv.gone': ['Cet élément n’existe plus', 'لم يعد هذا العنصر موجودًا', 'هاد العنصر ما بقاش كاين'],
+  'qv.more': ['+ {{n}} autres : ouvrez la page pour tout voir', '+ {{n}} أخرى: افتح الصفحة لعرض الكل', '+ {{n}} أخرين: حل الصفحة باش تشوف الكل'], 'qv.waiting': ['Attend depuis {{wait}}', 'ينتظر منذ {{wait}}', 'كيتسنا من {{wait}}'], 'qv.creditsAdded': ['+{{n}} crédit(s) ajouté(s)', 'تمت إضافة {{n}} رصيد', 'تزادو {{n}} كريدي'],
+  'qv.designs': ['Designs', 'التصاميم', 'التصاميم'], 'qv.requests': ['Demandes', 'الطلبات', 'الطلبات'], 'qv.lastSeen': ['Dernière activité', 'آخر نشاط', 'آخر نشاط'], 'qv.addCredits': ['Ajouter des crédits', 'إضافة رصيد', 'زيد كريديات'], 'qv.recentRequests': ['Dernières demandes', 'آخر الطلبات', 'آخر الطلبات'],
+  'qv.thisPeriod': ['Cette période', 'هذه الفترة', 'هاد الفترة'], 'qv.prevPeriod': ['Période précédente', 'الفترة السابقة', 'الفترة اللي فاتت'],
+  'qa.sub': ['Ce qui demande votre attention et vos raccourcis de gestion', 'ما يحتاج انتباهك واختصارات الإدارة', 'اللي خاصو انتباهك وطرق مختصرة للتسيير'],
+  'qa.handle': ['À traiter', 'للمعالجة', 'اللي خاصو يتعالج'], 'qa.create': ['Créer', 'إنشاء', 'زيد'], 'qa.manage': ['Gérer l’app', 'إدارة التطبيق', 'سيّر التطبيق'],
+  'qa.requests': ['Demandes', 'الطلبات', 'الطلبات'], 'qa.chats': ['Conversations', 'المحادثات', 'المحادثات'], 'qa.clients': ['Clients', 'العملاء', 'الكليان'], 'qa.noCredits': ['Sans crédits', 'بدون رصيد', 'بلا كريديات'],
+  'qa.addTool': ['Nouvel outil', 'أداة جديدة', 'أداة جديدة'], 'qa.addInspiration': ['Nouvelle inspiration', 'صورة إلهام جديدة', 'إلهام جديد'], 'qa.addStyle': ['Nouveau style', 'أسلوب جديد', 'ستيل جديد'], 'qa.addPalette': ['Nouvelle palette', 'لوحة ألوان جديدة', 'باليت جديدة'],
+  'qa.models': ['Modèles IA', 'نماذج الذكاء الاصطناعي', 'موديلات الذكاء الاصطناعي'], 'qa.credits': ['Crédits', 'الرصيد', 'الكريديات'], 'qa.theme': ['Thème', 'السمة', 'الثيم'], 'qa.app': ['Voir l’app', 'عرض التطبيق', 'شوف التطبيق'],
 };
 const pick = (i: 0 | 1 | 2) => {
   const out: Record<string, any> = {};

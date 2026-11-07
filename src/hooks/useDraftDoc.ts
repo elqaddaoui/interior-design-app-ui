@@ -4,6 +4,7 @@ import { moveSelection, moveTo } from '@/lib/reorder';
 import { sorted, useStore } from '@/store/useStore';
 import type { CollMap, CollName, DocMap, DocName } from '@/data/types';
 import { docBaselines as baselines, collectionBaselines } from '@/store/drafts';
+import { adminHistory, colKey, docKey } from '@/store/adminHistory';
 import { useBackCheckpoint, useLeaveGuard, router } from './useLeaveGuard';
 
 /** Repository data is untouched until Submit. The shared store is the live preview. */
@@ -14,20 +15,21 @@ export function useDraftDoc<K extends DocName>(name: K) {
   const set = (value: DocMap[K] | ((old: DocMap[K]) => DocMap[K])) => {
     const current = useStore.getState().doc[name];
     if (!baselines.has(name)) baselines.set(name, current);
+    adminHistory.record(docKey(name), current);
     useStore.setState((s) => ({ doc: { ...s.doc, [name]: typeof value === 'function' ? (value as (old: DocMap[K]) => DocMap[K])(current) : value } }));
   };
   const patch = (value: Partial<DocMap[K]>) => set((old) => ({ ...old, ...value }));
   const save = async () => {
     try {
       await useStore.getState().patchDoc(name, useStore.getState().doc[name]);
-      baselines.delete(name);
+      baselines.delete(name); adminHistory.forget(docKey(name));
       useStore.setState((s) => ({ doc: { ...s.doc, [name]: { ...s.doc[name] } } }));
       return true;
     } catch { toast(String(i18n.t('improve.saveError'))); return false; }
   };
   const discard = () => {
     const baseline = baselines.get(name);
-    baselines.delete(name);
+    baselines.delete(name); adminHistory.forget(docKey(name));
     if (baseline) useStore.setState((s) => ({ doc: { ...s.doc, [name]: baseline } }));
   };
   useLeaveGuard(dirty, save, discard, { before: saved, after: draft });
@@ -42,6 +44,7 @@ export function useCollectionDraft<K extends CollName>(name: K) {
   const dirty = !!baseline && JSON.stringify(list) !== JSON.stringify(baseline);
   const stage = (next: CollMap[K][]) => {
     if (!collectionBaselines.has(name)) collectionBaselines.set(name, [...useStore.getState()[name]]);
+    adminHistory.record(colKey(name), useStore.getState()[name]);
     useStore.setState({ [name]: next } as any);
   };
   const update = (id: string, patch: Partial<CollMap[K]>) => stage((useStore.getState()[name] as CollMap[K][]).map((row) => row.id === id ? { ...row, ...patch } : row));
@@ -65,7 +68,7 @@ export function useCollectionDraft<K extends CollName>(name: K) {
           saved[index] = row;
         }
       }
-      collectionBaselines.delete(name);
+      collectionBaselines.delete(name); adminHistory.forget(colKey(name));
       useStore.setState({ [name]: [...useStore.getState()[name]] } as any);
       return true;
     } catch { toast(String(i18n.t('improve.saveError'))); return false; }
@@ -73,7 +76,7 @@ export function useCollectionDraft<K extends CollName>(name: K) {
   const discard = () => {
     const saved = collectionBaselines.get(name);
     if (saved) {
-      collectionBaselines.delete(name);
+      collectionBaselines.delete(name); adminHistory.forget(colKey(name));
       useStore.setState({ [name]: saved } as any);
     }
   };
@@ -81,7 +84,7 @@ export function useCollectionDraft<K extends CollName>(name: K) {
   useBackCheckpoint(dirty, () => router.back());
   const forget = (ids: string[]) => {
     const saved = collectionBaselines.get(name);
-    if (saved) collectionBaselines.set(name, saved.filter((row) => !ids.includes(row.id)));
+    if (saved) { collectionBaselines.set(name, saved.filter((row) => !ids.includes(row.id))); adminHistory.forget(colKey(name)); }
   };
   return { update, move, drop, save, discard, dirty, forget };
 }
