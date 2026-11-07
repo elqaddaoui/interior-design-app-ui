@@ -161,7 +161,7 @@ async function main() {
   await fresh.getByTestId('admin-signin').waitFor();
   await fresh.close();
   await go('/', 'brand-mark');
-  assert.match(await page.getByTestId('brand-mark').innerText(), /Dwira/);
+  assert.match(await page.getByTestId('brand-mark').evaluate((el) => el.textContent || el.querySelector('[aria-label]')?.getAttribute('aria-label') || ''), /Dwira/);
   // Check actual muted looping playback on the reported Home staging card.
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -171,14 +171,19 @@ async function main() {
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await go('/admin/branding', 'brand-save');
-  await page.getByTestId('chip-image').click();
+  await page.getByTestId('type-image').click();
   const chooser = page.waitForEvent('filechooser');
-  await page.getByText('Importer une image', { exact: true }).click();
+  await page.getByTestId('img-upload-light').click();
   await (await chooser).setFiles('assets/favicon.png');
-  await page.waitForFunction(() => Array.from(document.querySelectorAll('input')).some((el) => el.value === '(uploaded image)'));
+  await page.getByTestId('img-preview-light').waitFor({ timeout: 20000 });
   await page.getByTestId('brand-save').click();
+  await page.getByTestId('publish-confirm').click();
+  await page.getByTestId('publish-confirm').waitFor({ state: 'hidden', timeout: 20000 });
   await page.waitForTimeout(300);
-  assert.match((await saved('doc:branding')).logoUri, /^data:image\/png;base64,/);
+  const brandingDoc = await saved('doc:branding');
+  assert.match(brandingDoc.logoUri, /^data:image\/(png|webp);base64,/);
+  assert.equal(brandingDoc.logo.type, 'image');
+  assert.equal(brandingDoc.versions.length >= 1, true);
   await go('/', 'brand-mark');
   await page.waitForFunction(() => { const img = document.querySelector('[data-testid="brand-mark"] img'); return img && img.complete && img.naturalWidth > 0; });
   // Check image mode and physical placement on desktop and phones.
@@ -202,7 +207,7 @@ async function main() {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await seed('doc:branding', { appName: 'Dwira', logoMode: 'text', logoUri: png, logoPosition: 'left', logoFont: 'Lora', logoColor: '#2563EB' });
   await go('/', 'brand-mark');
-  assert.match(await page.getByTestId('brand-mark').innerText(), /Dwira/);
+  assert.match(await page.getByTestId('brand-mark').evaluate((el) => el.textContent || el.querySelector('[aria-label]')?.getAttribute('aria-label') || ''), /Dwira/);
   await go('/admin/interface', 'bulk-enable-tabs');
   await page.getByTestId('font-dropdown-fr').click();
   await page.getByTestId('chip-Inter').click();

@@ -1,157 +1,220 @@
-import React, { useState } from 'react';
+ 
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Icon } from '@/components/ui/Icon';
-import { Input } from '@/components/ui/Field';
-import { Sheet } from '@/components/ui/Sheet';
-import { Toggle } from '@/components/ui/Toggle';
-import { Txt, ARABIC_FONTS, FRENCH_FONTS } from '@/components/ui/Txt';
+import { ConfirmSheet } from '@/components/ui/Sheet';
+import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
+import { Controls } from '@/components/brand/Controls';
+import { PreviewPanel } from '@/components/brand/PreviewPanel';
+import { ExportSheet, HistorySheet, PublishSheet } from '@/components/brand/Sheets';
 import { useStore } from '@/store/useStore';
-import { ImageField } from '@/components/admin/ImageField';
-import { ColorPicker } from '@/components/admin/ColorPicker';
-import { FieldLabel, OptionTile, Section, Stepper } from '@/components/admin/branding/parts';
-import { BrandHeader } from '@/components/BrandHeader';
-import { ensureFont, useFontFamily } from '@/lib/fonts';
 import { useT } from '@/i18n';
-import { useDraftDoc } from '@/hooks/useDraftDoc';
+import { useBp } from '@/hooks/useBp';
+import { useBackCheckpoint, useLeaveGuard, router } from '@/hooks/useLeaveGuard';
+import { useTheme } from '@/theme/ThemeProvider';
 import { toast } from '@/store/useToast';
+import { storage } from '@/data/mock/storage';
+import type { BrandVersion } from '@/data/types';
+import { applyFavicon, faviconDataUrl } from '@/lib/brand/export';
+import * as H from '@/lib/brand/history';
+import { changedGroups, cleanSpec, hasErrors, legacyFields, sameSpec, specFromBranding, surprise, validateSpec, type LogoSpec } from '@/lib/brand/spec';
+import type { Locks } from '@/components/brand/Controls';
 
-const FONTS = [...new Set(['system', 'Lora', 'NotoNaskhArabic', ...FRENCH_FONTS, ...ARABIC_FONTS])];
-const POSITIONS = [['left', 'format-align-left'], ['center', 'format-align-center'], ['right', 'format-align-right']] as const;
-const STYLES = ['minimal', 'signature', 'badge'] as const;
+const DRAFT_KEY = 'branding-draft';
+const MAX_VERSIONS = 20;
+const PREVIEW_DELAY = 120;
+const AUTOSAVE_DELAY = 800;
 
-/** One font row; the specimen uses the brand name so the admin sees the real result. */
-function FontRow({ font, name, selected, onSelect }: { font: string; name: string; selected: boolean; onSelect: () => void }) {
-  const family = useFontFamily(font === 'system' ? undefined : font);
-  return (
-    <Pressable testID={`chip-${font}`} accessibilityRole="radio" accessibilityState={{ selected }} onPress={onSelect}
-      className={`flex-row items-center gap-3 rounded-xl border px-3 py-2 mb-1.5 ${selected ? 'border-primary bg-soft' : 'border-line bg-surface'}`}>
-      <View className="flex-1" style={{ minWidth: 0 }}>
-        <Txt className="text-muted text-[11px] font-semibold" numberOfLines={1}>{font}</Txt>
-        <Txt style={{ fontFamily: family, fontSize: 22, lineHeight: 32, fontWeight: '800' }} numberOfLines={1}>{name || 'Dwira'}</Txt>
+/** Value that follows `value` after `ms` of calm: typing and slider drags never re-render the heavy preview on every tick. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => { const id = setTimeout(() => setV(value), ms); return () => clearTimeout(id); }, [value, ms]);
+  return v;
+}
+
+const Tool = ({ icon, label, onPress, disabled, testID, on }: { icon: string; label: string; onPress: () => void; disabled?: boolean; testID: string; on?: boolean }) => (
+  <Pressable testID={testID} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={4}
+    className={`w-10 h-10 rounded-full items-center justify-center active:opacity-70 ${on ? 'bg-ink' : 'bg-surface2'} ${disabled ? 'opacity-40' : ''}`}>
+    <Icon name={icon} size={19} tone={on ? 'onink' : 'fg'} />
+  </Pressable>
+);
+
+function Studio() {
+  const { t } = useT();
+  const { desktop } = useBp();
+  const { colors } = useTheme();
+  const branding = useStore((s) => s.doc.branding);
+  const published = useMemo(() => specFromBranding(branding), [branding]);
+  const versions = useMemo<BrandVersion[]>(() => branding.versions ?? [], [branding.versions]);
+  const accent = colors.primary;
+
+  /* one draft state: every control edits it through `up`; undo / redo / reset all work on it */
+  const [hist, setHist] = useState(() => H.init(published));
+  const spec = hist.present;
+  const up = useCallback((fn: (s: LogoSpec) => LogoSpec, key?: string) => setHist((h) => H.commit(h, cleanSpec(fn(h.present)), key ?? '', Date.now(), sameSpec)), []);
+  const dirty = !sameSpec(spec, published);
+  const issues = useMemo(() => validateSpec(spec), [spec]);
+  const shown = useDebounced(spec, PREVIEW_DELAY);
+
+  const [locks, setLocks] = useState<Locks>({ font: false, color: false, layout: false });
+  const [collapsed, setCollapsed] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sheet, setSheet] = useState<'' | 'history' | 'export'>('');
+  const [resetting, setResetting] = useState(false);
+
+  /* autosave of the draft on this device + restore offer */
+  const [found, setFound] = useState<{ spec: LogoSpec; at: number } | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [savedAt, setSavedAt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    storage.read<{ spec: unknown; at: number }>(DRAFT_KEY).then((d) => {
+      if (!live) return;
+      if (d && d.spec) { const s = cleanSpec(d.spec); if (!sameSpec(s, published)) setFound({ spec: s, at: d.at }); }
+      setChecked(true);
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!checked || found) return;
+    const id = setTimeout(() => {
+      if (dirty) { const at = Date.now(); storage.write(DRAFT_KEY, { spec, at }); setSavedAt(at); }
+      else { storage.write(DRAFT_KEY, null); setSavedAt(0); }
+    }, AUTOSAVE_DELAY);
+    return () => clearTimeout(id);
+  }, [spec, dirty, checked, found]);
+
+  /* actions */
+  const undo = () => setHist(H.undo);
+  const redo = () => setHist(H.redo);
+  const doSurprise = () => up((s) => surprise(s, Date.now(), locks));
+  const discard = useCallback(() => { storage.write(DRAFT_KEY, null); setHist(H.init(published)); setSavedAt(0); }, [published]);
+
+  const publish = useCallback(async (): Promise<boolean> => {
+    if (hasErrors(validateSpec(spec))) { toast(t('br.publishBlocked')); return false; }
+    setBusy(true);
+    try {
+      const at = Date.now();
+      const favicon = await faviconDataUrl(spec, accent);
+      const entry: BrandVersion = { id: `v${at}`, at, note: '', groups: changedGroups(published, spec), logo: spec };
+      const old = versions.length ? versions : [{ id: `v${at - 1}`, at: at - 1, note: '', groups: [], logo: published }];
+      await useStore.getState().patchDoc('branding', { ...legacyFields(spec), logo: spec, favicon, versions: [entry, ...old].slice(0, MAX_VERSIONS) } as any);
+      const stored = specFromBranding(useStore.getState().doc.branding);
+      setHist((h) => (sameSpec(h.present, stored) ? h : { ...h, present: stored }));
+      storage.write(DRAFT_KEY, null);
+      setSavedAt(0);
+      applyFavicon(useStore.getState().doc.branding.favicon ?? favicon);
+      toast(t('br.publishedOk'));
+      return true;
+    } catch { toast(t('br.publishFailed')); return false; }
+    finally { setBusy(false); }
+  }, [spec, accent, published, versions, t]);
+
+  const askPublish = () => {
+    if (!dirty) { toast(t('br.nothingChanged')); return; }
+    if (hasErrors(issues)) { toast(t('br.publishBlocked')); return; }
+    setPublishing(true);
+  };
+  const restore = (v: BrandVersion) => { up(() => v.logo); setSheet(''); toast(t('br.rolledBack')); };
+
+  useLeaveGuard(dirty, publish, discard, { before: published, after: spec });
+  useBackCheckpoint(dirty, () => router.back());
+
+  /* keyboard: Ctrl/Cmd+Z, Shift+Z, Y (not while a text field has the focus: it keeps its own native undo) */
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z') { e.preventDefault(); setHist(e.shiftKey ? H.redo : H.undo); }
+      else if (k === 'y') { e.preventDefault(); setHist(H.redo); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  /* the favicon of the tab follows the published logo */
+  useEffect(() => { if (branding.favicon) applyFavicon(branding.favicon); }, [branding.favicon]);
+
+  const preview = <PreviewPanel spec={shown} before={published} dirty={dirty} desktop={desktop} collapsed={collapsed} onCollapse={setCollapsed} />;
+  const tools = (
+    <View testID="brand-tools" className="flex-row items-center gap-1.5">
+      <Tool testID="undo" icon="undo" label={t('br.undo')} onPress={undo} disabled={!H.canUndo(hist)} />
+      <Tool testID="redo" icon="redo" label={t('br.redo')} onPress={redo} disabled={!H.canRedo(hist)} />
+      <Tool testID="reset" icon="restart" label={t('br.reset')} onPress={() => setResetting(true)} disabled={!dirty} />
+      <Tool testID="history" icon="history" label={t('br.history')} onPress={() => setSheet('history')} />
+      <Tool testID="export" icon="download" label={t('br.export')} onPress={() => setSheet('export')} />
+    </View>
+  );
+  const status = dirty ? (savedAt ? t('br.autosaved') : t('br.unsavedDraft')) : t('br.allPublished');
+  const bar = (
+    <Card className="p-2.5 rounded-2xl flex-row items-center gap-2" style={{ boxShadow: '0 6px 28px rgba(0,0,0,0.18)' } as any}>
+      <View className="flex-1 flex-row items-center gap-1.5" style={{ minWidth: 0 }} accessibilityLiveRegion="polite">
+        <Icon name={dirty ? 'circle-edit-outline' : 'check-circle-outline'} size={18} tone={dirty ? 'primary' : 'muted'} />
+        <View className="flex-1" style={{ minWidth: 0 }}>
+          <Txt testID="brand-status" className={`text-[12px] font-bold ${dirty ? '' : 'text-muted'}`} numberOfLines={1}>{dirty ? t('br.unsavedDraft') : t('br.allPublished')}</Txt>
+          {dirty && savedAt ? <Txt className="text-[10px] text-muted" numberOfLines={1}>{status}</Txt> : null}
+        </View>
       </View>
-      <Icon name={selected ? 'check-circle' : 'radiobox-blank'} size={20} tone={selected ? 'primary' : 'muted'} />
-    </Pressable>
+      {dirty ? <Button testID="brand-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={() => setResetting(true)} disabled={busy} /> : null}
+      <Button testID="brand-save" size="sm" icon="rocket-launch-outline" title={t('br.publish')} onPress={askPublish} loading={busy} disabled={!dirty && !busy} />
+    </Card>
+  );
+
+  const draftBanner = found ? (
+    <Card testID="draft-found" className="p-3 mb-3 flex-row flex-wrap items-center gap-2">
+      <Icon name="backup-restore" size={18} tone="primary" />
+      <Txt className="flex-1 text-[13px] font-bold" style={{ minWidth: 160 }}>{t('br.draftFound')}</Txt>
+      <Button testID="draft-restore" size="sm" title={t('br.draftRestore')} onPress={() => { up(() => found.spec); setFound(null); }} />
+      <Button testID="draft-drop" size="sm" variant="soft" title={t('br.draftDrop')} onPress={() => { storage.write(DRAFT_KEY, null); setFound(null); }} />
+    </Card>
+  ) : null;
+
+  const controls = (
+    <View style={{ flex: 1, minWidth: 0 }}>
+      {draftBanner}
+      <Controls spec={spec} up={up} issues={issues} locks={locks} setLocks={setLocks} onSurprise={doSurprise} accent={accent} />
+      {Platform.OS === 'web' && desktop ? <Txt className="text-[11px] text-muted text-center mt-2">{t('br.shortcuts')}</Txt> : null}
+    </View>
+  );
+
+  return (
+    <AdminPage title={t('admin.nav.branding')} max={1180} right={tools} floating={bar}>
+      {desktop ? (
+        <View className="flex-row gap-4 items-start">
+          {controls}
+          {/* the column stretches over the whole row so the sticky box has room to travel while the controls scroll */}
+          <View testID="brand-preview-col" style={{ width: 460, maxWidth: '45%', alignSelf: 'stretch' }}>
+            <View style={{ position: 'sticky', top: 8 } as any}>{preview}</View>
+          </View>
+        </View>
+      ) : (
+        <View>
+          <View testID="brand-preview-col" style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: colors.bg, paddingBottom: 8 } as any}>{preview}</View>
+          {controls}
+        </View>
+      )}
+      <PublishSheet visible={publishing} onClose={() => setPublishing(false)} before={published} after={spec} groups={changedGroups(published, spec)} issues={issues} busy={busy}
+        onConfirm={async () => { if (await publish()) setPublishing(false); }} />
+      <HistorySheet visible={sheet === 'history'} onClose={() => setSheet('')} versions={versions} published={published} onRestore={restore} />
+      <ExportSheet visible={sheet === 'export'} onClose={() => setSheet('')} spec={spec} />
+      <ConfirmSheet visible={resetting} onClose={() => setResetting(false)} message={t('br.resetTitle')} confirmLabel={t('br.resetConfirm')} cancelLabel={t('br.cancel')}
+        onConfirm={() => { up(() => published); }} />
+    </AdminPage>
   );
 }
 
 export default function Branding() {
   const contentReady = useStore((s) => s.contentReady);
   const { t } = useT();
-  const { draft, set: setDraft, save: submitDraft, discard, dirty } = useDraftDoc('branding');
-  const [busy, setBusy] = useState(false);
-  const [fonts, setFonts] = useState(false);
-  const [width, setWidth] = useState(0);
-  const wide = width >= 760;
-  const set = (key: string, value: any) => setDraft((b) => ({ ...b, [key]: value }));
-  const mode = (draft.logoMode ?? (draft.logoUri ? 'image' : 'text')) as 'text' | 'image';
-  const font = draft.logoFont ?? 'Lora';
-  const size = Math.min(40, Math.max(18, draft.logoSize ?? 28));
-  const spacing = Math.min(6, Math.max(-2, draft.logoSpacing ?? -0.5));
-  const position = draft.logoPosition ?? 'left';
-  const style = draft.logoStyle ?? 'signature';
-  const save = async () => {
-    setBusy(true);
-    try { setDraft({ ...draft, appName: draft.appName.trim() || 'Dwira', logoSize: size, logoSpacing: spacing }); if (await submitDraft()) toast(t('admin.crud.saved')); }
-    catch { toast(t('improve.saveError')); } finally { setBusy(false); }
-  };
-
-  const preview = (
-    <Card testID="brand-preview" className="p-3 mb-3" style={Platform.OS === 'web' && wide ? ({ position: 'sticky', top: 8 } as any) : undefined}>
-      <View className="flex-row items-center gap-2 mb-2">
-        <Icon name="eye-outline" size={16} tone="muted" />
-        <Txt className="flex-1 text-[12px] font-bold text-muted">{t('admin.theme.preview')}</Txt>
-        {dirty ? <View className="bg-soft rounded-full px-2.5 py-0.5"><Txt className="text-[11px] font-bold">{t('improve.unsavedTitle')}</Txt></View> : null}
-      </View>
-      <View className="bg-bg rounded-xl border border-line px-3" style={{ minHeight: 72, justifyContent: 'center' }}>
-        <BrandHeader branding={draft} actions={<View className="w-8 h-8 rounded-full bg-surface2 items-center justify-center"><Icon name="menu" size={16} /></View>} />
-      </View>
-      <Txt className="text-muted text-[11px] mt-2">{t('improve.brandPreviewHint')}</Txt>
-    </Card>
-  );
-
-  const identity = (
-    <Section icon="card-text-outline" title={t('improve.brandIdentity')} testID="brand-identity">
-      <Input testID="brand-name" label={t('admin.brand.appName')} value={draft.appName} maxLength={40} onChangeText={(v) => set('appName', v)} />
-      <FieldLabel>{t('improve.logoMode')}</FieldLabel>
-      <View className="flex-row gap-2 mb-3">
-        <OptionTile testID="chip-text" selected={mode === 'text'} label={t('improve.text')} visual={<Txt className="text-[20px] font-extrabold" style={{ lineHeight: 26 }}>Aa</Txt>} onPress={() => set('logoMode', 'text')} />
-        <OptionTile testID="chip-image" selected={mode === 'image'} label={t('improve.image')} icon="image-outline" onPress={() => set('logoMode', 'image')} />
-      </View>
-      {mode === 'image' ? <ImageField label={t('admin.brand.logo')} value={draft.logoUri} onChange={(v) => set('logoUri', v)} /> : null}
-    </Section>
-  );
-
-  const typography = mode === 'text' ? (
-    <Section icon="format-font" title={t('improve.brandTypography')} testID="brand-typography">
-      <FieldLabel>{t('improve.logoFont')}</FieldLabel>
-      <Pressable testID="brand-font" accessibilityRole="button" onPress={() => setFonts(true)} className="flex-row items-center gap-2 rounded-xl border border-line bg-surface2 px-3 h-11 mb-3">
-        <Txt className="flex-1 font-semibold" numberOfLines={1}>{font === 'system' ? t('improve.system') : font}</Txt>
-        <Icon name="chevron-down" size={18} />
-      </Pressable>
-      <View className="flex-row gap-4 mb-3">
-        <Stepper testID="brand-size" label={t('improve.logoSizeShort')} value={size} min={18} max={40} step={1} format={(v) => `${v}px`} onChange={(v) => set('logoSize', v)} />
-        <Stepper testID="brand-spacing" label={t('improve.logoSpacingShort')} value={spacing} min={-2} max={6} step={0.5} onChange={(v) => set('logoSpacing', v)} />
-      </View>
-      <View className="flex-row items-center justify-between bg-surface2 rounded-xl px-3 h-11">
-        <Txt className="font-semibold text-[14px] flex-1">{t('improve.logoItalic')}</Txt>
-        <Toggle testID="sw-logoItalic" label={t('improve.logoItalic')} value={!!draft.logoItalic} onValueChange={(v) => set('logoItalic', v)} />
-      </View>
-    </Section>
-  ) : null;
-
-  const color = mode === 'text' ? (
-    <Section icon="palette-outline" title={t('improve.logoColor')} testID="brand-color"
-      right={draft.logoColor ? <Pressable testID="brand-color-reset" accessibilityRole="button" onPress={() => set('logoColor', '')} className="flex-row items-center gap-1 h-8 px-2.5 rounded-full bg-surface2"><Icon name="restore" size={14} /><Txt className="text-[12px] font-bold">{t('improve.themeColor')}</Txt></Pressable> : <View className="bg-soft rounded-full px-2.5 py-1"><Txt className="text-[11px] font-bold">{t('improve.usingTheme')}</Txt></View>}>
-      <ColorPicker value={draft.logoColor || ''} onChange={(v) => set('logoColor', v)} compact />
-    </Section>
-  ) : null;
-
-  const layout = (
-    <Section icon="view-dashboard-outline" title={t('improve.brandLayout')} testID="brand-layout">
-      <FieldLabel>{t('improve.logoPosition')}</FieldLabel>
-      <View className="flex-row gap-2 mb-3" style={{ direction: 'ltr' } as any}>
-        {POSITIONS.map(([key, icon]) => <OptionTile key={key} testID={`chip-${key}`} selected={position === key} icon={icon} label={t(`improve.${key}`)} onPress={() => set('logoPosition', key)} />)}
-      </View>
-      <FieldLabel>{t('improve.logoStyle')}</FieldLabel>
-      <View className="flex-row gap-2">
-        {STYLES.map((key) => <OptionTile key={key} testID={`chip-${key}`} selected={style === key} label={t(`improve.${key}`)}
-          visual={<View style={{ alignItems: 'center', height: 30, justifyContent: 'center' }}>
-            <View className={key === 'badge' ? 'bg-bg rounded-xl px-2.5' : ''}><Txt className="text-[16px] font-extrabold" style={{ lineHeight: 22 }}>Aa</Txt></View>
-            {key === 'signature' ? <View className="bg-primary rounded-full" style={{ height: 3, width: 20, marginTop: -1 }} /> : null}
-          </View>} onPress={() => set('logoStyle', key)} />)}
-      </View>
-    </Section>
-  );
-
-  const bar = (
-    <Card className="p-2.5 rounded-2xl flex-row items-center gap-2" style={{ boxShadow: '0 6px 28px rgba(0,0,0,0.18)' } as any}>
-      <View className="flex-1 flex-row items-center gap-1.5" style={{ minWidth: 0 }}>
-        <Icon name={dirty ? 'circle-edit-outline' : 'check-circle-outline'} size={18} tone={dirty ? 'primary' : 'muted'} />
-        <Txt className={`text-[12px] font-bold flex-1 ${dirty ? '' : 'text-muted'}`} numberOfLines={2}>{dirty ? t('improve.unsavedTitle') : t('improve.allSaved')}</Txt>
-      </View>
-      {dirty ? <Button testID="brand-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={discard} disabled={busy} /> : null}
-      <Button testID="brand-save" size="sm" title={t('improve.submit')} onPress={save} loading={busy} disabled={!dirty && !busy} />
-    </Card>
-  );
-
   if (!contentReady) return <AdminPage title={t('admin.nav.branding')}><AdminLoading /></AdminPage>;
-  return (
-    <AdminPage title={t('admin.nav.branding')} max={1000} floating={bar}>
-      <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-        {wide ? (
-          <View className="flex-row gap-4 items-start">
-            <View style={{ flex: 1.15, minWidth: 0 }}>{identity}{typography}</View>
-            <View style={{ flex: 1, minWidth: 0 }}>{preview}{layout}{color}</View>
-          </View>
-        ) : <>{preview}{identity}{typography}{color}{layout}</>}
-      </View>
-      <Sheet visible={fonts} onClose={() => setFonts(false)} title={t('improve.logoFont')}>
-        {fonts ? FONTS.map((f) => <FontRow key={f} font={f} name={draft.appName} selected={f === font} onSelect={() => { ensureFont(f).catch(() => {}); set('logoFont', f); setFonts(false); }} />) : null}
-      </Sheet>
-    </AdminPage>
-  );
+  return <Studio />;
 }

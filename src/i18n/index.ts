@@ -15,6 +15,7 @@ import { studioTexts } from './locales/studio';
 import { mediaTexts } from './locales/media';
 import { promptCardTexts } from './locales/promptcards';
 import { assistantAdminTexts } from './locales/assistantadmin';
+import { brandTexts } from './locales/brand';
 import fr from './locales/fr';
 import ar from './locales/ar';
 import dar from './locales/dar';
@@ -23,7 +24,7 @@ export const LANGS: Lang[] = ['dar', 'ar', 'fr'];
 export const isRtl = (l: Lang) => l === 'dar' || l === 'ar';
 
 i18n.use(initReactI18next).init({
-  resources: { fr: { translation: { ...fr, admin: fr.admin, improve: improvements.fr, push: pushTexts.fr, inbox: inboxTexts.fr, camp: campaignTexts.fr, tc: toolCardTexts.fr, ax: adminxTexts.fr, st: studioTexts.fr, md: mediaTexts.fr, pc: promptCardTexts.fr, asx: assistantAdminTexts.fr } }, ar: { translation: { ...ar, admin: ar.admin, improve: improvements.ar, push: pushTexts.ar, inbox: inboxTexts.ar, camp: campaignTexts.ar, tc: toolCardTexts.ar, ax: adminxTexts.ar, st: studioTexts.ar, md: mediaTexts.ar, pc: promptCardTexts.ar, asx: assistantAdminTexts.ar } }, dar: { translation: { ...dar, admin: dar.admin, improve: improvements.dar, push: pushTexts.dar, inbox: inboxTexts.dar, camp: campaignTexts.dar, tc: toolCardTexts.dar, ax: adminxTexts.dar, st: studioTexts.dar, md: mediaTexts.dar, pc: promptCardTexts.dar, asx: assistantAdminTexts.dar } } },
+  resources: { fr: { translation: { ...fr, admin: fr.admin, improve: improvements.fr, push: pushTexts.fr, inbox: inboxTexts.fr, camp: campaignTexts.fr, tc: toolCardTexts.fr, ax: adminxTexts.fr, st: studioTexts.fr, md: mediaTexts.fr, pc: promptCardTexts.fr, asx: assistantAdminTexts.fr, br: brandTexts.fr } }, ar: { translation: { ...ar, admin: ar.admin, improve: improvements.ar, push: pushTexts.ar, inbox: inboxTexts.ar, camp: campaignTexts.ar, tc: toolCardTexts.ar, ax: adminxTexts.ar, st: studioTexts.ar, md: mediaTexts.ar, pc: promptCardTexts.ar, asx: assistantAdminTexts.ar, br: brandTexts.ar } }, dar: { translation: { ...dar, admin: dar.admin, improve: improvements.dar, push: pushTexts.dar, inbox: inboxTexts.dar, camp: campaignTexts.dar, tc: toolCardTexts.dar, ax: adminxTexts.dar, st: studioTexts.dar, md: mediaTexts.dar, pc: promptCardTexts.dar, asx: assistantAdminTexts.dar, br: brandTexts.dar } } },
   lng: 'dar',
   fallbackLng: 'fr',
   interpolation: { escapeValue: false },
