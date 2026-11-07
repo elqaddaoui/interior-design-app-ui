@@ -31,11 +31,11 @@ const BLOCKS = {
   intent: { variants: { default: '' } },
   style: { variants: { default: 'STYLE: {styleNotes}.' } },
   reference: { variants: { default: 'The {nth} image is a STYLE REFERENCE ONLY: borrow its materials, colour mood, textures and decor language. Do not copy its room, layout or architecture.' } },
-  styleImage: { variants: {
+  styleImage: { off: true, variants: {
     image: 'The {nth} image shows the STYLE the client chose: borrow its materials, colour mood, textures and decor language. Do not copy its room, layout or architecture; the first image remains the room to redesign.',
     both: 'The {nth} image shows the "{style}" style the client chose: borrow its materials, colour mood, textures and decor language. Do not copy its room, layout or architecture; the first image remains the room to redesign.',
   } },
-  roomImage: { variants: {
+  roomImage: { off: true, variants: {
     image: 'The {nth} image shows the TYPE OF ROOM the client chose: use it only as a hint of the room\'s function and typical furniture. Do not copy its layout or architecture; the first image remains the room to redesign.',
     both: 'The {nth} image shows an example of the chosen room type ("{room}"): use it only as a hint of the room\'s function and typical furniture. Do not copy its layout or architecture; the first image remains the room to redesign.',
   } },
@@ -54,4 +54,19 @@ const PLACEHOLDERS = ['room', 'group', 'style', 'styleNotes', 'mode', 'tool', 'b
 
 const IMAGE_ROLES = ['inspiration', 'style', 'room'];
 
-module.exports = { DEFAULT_ORDER, BLOCKS, PLACEHOLDERS, IMAGE_ROLES };
+/**
+ * Blocks with `off: true` are AUTOMATIC: they are OFF by default and follow the picture setting (Prompt cards > Images sent to the AI):
+ * `styleImage` is on only when the style is sent as Image / Both, `roomImage` only when the room type is. They have nothing to say
+ * otherwise. The admin can still force one on or off (the switch is then stored as an explicit true / false).
+ * PICTURE_BLOCKS follow the global settings: a tool's own blocks never override them.
+ */
+const DEFAULT_OFF = Object.keys(BLOCKS).filter(id => BLOCKS[id].off);
+const PICTURE_BLOCKS = ['reference', 'styleImage', 'roomImage'];
+const AUTO_ROLE = { styleImage: 'style', roomImage: 'room' };
+/** Is this block on, given the admin's item for it and the picture settings (`images` = { room, style }). */
+const blockOn = (id, item, images) => {
+  if (typeof item?.on === 'boolean') return item.on;
+  return AUTO_ROLE[id] ? (images?.[AUTO_ROLE[id]] || 'text') !== 'text' : true;
+};
+
+module.exports = { DEFAULT_ORDER, BLOCKS, PLACEHOLDERS, IMAGE_ROLES, DEFAULT_OFF, PICTURE_BLOCKS, AUTO_ROLE, blockOn };

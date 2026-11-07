@@ -11,13 +11,15 @@ export function StepMode({ mode, paletteId, onMode, onPalette }: { mode?: Render
   const { t } = useT();
   const L = useL();
   const palettes = sorted(useStore((s) => s.palettes)).filter((p) => p.visible);
+  // Admin > Interface: the Relooking / Renovation choice can be hidden (every generation is then a Relooking).
+  const choice = useStore((s) => s.doc.settings.modeChoice) !== false;
   const cards: { k: RenderMode; title: string; desc: string; icon: string }[] = [
     { k: 'restyle', title: t('wizard.modeRestyle'), desc: t('wizard.modeRestyleDesc'), icon: 'palette-swatch-outline' },
     { k: 'renovation', title: t('wizard.modeRenovation'), desc: t('wizard.modeRenovationDesc'), icon: 'hammer-wrench' },
   ];
   return (
     <View>
-      <Txt className="text-[16px] font-bold mb-3">{t('wizard.modeTitle')}</Txt>
+      {choice ? <><Txt className="text-[16px] font-bold mb-3">{t('wizard.modeTitle')}</Txt>
       <View className="flex-row gap-3 mb-6">
         {cards.map((c) => {
           const on = (mode ?? 'restyle') === c.k;
@@ -29,7 +31,7 @@ export function StepMode({ mode, paletteId, onMode, onPalette }: { mode?: Render
             </Pressable>
           );
         })}
-      </View>
+      </View></> : null}
       <Txt className="text-[16px] font-bold mb-3">{t('wizard.palette')}</Txt>
       <GridSelector items={palettes} cols={{ m: 2, t: 3, d: 4 }} gap={10} renderItem={(p) => {
         const on = paletteId === p.id;

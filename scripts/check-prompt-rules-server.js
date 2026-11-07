@@ -59,13 +59,13 @@ test('defaults: with no rules the prompt and the record are exactly what the app
   assert.equal(same.prompt, fixtures.photo_restyle_colors_brief.prompt);
 });
 
-test('rules: sanitising, tool overrides, withGlobal, explore-only text', () => {
+test('rules: sanitising, a tool overrides blocks only, explore-only text', () => {
   const dirty = cleanRules({ appliesTo: 'nope', global: { rules: { text: '  keep\u0000 walls \r\n\r\n\r\n\r\n no clutter ', exploreText: 'x'.repeat(5000) }, images: { room: 'weird', style: 'image', inspiration: 'off' }, blocks: { order: ['quality', 'bogus', 'quality'], items: { quality: { on: false }, task: { texts: { photo: 'Redo {room}.', nope: 'x' } }, structure: { texts: { default: 'STRUCTURE (never change): keep exactly the same camera position, angle, lens, framing and perspective, the same layout and architecture - wall positions, ceiling height, floor area, windows, doors, openings, stairs, beams and built-in fixtures - and the same proportions. Do not add, remove, move or resize any structural element or window. Keep the direction and brightness of the natural light.' } } } }, output: { brief: 'english', maxSide: 999 } },
-    tools: { tool_paint: { rules: { text: 'only walls', withGlobal: false } }, 'bad id!': { rules: {} } }, vocab: { styles: { st_modern: '  sleek  ', 'bad id': 'x' }, rooms: {} } });
+    tools: { tool_paint: { rules: { text: 'only walls' }, images: { style: 'image' }, blocks: { items: { quality: { on: false } } } }, 'bad id!': { blocks: {} } }, vocab: { styles: { st_modern: '  sleek  ', 'bad id': 'x' }, rooms: {} } });
   assert.equal(dirty.appliesTo, 'all');
   assert.equal(dirty.global.rules.text, 'keep walls\n\nno clutter');
   assert.equal(dirty.global.rules.exploreText.length, 2000);
-  assert.deepEqual(dirty.global.images, { room: 'text', style: 'image', inspiration: 'off' });
+  assert.deepEqual(dirty.global.images, { room: 'text', style: 'image' }, 'the Explorer picture is not a setting any more');
   assert.equal(dirty.global.blocks.order[0], 'quality');
   assert.equal(dirty.global.blocks.order.length, new Set(dirty.global.blocks.order).size);
   assert(dirty.global.blocks.order.includes('finalCheck'), 'every block is always present in the order');
@@ -74,11 +74,16 @@ test('rules: sanitising, tool overrides, withGlobal, explore-only text', () => {
   assert.equal(dirty.global.blocks.items.structure, undefined, 'default wording is never stored as a customisation');
   assert.equal(dirty.global.output.maxSide, 0);
   assert.deepEqual(Object.keys(dirty.tools), ['tool_paint']);
+  assert.deepEqual(Object.keys(dirty.tools.tool_paint), ['blocks'], 'a tool can only override the prompt blocks (rules / pictures / output stay global)');
   assert.deepEqual(dirty.vocab.styles, { st_modern: 'sleek' });
-  const r = resolveRules(cleanRules({ global: { rules: { text: 'A', exploreText: 'E' } }, tools: { t1: { rules: { text: 'B', exploreText: 'F' } }, t2: { rules: { text: 'C', withGlobal: false } } } }), 't1', true);
-  assert.equal(r.rulesText, 'A\nB\nE\nF');
-  assert.equal(resolveRules(cleanRules({ global: { rules: { text: 'A', exploreText: 'E' } }, tools: { t2: { rules: { text: 'C', withGlobal: false } } } }), 't2', true).rulesText, 'C');
-  assert.equal(resolveRules(cleanRules({ global: { rules: { text: 'A', exploreText: 'E' } } }), 'zzz', false).rulesText, 'A');
+  const base = { global: { rules: { text: 'A', exploreText: 'E' } } };
+  assert.equal(resolveRules(cleanRules({ ...base, tools: { t1: { blocks: { items: { quality: { on: false } } } } } }), 't1', true).rulesText, 'A\nE');
+  assert.equal(resolveRules(cleanRules(base), 'zzz', false).rulesText, 'A');
+  // a tool's own blocks never override the picture blocks: they follow the global picture settings
+  const own = cleanRules({ global: { images: { style: 'image' }, blocks: { items: { reference: { texts: { default: 'GLOBAL REF {nth}' } } } } }, tools: { t1: { blocks: { items: { reference: { texts: { default: 'TOOL REF' } }, styleImage: { on: false }, quality: { on: false } } } } } });
+  const res = resolveRules(own, 't1');
+  assert.equal(res.blocks.items.reference.texts.default, 'GLOBAL REF {nth}'); assert.equal(res.blocks.items.styleImage, undefined); assert.deepEqual(res.blocks.items.quality, { on: false });
+  assert.equal(res.images.style, 'image', 'pictures are global');
 });
 
 test('blocks: switch off, reorder, own wording with placeholders, rules block, brief language', () => {
@@ -86,7 +91,7 @@ test('blocks: switch off, reorder, own wording with placeholders, rules block, b
   const rules = (g, extra = {}) => resolveRules(cleanRules({ global: g, ...extra }), 'tool_interior');
   const off = buildBrief({ ...input, rules: rules({ blocks: { items: { quality: { on: false }, structure: { on: false } } } }) });
   assert.doesNotMatch(off.prompt, /QUALITY:/); assert.doesNotMatch(off.prompt, /STRUCTURE \(never change\)/);
-  assert.deepEqual(off.applied.blocksOff.sort(), ['quality', 'structure']);
+  assert.deepEqual(off.applied.blocksOff.sort(), ['quality', 'roomImage', 'structure', 'styleImage'], 'the style / room picture blocks are off by default');
   const moved = buildBrief({ ...input, rules: rules({ blocks: { order: ['quality'] } }) });
   assert.match(moved.prompt, /^QUALITY:/);
   assert.equal(moved.blocks[0].id, 'quality');
@@ -102,6 +107,26 @@ test('blocks: switch off, reorder, own wording with placeholders, rules block, b
   assert.match(buildBrief({ ...input, rules: rules({ output: { brief: 'original' } }) }).prompt, /"زيد نبتة كبيرة"/);
   const vocab = buildBrief({ ...input, rules: resolveRules(cleanRules({ vocab: { styles: { st_scandi: 'pale ash wood, white linen' } } }), 'tool_interior') });
   assert.match(vocab.prompt, /STYLE: pale ash wood, white linen\./);
+});
+
+test('blocks: the picture blocks are off by default and follow the picture setting; an explicit switch wins', () => {
+  const { blockOn, DEFAULT_OFF } = require('../server/imagegen/blocks');
+  assert.deepEqual([...DEFAULT_OFF].sort(), ['roomImage', 'styleImage']);
+  const R = (images, items) => resolveRules(cleanRules({ global: { images, blocks: { items } } }), 'tool_interior');
+  const input = { ...fixtures.photo_restyle_colors_brief.input, roomTypeId: 'rt_living', imageRoles: ['style', 'room'] };
+  assert.equal(R({}, {}).blocks.items.styleImage, undefined, 'nothing stored by default');
+  assert.equal(blockOn('styleImage', undefined, { style: 'text', room: 'text' }), false); assert.equal(blockOn('styleImage', undefined, { style: 'both', room: 'text' }), true);
+  assert.equal(blockOn('roomImage', undefined, { style: 'image', room: 'text' }), false); assert.equal(blockOn('quality', undefined, {}), true);
+  // words only: no picture block even if a picture would travel
+  assert.doesNotMatch(buildBrief({ ...input, rules: R({}, {}) }).prompt, /image shows/);
+  // Image / Both switch the matching block on by themselves
+  const both = buildBrief({ ...input, rules: R({ style: 'both', room: 'image' }, {}) });
+  assert.match(both.prompt, /second image shows the "Scandinave" style/); assert.match(both.prompt, /third image shows the TYPE OF ROOM/);
+  assert.deepEqual(both.applied.blocksOff, []);
+  // an explicit OFF removes the sentence although the picture is still sent
+  const forced = buildBrief({ ...input, rules: R({ style: 'image' }, { styleImage: { on: false } }) });
+  assert.doesNotMatch(forced.prompt, /shows the STYLE/); assert.deepEqual(forced.applied.blocksOff, ['styleImage', 'roomImage']);
+  assert.deepEqual(cleanRules({ global: { blocks: { items: { styleImage: { on: true }, quality: { on: true } } } } }).global.blocks.items, { styleImage: { on: true } }, 'only a real difference from the default is stored');
 });
 
 test('images: style / room pictures replace or join the words; missing picture or text-only keeps the words', () => {
@@ -174,12 +199,12 @@ test('render: saved rules reach the image model (global, per-tool, explore-only)
   const { backend, admin, auth, put } = await setup({ POLLINATIONS_API_KEY: 'sk_test_key_123456' }, api);
   const create = async (id, d, extra = {}) => { const c = await call(backend, '/api/requests', { method: 'POST', headers: auth, body: { id, photoUri, draft: d, ...extra } }); assert.equal(c.status, 201, JSON.stringify(c.body)); const o = await call(backend, '/api/ai/render', { method: 'POST', headers: auth, body: { id } }); assert.equal(o.status, 200, JSON.stringify(o.body)); return api.calls[api.calls.length - 1].body; };
   try {
-    assert.equal((await put({ global: { rules: { text: 'Keep the TV wall' }, images: { style: 'image', room: 'text', inspiration: 'image' } }, tools: { tool_paint: { rules: { text: 'Walls only', withGlobal: false }, images: { style: 'text', room: 'text', inspiration: 'off' } } } })).status, 200);
+    assert.equal((await put({ global: { rules: { text: 'Keep the TV wall' }, images: { style: 'image', room: 'text' } }, tools: { tool_paint: { blocks: { items: { quality: { on: false } } } } } })).status, 200);
     const a = await create('rule-claim-00001', draft());
     assert.match(a.prompt, /Keep the TV wall/); assert.match(a.prompt, /second image shows the STYLE/); assert.equal(a.image.length, 2, 'photo + the style picture');
     assert.doesNotMatch(a.prompt, /STYLE: Moroccan/);
     const paint = await create('rule-claim-00002', draft({ toolId: 'tool_paint', colors: ['#2E7D32'] }));
-    assert.match(paint.prompt, /Walls only/); assert.doesNotMatch(paint.prompt, /Keep the TV wall/); assert.equal(paint.image.length, 1);
+    assert.match(paint.prompt, /Keep the TV wall/, 'rules are global'); assert.doesNotMatch(paint.prompt, /QUALITY:/, 'the tool switched its quality block off'); assert.match(a.prompt, /QUALITY:/); assert.equal(paint.image.length, 2, 'pictures are global');
     const withIns = await create('rule-claim-00003', draft({ inspirationId: 'ins_cat_living_1' }));
     assert.equal(withIns.image.length, 3, 'photo + inspiration + style'); assert.match(withIns.prompt, /second image is a STYLE REFERENCE ONLY/); assert.match(withIns.prompt, /third image shows the STYLE/);
     const listed = await call(backend, '/api/requests', { headers: admin });
@@ -196,7 +221,7 @@ test('render: saved rules reach the image model (global, per-tool, explore-only)
     const fail = fakeApi({ 'black-forest-labs/flux.2-klein-4b': 429 });
     const b = await setup({ POLLINATIONS_API_KEY: 'sk_test_key_123456' }, fail);
     try {
-      await b.put({ global: { images: { style: 'image', inspiration: 'image' } } });
+      await b.put({ global: { images: { style: 'image' } } });
       const c = await call(b.backend, '/api/requests', { method: 'POST', headers: b.auth, body: { id: 'rule-claim-00006', photoUri, draft: draft({ inspirationId: 'ins_cat_living_1' }) } });
       assert.equal(c.status, 201);
       const o = await call(b.backend, '/api/ai/render', { method: 'POST', headers: b.auth, body: { id: 'rule-claim-00006' } });
@@ -205,6 +230,22 @@ test('render: saved rules reach the image model (global, per-tool, explore-only)
       assert.equal(first.body.image.length, 3); assert.equal(second.body.image.length, 1);
       assert.doesNotMatch(second.body.prompt, /image shows|STYLE REFERENCE/); assert.match(second.body.prompt, /STYLE: Moroccan/);
     } finally { b.backend.server.emit('close'); }
+  } finally { backend.server.emit('close'); }
+});
+
+test('settings.modeChoice off: every generation is a Relooking, in the preview and in the real render', async () => {
+  const api = fakeApi();
+  const { backend, admin, auth, preview } = await setup({ POLLINATIONS_API_KEY: 'sk_test_key_123456' }, api);
+  try {
+    const reno = { toolId: 'tool_interior', roomTypeId: 'rt_living', styleId: 'st_moroccan', mode: 'renovation' };
+    assert.match((await preview(reno)).body.prompt, /MODE renovation/, 'choice on (default): the client\'s mode is used');
+    assert.equal((await call(backend, '/api/admin/doc/settings', { method: 'PATCH', headers: admin, body: { modeChoice: false } })).status, 200);
+    const off = await preview(reno);
+    assert.match(off.body.prompt, /MODE restyle/); assert.doesNotMatch(off.body.prompt, /MODE renovation/);
+    const c = await call(backend, '/api/requests', { method: 'POST', headers: auth, body: { id: 'mode-claim-00001', photoUri, draft: draft({ mode: 'renovation' }) } });
+    assert.equal(c.status, 201);
+    const o = await call(backend, '/api/ai/render', { method: 'POST', headers: auth, body: { id: 'mode-claim-00001' } });
+    assert.equal(o.status, 200); assert.match(api.calls[0].body.prompt, /MODE restyle/); assert.doesNotMatch(api.calls[0].body.prompt, /MODE renovation/);
   } finally { backend.server.emit('close'); }
 });
 

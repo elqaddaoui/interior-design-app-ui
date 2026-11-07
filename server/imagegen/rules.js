@@ -4,14 +4,17 @@
  *   { v: 1, appliesTo: 'all' | 'explore', global: PromptSet, tools: { [toolId]: Partial<PromptSet> }, vocab: { styles: {id: text}, rooms: {id: text} } }
  *   PromptSet = { rules, images, blocks, output }
  *
- * `global` applies to every tool card. A tool entry holds only the sections that tool overrides (a missing section = "same as all
- * tools"). Everything is stored server-side (settings.prompt_rules), never in the public content, and always passes through
+ * `global` applies to every tool card. A tool entry can only override `blocks` (the wording / order / switches of the prompt blocks;
+ * a missing section = "same as all tools"). The Explorer settings (`appliesTo`, `rules.exploreText`, the `reference` block) are
+ * global. The Explorer picture itself is not a setting: it is always sent when the client generates from Explore.
+ * Everything is stored server-side (settings.prompt_rules), never in the public content, and always passes through
  * `cleanRules`, so nothing reaches the prompt builder unvalidated.
  */
-const { DEFAULT_ORDER, BLOCKS } = require('./blocks');
+const { DEFAULT_ORDER, BLOCKS, PICTURE_BLOCKS } = require('./blocks');
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const SECTIONS = ['rules', 'images', 'blocks', 'output'];
+const TOOL_SECTIONS = ['blocks'];
 const SRC = ['text', 'image', 'both'];
 const BRIEF = ['both', 'english', 'original'];
 const MAX_SIDES = [0, 768, 1024, 1280, 1536];
@@ -26,20 +29,18 @@ const isObject = value => !!value && typeof value === 'object' && !Array.isArray
 
 const defaultSet = () => ({
   rules: { text: '', exploreText: '' },
-  images: { room: 'text', style: 'text', inspiration: 'image' },
+  images: { room: 'text', style: 'text' },
   blocks: { order: [...DEFAULT_ORDER], items: {} },
   output: { brief: 'both', maxSide: 0 },
 });
 
-function cleanRulesSection(input, isTool) {
+function cleanRulesSection(input) {
   const section = isObject(input) ? input : {};
-  const out = { text: text(section.text, LIMITS.rules), exploreText: text(section.exploreText, LIMITS.rules) };
-  if (isTool) out.withGlobal = section.withGlobal !== false;
-  return out;
+  return { text: text(section.text, LIMITS.rules), exploreText: text(section.exploreText, LIMITS.rules) };
 }
 function cleanImages(input) {
   const section = isObject(input) ? input : {};
-  return { room: oneOf(section.room, SRC, 'text'), style: oneOf(section.style, SRC, 'text'), inspiration: oneOf(section.inspiration, ['image', 'off'], 'image') };
+  return { room: oneOf(section.room, SRC, 'text'), style: oneOf(section.style, SRC, 'text') };
 }
 function cleanBlocks(input) {
   const section = isObject(input) ? input : {};
@@ -51,7 +52,8 @@ function cleanBlocks(input) {
     const raw = isObject(section.items) && isObject(section.items[id]) ? section.items[id] : null;
     if (!raw) continue;
     const item = {};
-    if (raw.on === false) item.on = false;
+    // Most blocks are on by default, so only `false` is stored. An automatic block (follows the picture setting) keeps an explicit true / false.
+    if (raw.on === false || (raw.on === true && BLOCKS[id].off)) item.on = raw.on;
     const texts = {};
     for (const key of Object.keys(BLOCKS[id].variants)) {
       const value = isObject(raw.texts) ? text(raw.texts[key], LIMITS.block) : '';
@@ -88,13 +90,13 @@ function cleanVocab(input) {
 function cleanRules(input) {
   const source = isObject(input) ? input : {};
   const global = {};
-  for (const name of SECTIONS) global[name] = CLEANERS[name](isObject(source.global) ? source.global[name] : undefined, false);
+  for (const name of SECTIONS) global[name] = CLEANERS[name](isObject(source.global) ? source.global[name] : undefined);
   const tools = {};
   let count = 0;
   for (const [id, entry] of Object.entries(isObject(source.tools) ? source.tools : {})) {
     if (!ID.test(id) || !isObject(entry) || count >= LIMITS.tools) continue;
     const set = {};
-    for (const name of SECTIONS) if (isObject(entry[name])) set[name] = CLEANERS[name](entry[name], true);
+    for (const name of TOOL_SECTIONS) if (isObject(entry[name])) set[name] = CLEANERS[name](entry[name]);
     if (Object.keys(set).length) { tools[id] = set; count++; }
   }
   return { v: 1, appliesTo: oneOf(source.appliesTo, ['all', 'explore'], 'all'), global, tools, vocab: cleanVocab(source.vocab) };
@@ -108,15 +110,14 @@ function resolveRules(rules, toolId, explore = false) {
   const scope = {};
   for (const name of SECTIONS) scope[name] = own[name] ? 'tool' : 'global';
   const join = (...parts) => parts.filter(Boolean).join('\n');
-  let ruleText = g.rules.text, exploreText = g.rules.exploreText;
-  if (own.rules) {
-    ruleText = own.rules.withGlobal === false ? own.rules.text : join(g.rules.text, own.rules.text);
-    exploreText = own.rules.withGlobal === false ? own.rules.exploreText : join(g.rules.exploreText, own.rules.exploreText);
+  // A tool's own blocks never override the picture blocks (Explorer, style image, room image): they follow the global picture settings.
+  let blocks = g.blocks;
+  if (own.blocks) {
+    const items = { ...own.blocks.items };
+    for (const id of PICTURE_BLOCKS) { delete items[id]; if (g.blocks.items[id]) items[id] = g.blocks.items[id]; }
+    blocks = { order: own.blocks.order, items };
   }
-  return {
-    images: own.images || g.images, blocks: own.blocks || g.blocks, output: own.output || g.output,
-    rulesText: join(ruleText, explore ? exploreText : ''), scope, vocab: stored.vocab,
-  };
+  return { images: g.images, blocks, output: g.output, rulesText: join(g.rules.text, explore ? g.rules.exploreText : ''), scope, vocab: stored.vocab };
 }
 
 module.exports = { cleanRules, resolveRules, defaultSet, defaultRules: () => cleanRules({}), SECTIONS, LIMITS };
