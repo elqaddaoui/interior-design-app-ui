@@ -12,6 +12,8 @@ const { translate } = require('./translate');
 const { createNotifier, validateSubscription, trim, phone } = require('./notifications');
 const { createCampaigns, cleanCampaign } = require('./campaigns');
 const { createChat } = require('./chat');
+const { createAssistant } = require('./assistant');
+const knowledge = require('./assistant/knowledge');
 const { createImageGen } = require('./imagegen');
 const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
@@ -62,6 +64,19 @@ function validateDemand(value) {
   if (draft.source === 'text' && value.photoUri) throw fail(400, 'Invalid photo');
   return { name, whatsapp, draft, photoUri: value.photoUri, userId: trim(value.userId || 'client', 100), status: 'pending', createdAt: Date.now() };
 }
+const META_STATUS = ['automation', 'active', 'fallback', 'paid', 'local'];
+const short = (v, n = 60) => (typeof v === 'string' ? v.slice(0, n) : '');
+/** The part of a reply's `meta` we keep: status, who answered, and the providers tried before. Null when it is not a usable object. */
+function cleanMeta(meta) {
+  if (!meta || typeof meta !== 'object' || !META_STATUS.includes(meta.status)) return null;
+  const out = { status: meta.status, provider: short(meta.provider, 40), label: short(meta.label), model: short(meta.model, 80) };
+  if (meta.paid === true) out.paid = true;
+  if (typeof meta.language === 'string') out.language = short(meta.language, 12);
+  if (typeof meta.automationId === 'string') out.automationId = short(meta.automationId, 40);
+  if (typeof meta.automationName === 'string') out.automationName = short(meta.automationName, 80);
+  if (Array.isArray(meta.tried)) out.tried = meta.tried.slice(0, 12).filter(x => x && typeof x === 'object').map(x => ({ provider: short(x.provider, 40), label: short(x.label), model: short(x.model, 80), ...(x.paid === true ? { paid: true } : {}), reason: short(x.reason, 20) }));
+  return out;
+}
 /**
  * Validates a conversation write (shared by signed-in clients and visitors): shape, size, and who may write which role.
  * Admin answers belong to the server: a client can neither forge nor erase them (and a stale copy never drops a new reply).
@@ -78,6 +93,12 @@ function mergeConversation(value, existing) {
     const ok = m.audio && typeof m.audio.uri === 'string' && m.audio.uri.length <= 300 && /^(?:\/api\/media\/|https?:\/\/)/.test(m.audio.uri);
     if (ok) m.audio = { uri: m.audio.uri, ...(Number.isFinite(m.audio.durationMs) ? { durationMs: Math.max(0, Math.min(600000, Math.round(m.audio.durationMs))) } : {}) };
     else delete m.audio;
+  }
+  // `meta` says who answered (admin-only badge). Only known short fields survive: a client cannot store anything else there.
+  for (const m of sent) {
+    if (m.meta === undefined) continue;
+    const meta = m.role === 'assistant' ? cleanMeta(m.meta) : null;
+    if (meta) m.meta = meta; else delete m.meta;
   }
   value.messages = [...sent, ...kept].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   return sent.filter(m => m.role === 'user' && !known.has(m.id));
@@ -102,6 +123,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   const campaigns = createCampaigns(db, notifier, { sync, settings: () => content.getDoc('settings') });
   const imagegen = createImageGen(db, { env, media, content, sync, ...(imageFetch ? { fetch: imageFetch } : {}) });
   const chat = createChat(db, { env, ...(chatFetch ? { fetch: chatFetch } : {}) });
+  const assistant = createAssistant(db, { chat, content });
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
   // Managed hosts (Hostinger) put a reverse proxy on the same machine in front of the app: every request then comes from a
   // loopback address. TRUST_PROXY=true (set automatically by server/start.js on Hostinger) reads the client address the proxy
@@ -470,7 +492,14 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const body = await readBody(req);
           const config = await content.getDoc('assistant');
           if (config.type === 'whatsapp') throw fail(409, 'ASSISTANT_DISABLED');
-          return json(200, await chat.reply(body.messages, config));
+          // Automations first (the owner's rules), then the AI grounded on the app knowledge, free providers then paid ones with automatic fallback.
+          try { return json(200, await assistant.answer(body, { config, client })); }
+          catch (error) { if (error.message === 'NO_PROVIDER') return json(503, { error: 'NO_PROVIDER', tried: error.tried || [] }); throw error; }
+        }
+        // Quick-reply buttons of the chat (labels only).
+        if (url.pathname === '/api/chat/buttons' && req.method === 'GET') {
+          if (!client && !clientHash) throw fail(400, 'Client token required');
+          return json(200, { buttons: await assistant.buttons() }, { 'Cache-Control': 'private, max-age=30' });
         }
         // ---- AI image generation: the request (photo or text, style, palette, colours, prompt) was stored by POST /api/requests, which also spent the credit. ----
         if (url.pathname === '/api/ai/status' && req.method === 'GET') return json(200, await imagegen.publicStatus(), { 'Cache-Control': 'private, max-age=30' });
@@ -492,6 +521,20 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (url.pathname === '/api/admin/prompt-rules/preview' && req.method === 'POST') { admin(); return json(200, await imagegen.previewPrompt(await readBody(req))); }
         if (url.pathname === '/api/admin/chat/status' && req.method === 'GET') { admin(); return json(200, await chat.status()); }
         if (url.pathname === '/api/admin/chat/keys' && req.method === 'PATCH') { admin(); return json(200, await chat.setKeys(await readBody(req))); }
+        // Providers: free switches, the paid zone (position, providers, write-only keys).
+        if (url.pathname === '/api/admin/chat/config' && req.method === 'PUT') { admin(); return json(200, await chat.setConfig(await readBody(req))); }
+        // Automations: the whole ordered list (order = priority) with usage counters; saved as a whole.
+        if (url.pathname === '/api/admin/assistant/automations' && req.method === 'GET') { admin(); return json(200, await assistant.overview()); }
+        if (url.pathname === '/api/admin/assistant/automations' && req.method === 'PUT') { admin(); return json(200, await assistant.saveList(await readBody(req))); }
+        // Preview: what a visitor (or a draft automation) would get. Nothing is counted. Costs one AI call at most.
+        if (url.pathname === '/api/admin/assistant/test' && req.method === 'POST') {
+          admin();
+          const body = await readBody(req);
+          const config = await content.getDoc('assistant');
+          return json(200, await assistant.test(body, { config }));
+        }
+        // What the assistant knows (sections built from the docs and the app data) for the Knowledge tab.
+        if (url.pathname === '/api/admin/assistant/knowledge' && req.method === 'GET') { admin(); return json(200, knowledge.overview()); }
         if (url.pathname === '/api/admin/clients/bulk' && req.method === 'POST') {
           admin();
           const body = await readBody(req), result = await clients.bulk(body);
@@ -720,7 +763,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   }, Math.min(activeEvery, 15000));
   timer.unref();
   server.on('close', () => { closed = true; clearInterval(timer); void db.close(); });
-  return { server, handle, pump, db, clients, notifier, campaigns, chat, staticFiles };
+  return { server, handle, pump, db, clients, notifier, campaigns, chat, assistant, staticFiles };
 }
 module.exports = { createBackend, passwordMatches };
 // `node server/index.js` keeps working (README, browser checks): same startup as server/start.js.

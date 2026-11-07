@@ -1,6 +1,7 @@
 import { useAppFont, Txt } from '@/components/ui/Txt';
+import { QuickReplies } from '@/components/chat/QuickReplies';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
@@ -78,11 +79,16 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
     if ('uri' in r) setImage(r.uri); else if (r.error === 'permission') toast(t('wizard.permission')); else if (r.error === 'failed') toast(t('wizard.photoFailed'));
   };
 
-  const send = async () => {
-    const msg = text.trim();
+  const [buttons, setButtons] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => { let on = true; services.chat.buttons().then((list) => { if (on) setButtons(list); }); return () => { on = false; }; }, []);
+
+  const send = async (button?: { id: string; label: string }) => {
+    const msg = button ? button.label : text.trim();
+    const buttonId = button?.id;
     if ((!msg && !image) || busy) return;
-    const um: ChatMessage = { id: uid('m'), role: 'user', text: msg, image: image || undefined, createdAt: Date.now() };
-    setText(''); setImage(''); setBusy(true);
+    const um: ChatMessage = { id: uid('m'), role: 'user', text: msg, image: button ? undefined : image || undefined, createdAt: Date.now() };
+    if (!button) setText('');
+    setImage(''); setBusy(true);
     const st = useStore.getState();
     let c: Conversation | undefined = conv;
     const base = c?.messages ?? [];
@@ -96,10 +102,11 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
     // long enough to feel written by a person, counting the time the request itself took.
     const started = Date.now();
     let answer = '';
-    try { answer = await services.chat.reply({ messages: next, config }); } catch { answer = t('assistant.error'); }
+    let meta: ChatMessage['meta'];
+    try { const out = await services.chat.reply({ messages: next, config, ...(buttonId ? { buttonId } : {}) }); answer = out.text; meta = out.meta; } catch { answer = t('assistant.error'); }
     const wait = replyDelayMs(config, answer) - (Date.now() - started);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    const am: ChatMessage = { id: uid('m'), role: 'assistant', text: answer, createdAt: Date.now() };
+    const am: ChatMessage = { id: uid('m'), role: 'assistant', text: answer, createdAt: Date.now(), ...(meta ? { meta } : {}) };
     const animate = config.typewriter !== false && config.replyDelayMode !== 'off' && alive.current && answer.length > 0;
     if (animate) setTyping({ id: am.id, shown: 0 });
     await useStore.getState().update('conversations', c.id, { messages: [...next, am], updatedAt: Date.now() });
@@ -146,16 +153,17 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
         )}
         ListFooterComponent={busy ? <View testID="chat-typing" accessibilityLabel={t('assistant.typing')} className="self-start bg-surface2 rounded-2xl px-4 py-3.5 flex-row gap-1.5 items-center"><Dot d={0} /><Dot d={150} /><Dot d={300} /></View> : null}
       />
+      {buttons.length && !image && !text.trim() ? <QuickReplies items={buttons} busy={busy} onPick={send} /> : null}
       {image ? (
         <View className="px-4 pb-2 flex-row"><View><Image source={{ uri: image }} style={{ width: 64, height: 64, borderRadius: 12 }} /><Pressable onPress={() => setImage('')} className="absolute -top-2 -end-2 w-6 h-6 rounded-full bg-danger items-center justify-center"><Icon name="close" size={14} color="#fff" /></Pressable></View></View>
       ) : null}
       <View className="flex-row items-end gap-2 px-3 py-2.5">
         <View className="flex-1 flex-row items-end bg-surface2 rounded-3xl px-3 min-h-[48px]">
           <Pressable testID="chat-attach" onPress={() => setAttach(true)} className="h-12 w-9 items-center justify-center"><Icon name="image-plus" size={22} tone="muted" /></Pressable>
-          <TextInput testID="chat-input" value={text} onChangeText={setText} placeholder={t('assistant.placeholder')} placeholderTextColor={colors.muted} multiline onSubmitEditing={send}
+          <TextInput testID="chat-input" value={text} onChangeText={setText} placeholder={t('assistant.placeholder')} placeholderTextColor={colors.muted} multiline onSubmitEditing={() => send()}
             style={{ fontFamily, flex: 1, color: colors.fg, fontSize: 16, maxHeight: 110, paddingVertical: 13, outlineStyle: 'none' } as any} />
         </View>
-        <Pressable testID="chat-send" onPress={send} className={`w-12 h-12 rounded-full items-center justify-center ${text.trim() || image ? 'bg-primary' : 'bg-surface2'}`}>
+        <Pressable testID="chat-send" onPress={() => send()} className={`w-12 h-12 rounded-full items-center justify-center ${text.trim() || image ? 'bg-primary' : 'bg-surface2'}`}>
           <Icon name="arrow-up" size={22} tone={text.trim() || image ? 'onprimary' : 'muted'} />
         </Pressable>
       </View>

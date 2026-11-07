@@ -1,4 +1,4 @@
-import type { CollMap, DocMap, Draft, RequestStatus, ChatMessage, AssistantConfig, AppUser } from '../types';
+import type { CollMap, DocMap, Draft, RequestStatus, ChatMessage, AssistantConfig, AppUser, ReplyMeta } from '../types';
 
 /** Generic typed repository. A real backend only has to implement these interfaces. */
 export interface CollectionRepo<T extends { id: string }> {
@@ -27,8 +27,12 @@ export interface RenderService {
   render(input: RenderInput, onProgress?: (p: RenderProgress) => void, signal?: { cancelled: boolean }): Promise<{ imageUri: string }>;
 }
 
+export interface ChatReply { text: string; meta: ReplyMeta }
 export interface ChatService {
-  reply(args: { messages: ChatMessage[]; config: AssistantConfig }): Promise<string>;
+  /** `used`: ids of the automations already answered in this chat (once-per-chat rules). `buttonId`: a quick-reply button was pressed. */
+  reply(args: { messages: ChatMessage[]; config: AssistantConfig; used?: string[]; buttonId?: string }): Promise<ChatReply>;
+  /** Quick-reply buttons configured by the owner (labels only). */
+  buttons(): Promise<{ id: string; label: string }[]>;
 }
 
 export interface AuthService {
