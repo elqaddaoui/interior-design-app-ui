@@ -157,6 +157,7 @@ test('preview: a fake generation shows the final prompt, the pictures and warnin
     const info = await call(backend, '/api/admin/prompt-rules', { headers: admin });
     assert.equal(info.status, 200);
     assert.equal(info.body.rules.v, 1); assert(info.body.catalog.blocks.structure.default); assert(info.body.catalog.placeholders.includes('room'));
+    assert(info.body.catalog.vocab.styles.st_moroccan.includes('zellige') && info.body.catalog.vocab.rooms.rt_living === 'living room');
     const plain = await preview({ toolId: 'tool_interior', roomTypeId: 'rt_living', styleId: 'st_moroccan', colors: ['#112233'], prompt: 'warm light' });
     assert.equal(plain.status, 200, JSON.stringify(plain.body));
     assert.match(plain.body.prompt, /Moroccan/); assert.match(plain.body.prompt, /#112233/); assert.match(plain.body.prompt, /warm light/);

@@ -1,23 +1,33 @@
 /**
  * AI assistant replies (Moroccan Darija in Arabic or Latin script, Modern Standard Arabic, French).
  *
- * A chain of FREE providers is tried in order; the first usable answer wins, so one provider hitting its free quota never
- * breaks the chat. Keys are optional and never leave the server: they come from the environment (GEMINI_API_KEY, GROQ_API_KEY,
- * OPENROUTER_API_KEY) or from the admin panel (stored in the private `settings` table, write-only, never returned).
+ * Two zones, one fallback chain:
+ *   FREE  (default, ranked): the first usable answer wins, so one provider hitting its free quota never breaks the chat.
+ *     1. Google Gemini  best Arabic / Darija quality               (free key: aistudio.google.com)
+ *     2. Mistral        very good French and Arabic                (free "Experiment" key: console.mistral.ai)
+ *     3. Groq           very fast open models                      (free key: console.groq.com)
+ *     4. OpenRouter     free models (Gemma 4, ...)                 (free key: openrouter.ai)
+ *     5. Pollinations   no key at all, best effort                 (always available as the last resort)
+ *   PAID  (optional, owner's own accounts): any OpenAI-compatible API with its own key and model. A paid provider is OFF
+ *     until a key is added and switched on; the owner decides whether the paid zone runs before or after the free one.
  *
- *   1. Google Gemini  free tier, best Arabic / Darija quality     (needs a free key from aistudio.google.com)
- *   2. Groq           free tier, very fast open models            (needs a free key from console.groq.com)
- *   3. OpenRouter     free models (Gemma 4, ...)                  (needs a free key from openrouter.ai)
- *   4. Pollinations   no key at all, best effort                  (always available as the last resort)
- *
+ * Any error, rate limit (429), bad key, empty answer or timeout moves on to the next provider. Every answer carries the
+ * trace: which provider/model answered, its status (active | fallback | paid) and which ones failed first and why.
+ * Keys are write-only: they come from the environment or from the admin panel (private `settings` table), never returned.
  * Model names change often: each provider has a list, a model the provider no longer serves is skipped, and the list can be
- * overridden with GEMINI_MODEL / GROQ_MODEL / OPENROUTER_MODEL (comma separated). `fetch` is injectable for tests.
+ * overridden with GEMINI_MODEL / MISTRAL_MODEL / GROQ_MODEL / OPENROUTER_MODEL (comma separated). `fetch` is injectable for tests.
  */
+const crypto = require('node:crypto');
+
 const KEY_RE = /^[A-Za-z0-9_.\-]{16,300}$/;
 const PROVIDERS = {
   gemini: {
     label: 'Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', env: 'GEMINI_API_KEY', modelEnv: 'GEMINI_MODEL',
     models: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'], extra: () => ({}),
+  },
+  mistral: {
+    label: 'Mistral', url: 'https://api.mistral.ai/v1/chat/completions', env: 'MISTRAL_API_KEY', modelEnv: 'MISTRAL_MODEL',
+    models: ['mistral-small-latest', 'open-mistral-nemo'], extra: () => ({}),
   },
   groq: {
     label: 'Groq', url: 'https://api.groq.com/openai/v1/chat/completions', env: 'GROQ_API_KEY', modelEnv: 'GROQ_MODEL',
@@ -32,7 +42,18 @@ const PROVIDERS = {
     models: ['openai-fast'], extra: () => ({}),
   },
 };
-const DEFAULT_ORDER = ['gemini', 'groq', 'openrouter', 'pollinations'];
+const DEFAULT_ORDER = ['gemini', 'mistral', 'groq', 'openrouter', 'pollinations'];
+const KEYED = DEFAULT_ORDER.filter(id => PROVIDERS[id].env);
+/** Paid zone presets (all speak the OpenAI chat format). `custom` takes any https base URL. The model is always the owner's choice. */
+const PAID_PRESETS = {
+  openai: { label: 'OpenAI', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+  anthropic: { label: 'Claude (Anthropic)', url: 'https://api.anthropic.com/v1/chat/completions', model: 'claude-haiku-4-5' },
+  deepseek: { label: 'DeepSeek', url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat' },
+  mistral: { label: 'Mistral (paid)', url: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-medium-latest' },
+  openrouter: { label: 'OpenRouter (paid)', url: 'https://openrouter.ai/api/v1/chat/completions', model: 'openai/gpt-4o-mini' },
+  custom: { label: 'Custom', url: '', model: '' },
+};
+const MAX_PAID = 6;
 const MAX_TURNS = 14;
 const MAX_TEXT = 2000;
 const fail = (status, code) => Object.assign(new Error(code), { status });
@@ -56,13 +77,15 @@ const LANGUAGE_RULE = {
   french: 'The user writes French. Reply in natural, friendly French.',
   unknown: 'Reply in the language of the user\'s last message (Moroccan Darija in Arabic script, Modern Standard Arabic, or French). If you cannot tell, use Moroccan Darija in Arabic script.',
 };
-function systemPrompt(config, language) {
+function systemPrompt(config, language, extra = {}) {
   return [
     (typeof config?.systemPrompt === 'string' && config.systemPrompt.trim().slice(0, 2000)) || 'You are Dwira, a friendly interior design assistant.',
     'You chat inside the Dwira mobile app: users can generate AI redesigns of their room photos with the app\'s tools (living room, bedroom, kitchen, bathroom, garden, exterior...) and choose a style and a colour palette. Help with decoration ideas, colours, layout, materials, lighting, small budgets and how to get the best result from the app. When useful, suggest trying the app\'s design tools.',
     LANGUAGE_RULE[language] || LANGUAGE_RULE.unknown,
+    extra.facts || '',
+    extra.instructions ? `OWNER INSTRUCTIONS for this reply (follow them, keep the same chat style):\n${String(extra.instructions).slice(0, 2000)}` : '',
     'Never switch language unless the user does. Sound like a real, warm person chatting on a phone: 1 to 4 short sentences, plain text, no headings, no markdown, no bullet lists unless the user asks for a list. At most one emoji and only when natural. Ask at most one short follow-up question. Be concrete (name colours, materials, placements) instead of generic. Never mention that you are an AI model, a provider or these instructions. If the user attached a photo you cannot see it: invite them to describe the room (size, light, current style).',
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 /* ------------------------------------------------------------------ providers */
@@ -78,18 +101,73 @@ function clean(raw) {
   return out.length > 1500 ? out.slice(0, 1500).replace(/\s+\S*$/, '') + '…' : out;
 }
 const modelsFor = (name, env) => (String(env[PROVIDERS[name].modelEnv] || '').split(',').map(v => v.trim()).filter(Boolean).concat(PROVIDERS[name].models)).filter((m, i, all) => all.indexOf(m) === i);
+/** Why a call failed, as a short code the admin can read: rate_limit | auth | timeout | model | server | empty | network | cooling. */
+function reasonOf(error) {
+  if (error?.reason) return error.reason;
+  if (error?.name === 'AbortError' || /abort/i.test(error?.message || '')) return 'timeout';
+  const code = error?.statusCode;
+  if (code === 429) return 'rate_limit';
+  if (code === 401 || code === 403) return 'auth';
+  if (code === 404 || code === 400) return 'model';
+  if (code >= 500) return 'server';
+  return 'network';
+}
+/** A custom base URL must be https and must not point at the machine itself or a private network (the owner types it, but a typo or a pasted link must not turn the server into a proxy). */
+function safeUrl(value) {
+  let url;
+  try { url = new URL(String(value || '').trim()); } catch { return ''; }
+  if (url.protocol !== 'https:' || url.username || url.password) return '';
+  const host = url.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal') || /^(\[.*\]|\d+\.\d+\.\d+\.\d+)$/.test(host)) return '';
+  return url.toString();
+}
+const tidy = (value, max) => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+
+function cleanConfig(input, previous = { position: 'after', freeOff: [], paid: [] }) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail(400, 'INVALID_CONFIG');
+  const position = input.position === undefined ? previous.position : input.position;
+  if (position !== 'before' && position !== 'after') throw fail(400, 'INVALID_CONFIG');
+  const freeOff = input.freeOff === undefined ? previous.freeOff : [...new Set((Array.isArray(input.freeOff) ? input.freeOff : []).filter(id => PROVIDERS[id]))];
+  let paid = previous.paid;
+  if (input.paid !== undefined) {
+    if (!Array.isArray(input.paid) || input.paid.length > MAX_PAID) throw fail(400, 'INVALID_CONFIG');
+    const seen = new Set();
+    paid = input.paid.map(item => {
+      if (!item || typeof item !== 'object') throw fail(400, 'INVALID_CONFIG');
+      const preset = PAID_PRESETS[item.preset] ? item.preset : 'custom';
+      const id = typeof item.id === 'string' && /^paid_[a-f0-9]{8}$/.test(item.id) && !seen.has(item.id) ? item.id : `paid_${crypto.randomBytes(4).toString('hex')}`;
+      seen.add(id);
+      const model = tidy(item.model, 120) || PAID_PRESETS[preset].model;
+      const baseUrl = preset === 'custom' ? safeUrl(item.baseUrl) : '';
+      if (preset === 'custom' && !baseUrl) throw fail(400, 'INVALID_PAID_URL');
+      if (!model) throw fail(400, 'INVALID_PAID_MODEL');
+      return { id, label: tidy(item.label, 40) || PAID_PRESETS[preset].label, preset, baseUrl, model, enabled: item.enabled === true };
+    });
+  }
+  return { position, freeOff, paid };
+}
 
 function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now } = {}) {
-  /** provider -> time until which it is skipped after a failure (a dead provider must not slow every message down). */
+  /** provider -> { until, reason }: skipped for a while after a failure (a dead provider must not slow every message down). */
   const cooling = new Map();
-  let keysCache = { at: 0, value: {} };
-  async function storedKeys() {
-    if (clock() - keysCache.at < 15000) return keysCache.value;
-    let value = {};
-    try { const row = (await db.query("SELECT value FROM settings WHERE key='chat_keys'"))[0]; if (row) value = JSON.parse(row.value); } catch { /* none stored */ }
-    keysCache = { at: clock(), value };
+  /** provider -> { ok, at, reason, model }: what happened on its last real call (this server instance only). */
+  const health = new Map();
+  const cache = { keys: { at: 0, value: {} }, paidKeys: { at: 0, value: {} }, config: { at: 0, value: null } };
+  async function stored(slot, key, fallback) {
+    if (clock() - cache[slot].at < 15000 && cache[slot].value) return cache[slot].value;
+    let value = fallback;
+    try { const row = (await db.query('SELECT value FROM settings WHERE key=$1', [key]))[0]; if (row) value = JSON.parse(row.value); } catch { /* none stored */ }
+    cache[slot] = { at: clock(), value };
     return value;
   }
+  const save = async (slot, key, value) => {
+    await db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [key, JSON.stringify(value)]);
+    cache[slot] = { at: clock(), value };
+  };
+  const storedKeys = () => stored('keys', 'chat_keys', {});
+  const paidKeys = () => stored('paidKeys', 'chat_paid_keys', {});
+  const getConfig = async () => ({ position: 'after', freeOff: [], paid: [], ...(await stored('config', 'chat_config', { position: 'after', freeOff: [], paid: [] })) });
+
   async function keyOf(name) {
     const meta = PROVIDERS[name];
     if (!meta.env) return { key: '', source: 'none' };
@@ -97,17 +175,35 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
     const key = (await storedKeys())[name];
     return { key: typeof key === 'string' ? key : '', source: key ? 'db' : 'none' };
   }
-  /** Which providers can be used right now. Never returns a key. */
+  const restingOf = id => { const entry = cooling.get(id); return entry && entry.until > clock() ? entry : null; };
+  const stateOf = (id, usable) => {
+    if (!usable) return 'off';
+    if (restingOf(id)) return 'cooling';
+    const h = health.get(id);
+    return !h ? 'ready' : h.ok ? 'active' : 'failed';
+  };
+  const healthOf = id => { const h = health.get(id); return h ? { ok: h.ok, at: h.at, reason: h.reason || '', model: h.model || '' } : null; };
+
+  /** What the admin page shows. Never returns a key. */
   async function status() {
-    const out = {};
-    for (const name of Object.keys(PROVIDERS)) { const { key, source } = await keyOf(name); out[name] = { label: PROVIDERS[name].label, configured: name === 'pollinations' || !!key, source, cooling: (cooling.get(name) || 0) > clock() }; }
-    return out;
+    const config = await getConfig(), keys = await paidKeys();
+    const free = [];
+    for (const [rank, id] of DEFAULT_ORDER.entries()) {
+      const { key, source } = await keyOf(id);
+      const configured = id === 'pollinations' || !!key, on = !config.freeOff.includes(id);
+      free.push({ id, label: PROVIDERS[id].label, rank: rank + 1, configured, source, enabled: on, needsKey: !!PROVIDERS[id].env, models: modelsFor(id, env), state: stateOf(id, configured && on), last: healthOf(id), resting: restingOf(id)?.reason || '' });
+    }
+    const paid = config.paid.map(p => {
+      const hasKey = !!keys[p.id], usable = hasKey && p.enabled;
+      return { ...p, hasKey, state: stateOf(p.id, usable), last: healthOf(p.id), resting: restingOf(p.id)?.reason || '', url: p.preset === 'custom' ? p.baseUrl : PAID_PRESETS[p.preset].url };
+    });
+    return { free, paid: { position: config.position, providers: paid }, presets: Object.fromEntries(Object.entries(PAID_PRESETS).map(([id, v]) => [id, { label: v.label, model: v.model }])), maxPaid: MAX_PAID };
   }
-  /** Write-only: a string stores/replaces a key, an empty string removes it, undefined leaves it alone. */
+  /** Write-only free keys: a string stores/replaces a key, an empty string removes it, undefined leaves it alone. */
   async function setKeys(input) {
     if (!input || typeof input !== 'object') throw fail(400, 'INVALID_KEYS');
     const current = { ...(await storedKeys()) };
-    for (const name of ['gemini', 'groq', 'openrouter']) {
+    for (const name of KEYED) {
       const value = input[name];
       if (value === undefined) continue;
       if (typeof value !== 'string') throw fail(400, 'INVALID_KEY');
@@ -117,61 +213,112 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
       else current[name] = trimmed;
       cooling.delete(name);
     }
-    await db.query("INSERT INTO settings(key,value) VALUES('chat_keys',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(current)]);
-    keysCache = { at: clock(), value: current };
+    await save('keys', 'chat_keys', current);
     return status();
   }
-  async function ask(name, key, model, messages, signal) {
-    const meta = PROVIDERS[name];
-    const response = await timed(fetchImpl, meta.url, {
+  /**
+   * Free switches, the paid zone position and the paid providers. `paid[].key` is write-only like the free keys:
+   * a string stores/replaces, '' removes, undefined keeps. A provider without a key can never run, whatever its toggle says.
+   */
+  async function setConfig(input) {
+    const previous = await getConfig();
+    const next = cleanConfig(input, previous);
+    const keys = { ...(await paidKeys()) };
+    if (input.paid !== undefined) {
+      // cleanConfig keeps the order of input.paid, so the same index gives the key sent for that provider.
+      input.paid.forEach((item, index) => {
+        const id = next.paid[index].id, value = item.key;
+        if (value === undefined) return;
+        if (typeof value !== 'string') throw fail(400, 'INVALID_KEY');
+        const trimmed = value.trim();
+        if (!trimmed) delete keys[id];
+        else if (!KEY_RE.test(trimmed)) throw fail(400, 'INVALID_KEY');
+        else keys[id] = trimmed;
+        cooling.delete(id);
+      });
+      for (const id of Object.keys(keys)) if (!next.paid.some(p => p.id === id)) { delete keys[id]; health.delete(id); cooling.delete(id); }
+    }
+    await save('paidKeys', 'chat_paid_keys', keys);
+    await save('config', 'chat_config', next);
+    return status();
+  }
+
+  async function ask(entry, model, messages, ms) {
+    const response = await timed(fetchImpl, entry.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}), ...(name === 'openrouter' ? { 'HTTP-Referer': 'https://dwira.app', 'X-Title': 'Dwira' } : {}) },
-      body: JSON.stringify({ model, messages, temperature: 0.8, max_tokens: 1024, ...meta.extra(model) }),
-    }, signal);
-    if (!response.ok) throw Object.assign(new Error(`${name} ${response.status}`), { statusCode: response.status });
+      headers: { 'Content-Type': 'application/json', ...(entry.key ? { Authorization: `Bearer ${entry.key}` } : {}), ...(entry.id === 'openrouter' ? { 'HTTP-Referer': 'https://dwira.app', 'X-Title': 'Dwira' } : {}) },
+      body: JSON.stringify({ model, messages, temperature: 0.8, max_tokens: 1024, ...entry.extra(model) }),
+    }, ms);
+    if (!response.ok) throw Object.assign(new Error(`${entry.id} ${response.status}`), { statusCode: response.status });
     const data = await response.json();
     const text = clean(data?.choices?.[0]?.message?.content);
-    if (!text) throw new Error(`${name} empty`);
+    if (!text) throw Object.assign(new Error(`${entry.id} empty`), { reason: 'empty' });
     return text;
   }
+  /** The providers that may run, in order, with the paid zone before or after the free one. */
+  async function chainOf(only) {
+    const config = await getConfig(), keys = await paidKeys();
+    const freeIds = String(env.CHAT_PROVIDER_ORDER || '').split(',').map(v => v.trim()).filter(v => PROVIDERS[v]).concat(DEFAULT_ORDER).filter((v, i, all) => all.indexOf(v) === i);
+    const free = [];
+    for (const id of freeIds) {
+      if (!only && config.freeOff.includes(id)) continue;
+      const { key } = await keyOf(id);
+      if (PROVIDERS[id].env && !key) continue;
+      free.push({ id, label: PROVIDERS[id].label, paid: false, url: PROVIDERS[id].url, key, models: modelsFor(id, env), extra: PROVIDERS[id].extra, ms: id === 'pollinations' ? 12000 : 10000 });
+    }
+    const paid = config.paid.filter(p => keys[p.id] && (only || p.enabled)).map(p => ({
+      id: p.id, label: p.label, paid: true, url: p.preset === 'custom' ? p.baseUrl : PAID_PRESETS[p.preset].url, key: keys[p.id], models: [p.model], extra: () => ({}), ms: 15000,
+    }));
+    const all = config.position === 'before' ? [...paid, ...free] : [...free, ...paid];
+    return only ? all.filter(entry => entry.id === only) : all;
+  }
   /**
-   * `history`: [{ role: 'user'|'assistant'|'admin', text }]. Returns { text, provider, model, language }.
-   * Tries every configured provider (and its models) inside `budgetMs`; throws 503 NO_PROVIDER when none answers.
+   * `history`: [{ role: 'user'|'assistant'|'admin', text }].
+   * options: { budgetMs, provider (try only this one: the admin "test" button), language (force the reply language: darija | arabic | french),
+   *            facts (knowledge block for the system prompt), instructions (the owner's instructions of an AI automation) }.
+   * Returns { text, provider, model, label, language, status: 'active' | 'fallback' | 'paid', paid, tried: [{ provider, label, model, paid, status: 'failed', reason }] }.
+   * Throws 503 NO_PROVIDER (with `.tried`) when none answers.
    */
-  async function reply(history, config = {}, { budgetMs = 24000, provider: only } = {}) {
+  async function reply(history, config = {}, { budgetMs = 24000, provider: only, language: forced, facts, instructions } = {}) {
     const turns = (Array.isArray(history) ? history : []).filter(m => m && typeof m.text === 'string' && ['user', 'assistant', 'admin'].includes(m.role) && (m.text.trim() || m.image || m.audio))
       .slice(-MAX_TURNS).map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: (m.text.trim() || '').slice(0, MAX_TEXT) + (m.image ? `${m.text.trim() ? '\n' : ''}[photo attached]` : '') + (m.audio ? `${m.text.trim() || m.image ? '\n' : ''}[voice message]` : '') }));
     if (!turns.length || turns[turns.length - 1].role !== 'user') throw fail(400, 'INVALID_MESSAGES');
-    const language = detectLanguage([...turns].reverse().find(t => t.role === 'user')?.content);
+    const detected = detectLanguage([...turns].reverse().find(t => t.role === 'user')?.content);
+    // A forced language (AI automation) keeps the user's script: Darija written in Latin letters stays Latin.
+    const language = forced === 'darija' ? (detected === 'darija_latin' ? 'darija_latin' : 'darija') : forced === 'arabic' || forced === 'french' ? forced : detected;
     // Providers expect the conversation to start with the user: drop any leading assistant (welcome) turns.
     while (turns.length > 1 && turns[0].role !== 'user') turns.shift();
-    const messages = [{ role: 'system', content: systemPrompt(config, language) }, ...turns];
-    const order = (only ? [only] : String(env.CHAT_PROVIDER_ORDER || '').split(',').map(v => v.trim()).filter(v => PROVIDERS[v]).concat(DEFAULT_ORDER)).filter((v, i, all) => all.indexOf(v) === i);
+    const messages = [{ role: 'system', content: systemPrompt(config, language, { facts, instructions }) }, ...turns];
+    const chain = await chainOf(only);
     const deadline = clock() + budgetMs;
-    let lastStatus = 0;
-    for (const name of order) {
-      const { key } = await keyOf(name);
-      if (PROVIDERS[name].env && !key) continue;
-      if (!only && (cooling.get(name) || 0) > clock()) continue;
-      for (const model of modelsFor(name, env)) {
+    const tried = [];
+    for (const entry of chain) {
+      const rest = !only && restingOf(entry.id);
+      if (rest) { tried.push({ provider: entry.id, label: entry.label, model: '', paid: entry.paid, status: 'failed', reason: rest.reason }); continue; }
+      let reason = 'network', lastModel = entry.models[0] || '';
+      for (const model of entry.models) {
         const left = deadline - clock();
-        if (left < 1500) break;
+        if (left < 1500) { reason = 'timeout'; break; }
+        lastModel = model;
         try {
-          const text = await ask(name, key, model, messages, Math.min(name === 'pollinations' ? 12000 : 10000, left));
-          cooling.delete(name);
-          return { text, provider: name, model, language };
+          const text = await ask(entry, model, messages, Math.min(entry.ms, left));
+          cooling.delete(entry.id);
+          health.set(entry.id, { ok: true, at: clock(), model });
+          return { text, provider: entry.id, model, label: entry.label, language, paid: entry.paid, status: entry.paid ? 'paid' : tried.length ? 'fallback' : 'active', tried };
         } catch (error) {
-          lastStatus = error.statusCode || lastStatus;
+          reason = reasonOf(error);
           // The model does not exist (any more) -> try the provider's next model. Quota, bad key or an outage -> next provider, and rest this one briefly.
-          if (error.statusCode === 404 || error.statusCode === 400) continue;
-          cooling.set(name, clock() + (error.statusCode === 429 ? 60000 : error.statusCode === 401 || error.statusCode === 403 ? 300000 : 20000));
+          if (reason === 'model') continue;
+          cooling.set(entry.id, { until: clock() + (reason === 'rate_limit' ? 60000 : reason === 'auth' ? 300000 : 20000), reason });
           break;
         }
       }
+      health.set(entry.id, { ok: false, at: clock(), reason, model: lastModel });
+      tried.push({ provider: entry.id, label: entry.label, model: lastModel, paid: entry.paid, status: 'failed', reason });
     }
-    throw Object.assign(fail(503, 'NO_PROVIDER'), { lastStatus });
+    throw Object.assign(fail(503, 'NO_PROVIDER'), { tried });
   }
-  return { reply, status, setKeys };
+  return { reply, status, setKeys, setConfig, getConfig };
 }
 
-module.exports = { createChat, detectLanguage, systemPrompt, clean, PROVIDERS };
+module.exports = { createChat, detectLanguage, systemPrompt, clean, PROVIDERS, PAID_PRESETS, DEFAULT_ORDER };

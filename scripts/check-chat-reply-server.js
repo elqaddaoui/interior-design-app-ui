@@ -37,6 +37,7 @@ async function setup({ env = {}, routes = {} } = {}) {
   const client = { 'x-user-token': u.body.token };
   return { backend, calls, admin, client };
 }
+const freeOf = (body, id) => body.free.find(p => p.id === id);
 const ask = (backend, headers, text = 'bghit nbdel salon dyali') => call(backend, '/api/chat/reply', { method: 'POST', headers, body: { messages: [{ role: 'user', text }] } });
 
 test('language detection tells Darija (Arabic and Latin letters), Arabic and French apart', () => {
@@ -114,13 +115,13 @@ test('admin keys are write-only: stored, used, reported as configured but never 
     assert.equal((await call(backend, '/api/admin/chat/keys', { method: 'PATCH', headers: admin, body: { groq: 'bad key!' } })).status, 400);
     const set = await call(backend, '/api/admin/chat/keys', { method: 'PATCH', headers: admin, body: { groq: 'gsk_admin_stored_key_123456' } });
     assert.equal(set.status, 200);
-    assert.equal(set.body.groq.configured, true);
-    assert.equal(set.body.groq.source, 'db');
+    assert.equal(freeOf(set.body, 'groq').configured, true);
+    assert.equal(freeOf(set.body, 'groq').source, 'db');
     assert.equal(JSON.stringify(set.body).includes('gsk_admin_stored_key'), false, 'the key is never echoed');
     assert.equal(JSON.stringify((await call(backend, '/api/admin/chat/status', { headers: admin })).body).includes('gsk_admin_stored_key'), false);
     assert.equal((await ask(backend, client)).body.provider, 'groq');
     assert.equal(calls[calls.length - 1].auth, 'Bearer gsk_admin_stored_key_123456');
     const removed = await call(backend, '/api/admin/chat/keys', { method: 'PATCH', headers: admin, body: { groq: '' } });
-    assert.equal(removed.body.groq.configured, false);
+    assert.equal(freeOf(removed.body, 'groq').configured, false);
   } finally { backend.server.emit('close'); }
 });
