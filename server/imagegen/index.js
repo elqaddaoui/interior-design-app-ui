@@ -11,7 +11,7 @@
  * that can do the job. A model that fails (quota, outage, bad key) rests for a while and the next one takes over, so one
  * provider hitting its free limit never breaks a render. `fetch` is injectable for tests.
  */
-const { buildBrief, normalizeColors, ROOM_EN, clean, unknownPlaceholders } = require('./prompt');
+const { buildBrief, normalizeColors, ROOM_EN, STYLE_NOTES, clean, unknownPlaceholders } = require('./prompt');
 const { cleanRules, resolveRules, defaultRules } = require('./rules');
 const { BLOCKS, DEFAULT_ORDER, PLACEHOLDERS, DEFAULT_OFF } = require('./blocks');
 const { sniffMime, imageSize, fitSize } = require('./image');
@@ -197,7 +197,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   /** What the admin screen needs: the saved rules, the default wording of every block and what each {placeholder} means. */
   async function rulesInfo() {
     const blocks = Object.fromEntries(Object.entries(BLOCKS).map(([id, def]) => [id, def.variants]));
-    return { rules: await loadRules(), catalog: { order: DEFAULT_ORDER, blocks, off: DEFAULT_OFF, placeholders: PLACEHOLDERS } };
+    return { rules: await loadRules(), catalog: { order: DEFAULT_ORDER, blocks, off: DEFAULT_OFF, placeholders: PLACEHOLDERS, vocab: { styles: STYLE_NOTES, rooms: ROOM_EN } } };
   }
 
   /* ------------------------------------------------------------ plan (what a generation is made of) and compose (what one model receives) */

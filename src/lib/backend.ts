@@ -17,7 +17,7 @@ export const resolveMediaUrls = <T,>(value: T): T => {
     : Array.isArray(node) ? node.map(walk) : node && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v)])) : node;
   return walk(value) as T;
 };
-export class BackendError extends Error { constructor(public status: number, public code = '') { super(code || `Backend HTTP ${status}`); } }
+export class BackendError extends Error { constructor(public status: number, public code = '', public body?: unknown) { super(code || `Backend HTTP ${status}`); } }
 export const isBackendUnavailable = (error: unknown) => error instanceof BackendError && (error.code === 'BACKEND_UNAVAILABLE' || error.status >= 500);
 let deviceToken: string | null = null;
 export async function clientToken() {
@@ -52,7 +52,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
     // Never mistake that response for a working backend or silently fall back to mocks.
     if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) throw new BackendError(503, 'BACKEND_UNAVAILABLE');
     const body = await response.json().catch(() => { throw new BackendError(502, 'BACKEND_UNAVAILABLE'); });
-    if (!response.ok) throw new BackendError(response.status, body.error);
+    if (!response.ok) throw new BackendError(response.status, body.error, body);
     // Every response (content, requests, history, chats, uploads) may carry /api/media URLs: native apps need them absolute.
     return resolveMediaUrls(body) as T;
   } catch (error) {
