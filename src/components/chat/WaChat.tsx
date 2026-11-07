@@ -1,5 +1,6 @@
+import { QuickReplies } from '@/components/chat/QuickReplies';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
@@ -124,7 +125,7 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
   };
 
   /** Saves the new messages, then (for text / pictures) asks the assistant, paced like a person. */
-  const deliver = async (fresh: ChatMessage[], askAssistant: boolean) => {
+  const deliver = async (fresh: ChatMessage[], askAssistant: boolean, buttonId?: string) => {
     setBusy(true);
     const st = useStore.getState();
     let c: Conversation | undefined = conv;
@@ -147,10 +148,11 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
     if (!askAssistant) { setBusy(false); return; }
     const started = Date.now();
     let answer = '';
-    try { answer = await services.chat.reply({ messages: next, config }); } catch { answer = t('assistant.error'); }
+    let meta: ChatMessage['meta'];
+    try { const out = await services.chat.reply({ messages: next, config, ...(buttonId ? { buttonId } : {}) }); answer = out.text; meta = out.meta; } catch { answer = t('assistant.error'); }
     const wait = replyDelayMs(config, answer) - (Date.now() - started);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    const am: ChatMessage = { id: uid('m'), role: 'assistant', text: answer, createdAt: Date.now() };
+    const am: ChatMessage = { id: uid('m'), role: 'assistant', text: answer, createdAt: Date.now(), ...(meta ? { meta } : {}) };
     const animate = config.typewriter !== false && config.replyDelayMode !== 'off' && alive.current && answer.length > 0;
     if (animate) setTyping({ id: am.id, shown: 0 });
     await useStore.getState().update('conversations', c.id, { messages: [...next, am], updatedAt: Date.now() });
@@ -163,6 +165,14 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
       await new Promise((r) => setTimeout(r, 40));
     }
     if (alive.current) setTyping(null);
+  };
+
+  // Quick-reply buttons configured by the owner (labels only): pressing one sends its label and lets the matching automation answer.
+  const [buttons, setButtons] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => { let on = true; services.chat.buttons().then((list) => { if (on) setButtons(list); }); return () => { on = false; }; }, []);
+  const pressButton = async (button: { id: string; label: string }) => {
+    if (busy) return;
+    await deliver([{ id: uid('m'), role: 'user', text: button.label, createdAt: Date.now() }], true, button.id);
   };
 
   const canSend = !busy && (!!text.trim() || staged.length > 0);
@@ -254,6 +264,8 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
         renderItem={renderItem}
         ListFooterComponent={busy && !optimistic ? <View testID="chat-typing" accessibilityLabel={t('assistant.typing')} className="self-start bg-surface2 rounded-2xl px-4 py-3.5 flex-row gap-1.5 items-center mt-1"><Dot d={0} /><Dot d={150} /><Dot d={300} /></View> : null}
       />
+
+      {buttons.length && !staged.length && !text.trim() ? <QuickReplies items={buttons} busy={busy} onPick={pressButton} /> : null}
 
       {staged.length ? (
         <View testID="wa-staged" className="px-3 pt-2 pb-1 border-t border-line bg-bg">

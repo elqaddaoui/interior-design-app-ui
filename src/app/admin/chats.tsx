@@ -18,6 +18,7 @@ import { useT } from '@/i18n';
 import { waLink } from '@/lib/share';
 import { useAdminChats, type AdminConversation } from '@/store/useAdminChats';
 import { toast } from '@/store/useToast';
+import { MessageBadge } from '@/components/admin/assistant/MessageBadge';
 import { useTheme } from '@/theme/ThemeProvider';
 
 const preview = (chat: AdminConversation, photo: string) => {
@@ -66,6 +67,7 @@ function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
             {m.audio ? <VoiceBubble id={m.id} audio={m.audio} playback={playback} own={m.role === 'admin'} /> : null}
             {m.text ? <Txt className={`text-[14px] leading-[20px] ${m.role === 'admin' ? 'text-onprimary' : ''}`}>{m.text}</Txt> : null}
           </View>
+          {m.role === 'assistant' && m.meta ? <MessageBadge id={m.id} meta={m.meta} /> : null}
         </View>
       ))}
       <ImageViewer items={pictures.map(m => ({ uri: m.image as string, label: m.role === 'user' ? chat.clientName || t('inbox.guest') : t('inbox.team') }))} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)} />

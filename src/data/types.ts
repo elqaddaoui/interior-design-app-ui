@@ -279,7 +279,7 @@ export interface PromptRules {
   tools: Record<Id, Partial<PromptSet>>;
   vocab: { styles: Record<Id, string>; rooms: Record<Id, string> };
 }
-export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; off: string[]; placeholders: string[] } }
+export interface PromptRulesInfo { rules: PromptRules; catalog: { order: string[]; blocks: Record<string, Record<string, string>>; off: string[]; placeholders: string[]; /** The English wording the app uses today for each style / room type (what an empty Vocabulary field means). */ vocab?: { styles: Record<string, string>; rooms: Record<string, string> } } }
 export interface PromptPreview {
   prompt: string;
   blocks: { id: string; variant: string; text: string; custom?: boolean }[];
@@ -294,7 +294,18 @@ export interface PromptPreview {
 
 /** A voice note: `uri` is an /api/media URL (or a local file while sending), `durationMs` is optional. */
 export interface ChatAudio { uri: string; durationMs?: number }
-export interface ChatMessage { id: Id; role: 'user' | 'assistant' | 'admin'; text: string; image?: string; audio?: ChatAudio; createdAt: number }
+/** Who wrote an assistant message (admin-only information, never shown to visitors). `automation` = one of the owner's automations answered; `active` = the first provider answered; `fallback` = after a failure; `paid` = a paid provider. */
+export type ReplyStatus = 'automation' | 'active' | 'fallback' | 'paid' | 'local';
+export interface ReplyMeta {
+  status: ReplyStatus;
+  /** Provider id (`gemini`, `groq`, `paid_ab12cd34`, `automation`, `local`), its display name and the model. */
+  provider: string; label: string; model: string;
+  paid?: boolean; language?: string;
+  automationId?: string; automationName?: string;
+  /** Providers that failed before this answer, with the reason (rate_limit | auth | timeout | model | server | empty | network | cooling). */
+  tried?: { provider: string; label: string; model: string; paid?: boolean; reason: string }[];
+}
+export interface ChatMessage { id: Id; role: 'user' | 'assistant' | 'admin'; text: string; image?: string; audio?: ChatAudio; createdAt: number; meta?: ReplyMeta }
 export interface Conversation { id: Id; userId: Id; title: string; messages: ChatMessage[]; updatedAt: number }
 
 /* ---- single documents ---- */
@@ -323,6 +334,8 @@ export interface AssistantConfig {
   replyDelayMaxMs?: number;
   /** Reveal the answer progressively, like someone typing it. */
   typewriter?: boolean;
+  /** The owner's own facts for the assistant (opening hours, offers, delivery...), added to the built-in app knowledge. */
+  knowledgeNotes?: string;
 }
 export type UserNavStyle = 'classic' | 'floating' | 'minimal';
 /** Startup loading screen: four built-in animations or the admin's own image (GIF / SVG / PNG / WebP). */

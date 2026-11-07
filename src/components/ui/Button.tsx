@@ -13,21 +13,22 @@ const FG: Record<Variant, string> = {
 };
 const SIZE = { sm: 'px-4 h-9', md: 'px-5 h-12', lg: 'px-6 h-14' };
 
-export function Button({ title, onPress, variant = 'primary', size = 'md', disabled, loading, icon, className = '', full, testID }: {
-  title: string; onPress?: () => void; variant?: Variant; size?: keyof typeof SIZE; disabled?: boolean; loading?: boolean; icon?: string; className?: string; full?: boolean; testID?: string;
+export function Button({ title, onPress, variant = 'primary', size = 'md', disabled, loading, icon, className = '', full, testID, accessibilityLabel }: {
+  title: string; onPress?: () => void; variant?: Variant; size?: keyof typeof SIZE; disabled?: boolean; loading?: boolean; icon?: string; className?: string; full?: boolean; testID?: string; accessibilityLabel?: string;
 }) {
   const off = disabled || loading;
   return (
     <Pressable
       testID={testID}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       disabled={!!off}
       aria-disabled={off || undefined}
       onPress={off ? undefined : onPress}
       className={`${SIZE[size]} rounded-full items-center justify-center flex-row gap-2 active:opacity-80 ${off && variant !== 'ghost' && variant !== 'outline' ? 'bg-surface2' : BG[variant]} ${full ? 'self-stretch' : ''} ${className}`}
     >
       {loading ? <Spinner size={size === 'sm' ? 18 : 22} /> : icon ? <Icon name={icon} size={18} color={variant === 'danger' && !off ? '#FFFFFF' : undefined} tone={off ? 'muted' : variant === 'primary' ? 'onprimary' : variant === 'ink' ? 'onink' : 'fg'} /> : null}
-      <Txt className={`font-bold ${size === 'sm' ? 'text-[13px]' : 'text-[16px]'} ${off ? 'text-muted' : FG[variant]}`}>{title}</Txt>
+      {title ? <Txt className={`font-bold ${size === 'sm' ? 'text-[13px]' : 'text-[16px]'} ${off ? 'text-muted' : FG[variant]}`}>{title}</Txt> : null}
     </Pressable>
   );
 }
