@@ -190,7 +190,7 @@ export function touched(rules: PromptRules, what: TabKey | 'explore', catalog: P
     case 'output': return g.output.brief !== 'both' || g.output.maxSide !== 0;
     case 'words': return Object.keys(n.vocab.styles).length + Object.keys(n.vocab.rooms).length > 0;
     case 'blocks': return g.blocks.order.some((id, i) => id !== catalog.order[i]) || Object.keys(g.blocks.items).length > 0;
-    case 'explore': return n.appliesTo !== 'all' || !!g.rules.exploreText || !!g.blocks.items.reference;
+    case 'explore': return !!g.rules.exploreText || !!g.blocks.items.reference;
   }
 }
 

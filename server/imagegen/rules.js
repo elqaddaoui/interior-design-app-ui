@@ -99,7 +99,7 @@ function cleanRules(input) {
     for (const name of TOOL_SECTIONS) if (isObject(entry[name])) set[name] = CLEANERS[name](entry[name]);
     if (Object.keys(set).length) { tools[id] = set; count++; }
   }
-  return { v: 1, appliesTo: oneOf(source.appliesTo, ['all', 'explore'], 'all'), global, tools, vocab: cleanVocab(source.vocab) };
+  return { v: 1, appliesTo: 'all', global, tools, vocab: cleanVocab(source.vocab) };
 }
 
 /** The settings that really apply to one tool, plus where each section comes from. `explore`: the generation started from an Explore picture. */

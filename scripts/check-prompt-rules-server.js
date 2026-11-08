@@ -212,12 +212,12 @@ test('render: saved rules reach the image model (global, per-tool, explore-only)
     const row = listed.body.find(r => r.draft.inspirationId === 'ins_cat_living_1');
     assert.deepEqual(row.aiRun.images.map(i => [i.role, i.sent]), [['inspiration', true], ['style', true]]);
     assert.equal(row.aiRun.rules.explore, true); assert.equal(row.aiRun.rules.applied, true); assert.equal(row.aiRun.used.imagesSent, 2);
-    // explore-only: normal generations go back to the default prompt, explore ones keep the rules
-    await put({ appliesTo: 'explore', global: { rules: { text: 'Explore only rule' }, images: { style: 'image' } } });
+    // a stored legacy appliesTo:'explore' is ignored: the rules always apply, the Explore text only needs an Explore picture
+    await put({ appliesTo: 'explore', global: { rules: { text: 'Always rule', exploreText: 'Explore only text' }, images: { style: 'image' } } });
     const normal = await create('rule-claim-00004', draft());
-    assert.doesNotMatch(normal.prompt, /Explore only rule/); assert.equal(normal.image.length, 1); assert.match(normal.prompt, /STYLE: Moroccan/);
+    assert.match(normal.prompt, /Always rule/); assert.doesNotMatch(normal.prompt, /Explore only text/); assert.equal(normal.image.length, 2);
     const viaExplore = await create('rule-claim-00005', draft({ inspirationId: 'ins_cat_living_1' }));
-    assert.match(viaExplore.prompt, /Explore only rule/);
+    assert.match(viaExplore.prompt, /Always rule/); assert.match(viaExplore.prompt, /Explore only text/);
     // a model that fails over to a single-picture model gets a prompt without pictures it cannot see
     const fail = fakeApi({ 'black-forest-labs/flux.2-klein-4b': 429 });
     const b = await setup({ POLLINATIONS_API_KEY: 'sk_test_key_123456' }, fail);

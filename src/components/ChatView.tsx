@@ -1,7 +1,7 @@
-import { useAppFont, Txt } from '@/components/ui/Txt';
+import { Txt } from '@/components/ui/Txt';
 import { QuickReplies } from '@/components/chat/QuickReplies';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
@@ -10,6 +10,7 @@ import { useStore } from '@/store/useStore';
 import { useUserSession } from '@/store/useUserSession';
 import { services, VISITOR } from '@/data/repositories';
 import { useL, useT } from '@/i18n';
+import { ChatComposer } from '@/components/chat/ChatComposer';
 import { Icon } from '@/components/ui/Icon';
 import { Sheet } from '@/components/ui/Sheet';
 import { ImageViewer } from '@/components/ui/ImageViewer';
@@ -17,7 +18,6 @@ import { VoiceBubble, useVoicePlayback } from '@/components/chat/voice';
 import { pickPhoto } from '@/lib/photo';
 import { uid } from '@/lib/uid';
 import { replyDelayMs, typeStep } from '@/lib/chatPace';
-import { useTheme } from '@/theme/ThemeProvider';
 import { toast } from '@/store/useToast';
 import type { ChatMessage, Conversation } from '@/data/types';
 
@@ -32,8 +32,6 @@ function Dot({ d }: { d: number }) {
 export function ChatView({ conversationId, onCreated, header }: { conversationId?: string; onCreated?: (id: string) => void; header?: React.ReactNode }) {
   const { t } = useT();
   const L = useL();
-  const { colors } = useTheme();
-  const fontFamily = useAppFont();
   const config = useStore((s) => s.doc.assistant);
   const userId = useUserSession(s => s.user?.id) || VISITOR;
   const conv = useStore((s) => s.conversations.find((c) => c.id === conversationId && c.userId === userId));
@@ -157,16 +155,7 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
       {image ? (
         <View className="px-4 pb-2 flex-row"><View><Image source={{ uri: image }} style={{ width: 64, height: 64, borderRadius: 12 }} /><Pressable onPress={() => setImage('')} className="absolute -top-2 -end-2 w-6 h-6 rounded-full bg-danger items-center justify-center"><Icon name="close" size={14} color="#fff" /></Pressable></View></View>
       ) : null}
-      <View className="flex-row items-end gap-2 px-3 py-2.5">
-        <View className="flex-1 flex-row items-end bg-surface2 rounded-3xl px-3 min-h-[48px]">
-          <Pressable testID="chat-attach" onPress={() => setAttach(true)} className="h-12 w-9 items-center justify-center"><Icon name="image-plus" size={22} tone="muted" /></Pressable>
-          <TextInput testID="chat-input" value={text} onChangeText={setText} placeholder={t('assistant.placeholder')} placeholderTextColor={colors.muted} multiline onSubmitEditing={() => send()}
-            style={{ fontFamily, flex: 1, color: colors.fg, fontSize: 16, maxHeight: 110, paddingVertical: 13, outlineStyle: 'none' } as any} />
-        </View>
-        <Pressable testID="chat-send" onPress={() => send()} className={`w-12 h-12 rounded-full items-center justify-center ${text.trim() || image ? 'bg-primary' : 'bg-surface2'}`}>
-          <Icon name="arrow-up" size={22} tone={text.trim() || image ? 'onprimary' : 'muted'} />
-        </Pressable>
-      </View>
+      <ChatComposer value={text} onChange={setText} onSend={() => send()} canSend={!!text.trim() || !!image} busy={busy} placeholder={t('assistant.placeholder')} onAttach={() => setAttach(true)} />
       <Sheet visible={attach} onClose={() => setAttach(false)} title={t('assistant.attach')}>
         <View className="flex-row gap-3">
           {(['camera', 'gallery'] as const).map((k) => (

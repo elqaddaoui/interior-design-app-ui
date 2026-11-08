@@ -1,5 +1,5 @@
 import React from 'react';
-import { Linking, Pressable, TextInput, View } from 'react-native';
+import { Linking, Pressable, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Button } from '@/components/ui/Button';
@@ -8,8 +8,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Icon } from '@/components/ui/Icon';
 import { Sheet } from '@/components/ui/Sheet';
 import { ImageViewer } from '@/components/ui/ImageViewer';
-import { VoiceBubble, useVoicePlayback } from '@/components/chat/voice';
-import { Txt, useAppFont } from '@/components/ui/Txt';
+import { VoiceBubble, useVoicePlayback, type Recorded } from '@/components/chat/voice';
+import { ChatComposer } from '@/components/chat/ChatComposer';
+import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
 import { RightClick, sep, type MenuItem } from '@/components/admin/ContextMenu';
@@ -19,7 +20,6 @@ import { waLink } from '@/lib/share';
 import { useAdminChats, type AdminConversation } from '@/store/useAdminChats';
 import { toast } from '@/store/useToast';
 import { MessageBadge } from '@/components/admin/assistant/MessageBadge';
-import { useTheme } from '@/theme/ThemeProvider';
 
 const preview = (chat: AdminConversation, photo: string) => {
   const last = chat.messages[chat.messages.length - 1];
@@ -28,8 +28,6 @@ const preview = (chat: AdminConversation, photo: string) => {
 
 function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
   const { t } = useT();
-  const { colors } = useTheme();
-  const fontFamily = useAppFont();
   const chat = useAdminChats(s => s.chats.find(c => c.id === id));
   const [text, setText] = useViewState('admin-chat-reply', '');
   const [busy, setBusy] = React.useState(false);
@@ -45,17 +43,17 @@ function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
     catch { toast(t('inbox.sendFailed')); }
     finally { setBusy(false); }
   };
+  const sendVoice = async (voice: Recorded) => {
+    if (busy) return;
+    setBusy(true);
+    try { await useAdminChats.getState().reply(chat.id, '', { uri: voice.dataUrl, durationMs: voice.durationMs }); toast(t('inbox.sent')); }
+    catch { toast(t('inbox.sendFailed')); }
+    finally { setBusy(false); }
+  };
   return (
     <Sheet visible onClose={onClose} title={chat.guest ? t('inbox.guest') : chat.clientName} wide
-      footer={<View className="flex-row items-end gap-2">
-        <View className="flex-1 bg-surface2 rounded-3xl px-4 min-h-[44px] justify-center">
-          <TextInput testID="admin-chat-input" value={text} onChangeText={setText} placeholder={t('inbox.replyPlaceholder')} placeholderTextColor={colors.muted} multiline maxLength={4000}
-            style={{ fontFamily, color: colors.fg, fontSize: 16, maxHeight: 110, paddingVertical: 10, outlineStyle: 'none' } as any} />
-        </View>
-        <Pressable testID="admin-chat-send" accessibilityRole="button" accessibilityLabel={t('inbox.reply')} disabled={!text.trim() || busy} onPress={send} className={`w-11 h-11 rounded-full items-center justify-center ${text.trim() ? 'bg-primary' : 'bg-surface2'}`}>
-          <Icon name="arrow-up" size={22} tone={text.trim() ? 'onprimary' : 'muted'} />
-        </Pressable>
-      </View>}>
+      footer={<ChatComposer value={text} onChange={setText} onSend={send} canSend={!!text.trim()} busy={busy} maxLength={4000} placeholder={t('inbox.replyPlaceholder')}
+        onVoice={sendVoice} ids={{ input: 'admin-chat-input', send: 'admin-chat-send', mic: 'admin-chat-mic' }} />}>
       {chat.guest ? null : <View className="flex-row items-center justify-between mb-2 gap-3">
         <Txt className="text-muted flex-1">{chat.whatsapp}</Txt>
         <Button testID="admin-chat-wa" icon="whatsapp" size="sm" variant="soft" title={t('inbox.openWa')} onPress={() => Linking.openURL(waLink(chat.whatsapp, ''))} />

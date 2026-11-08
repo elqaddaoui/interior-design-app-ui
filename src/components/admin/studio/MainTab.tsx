@@ -3,11 +3,11 @@ import { Pressable, View } from 'react-native';
 import { Icon } from '@/components/ui/Icon';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
-import { ColorPicker } from '@/components/admin/ColorPicker';
 import { useT } from '@/i18n';
 import { FX_FADE, TIERS, TIER_ORDER } from '@/lib/toolCardFx';
 import type { StudioStyle } from '@/lib/fxStudio';
-import { Chips, Sld } from './ui';
+import { Chips } from './ui';
+import { ColorRandom } from './ColorRandom';
 
 type Tier = (typeof TIER_ORDER)[number];
 const TIER_ICON: Record<Tier, string> = { safe: 'shield-check-outline', medium: 'speedometer-medium', heavy: 'fire', creative: 'creation' };
@@ -15,7 +15,7 @@ const tierOf = (id: number): Tier => TIER_ORDER.find((x) => TIERS[x].includes(id
 
 /**
  * "Transition" tab, minimal: ONE card with the current transition (number + name) and the "same on every card" switch, four icon tabs
- * (one per family) and only the chosen family's chips; accent colour and random seed live behind a single "more" row.
+ * (one per family) and only the chosen family's chips; accent colour and random seed live behind a single "Colour & randomness" row (see ColorRandom).
  * Same behaviour as before: picking a chip shows it on the stage (`onEffect`) and, when the switch is on, forces it (`onChange({ force })`).
  */
 export function MainTab({ style, effect, onEffect, onChange }: { style: StudioStyle; effect: number; onEffect: (id: number) => void; onChange: (patch: Record<string, unknown>) => void }) {
@@ -71,19 +71,8 @@ export function MainTab({ style, effect, onEffect, onChange }: { style: StudioSt
           <Icon name={more ? 'chevron-up' : 'chevron-down'} size={20} tone="muted" />
         </Pressable>
         {more ? (
-          <View className="px-3 pb-3 border-t border-line" style={{ gap: 12, paddingTop: 12 }}>
-            <View className="flex-row items-center" style={{ gap: 10 }}>
-              <Icon name="palette-outline" size={19} tone="muted" />
-              <View className="flex-1" style={{ minWidth: 0 }}>
-                <Chips testID="st-accent-mode" value={style.accent ? 'custom' : 'auto'} options={[{ key: 'auto', label: t('st.accentAuto') }, { key: 'custom', label: t('st.paintV.custom') }]} onChange={(k) => onChange({ accent: k === 'auto' ? '' : style.accent || '#FBDD2D' })} />
-              </View>
-            </View>
-            {style.accent ? <ColorPicker compact value={style.accent} onChange={(accent) => onChange({ accent })} /> : null}
-            <View className="flex-row items-center" style={{ gap: 10 }}>
-              <Icon name="dice-multiple-outline" size={19} tone="muted" />
-              <View className="flex-1"><Sld testID="st-seed" label={t('st.seed')} value={style.seed} min={1} max={200} step={1} onChange={(seed) => onChange({ seed })} /></View>
-              <Pressable testID="st-seed-dice" accessibilityRole="button" accessibilityLabel={t('st.surprise')} onPress={() => onChange({ seed: 1 + Math.floor(Math.random() * 9000) })} className="w-10 h-10 rounded-full bg-surface2 items-center justify-center active:opacity-70"><Icon name="shuffle-variant" size={19} /></Pressable>
-            </View>
+          <View className="px-3 pb-3 border-t border-line" style={{ paddingTop: 14 }}>
+            <ColorRandom style={style} onChange={onChange} />
           </View>
         ) : null}
       </View>

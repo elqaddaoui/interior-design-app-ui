@@ -4,6 +4,8 @@ import { api, backendEnabled } from '@/lib/backend';
 export interface AiStatus {
   /** An image engine has a key: generations are real. Otherwise the app shows its sample result. */
   live: boolean;
+  /** Admin > AI models rotation is on and has a usable model: the model shown to the client is the server's choice. */
+  rotation?: boolean;
   models: { id: string; name: string; engine: string; modelName: string; i2i: boolean; free: boolean }[];
   /** Titles of the free models that run when the admin's model has no engine of its own. */
   chain: { image: string[]; text: string[] };
