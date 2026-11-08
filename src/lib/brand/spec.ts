@@ -1,5 +1,5 @@
-import { normHex, isHex, DARK_BG, LIGHT_BG, ratio, brandPalette, READY_PALETTES, type Harmony, fromHsl } from './color';
-import { availableWeights, fontFor, fontMeta, snapWeight, supportsText, FONTS } from './fontData';
+import { normHex, isHex, DARK_BG, LIGHT_BG, ratio, type Harmony } from './color';
+import { fontMeta, snapWeight, supportsText } from './fontData';
 import { ICON_NAMES } from './icons';
 import { initialsOf, isRtlText } from './script';
 
@@ -169,85 +169,9 @@ export function legacyFields(s: LogoSpec) {
   } as const;
 }
 
-/* ---------------------------------------------------------------- presets */
-export interface Preset { id: string; patch: Partial<Omit<LogoSpec, 'v' | 'name'>> | Record<string, any> }
-const solid = (c = '') => ({ mode: 'solid' as const, color: c, color2: '#2563EB', angle: 90 });
-const grad = (a: string, b: string, angle = 90) => ({ mode: 'gradient' as const, color: a, color2: b, angle });
-export const PRESETS: Preset[] = [
-  { id: 'classic', patch: { type: 'text', font: 'Playfair Display', weight: 700, tracking: -1, case: 'none', decor: 'underline', italic: false, fill: solid(), shadow: { on: false }, outline: { on: false } } },
-  { id: 'modern', patch: { type: 'text', font: 'Plus Jakarta Sans', weight: 800, tracking: -3, case: 'none', decor: 'none', italic: false, fill: solid(), shadow: { on: false }, outline: { on: false } } },
-  { id: 'elegant', patch: { type: 'text', font: 'Cormorant Garamond', weight: 600, tracking: 18, case: 'upper', decor: 'none', italic: false, fill: solid(), shadow: { on: false }, outline: { on: false } } },
-  { id: 'script', patch: { type: 'text', font: 'Pacifico', weight: 400, tracking: 0, case: 'none', decor: 'none', fill: grad('#F97316', '#DB2777', 100), shadow: { on: false }, outline: { on: false } } },
-  { id: 'bold', patch: { type: 'text', font: 'Anton', weight: 400, tracking: 6, case: 'upper', decor: 'none', italic: false, fill: solid('#E11D48'), shadow: { on: false }, outline: { on: false } } },
-  { id: 'tech', patch: { type: 'iconText', font: 'Space Grotesk', weight: 700, tracking: -2, case: 'none', decor: 'none', italic: false, icon: { name: 'chip', pos: 'start', scale: 120, gap: 8, color: '' }, fill: solid('#2563EB'), shadow: { on: false }, outline: { on: false } } },
-  { id: 'luxury', patch: { type: 'text', font: 'Cinzel', weight: 600, tracking: 14, case: 'upper', decor: 'none', italic: false, fill: grad('#B8860B', '#F5D76E', 90), shadow: { on: true, color: '#000000', opacity: 0.35, blur: 6, x: 0, y: 2 }, outline: { on: false } } },
-  { id: 'playful', patch: { type: 'iconText', font: 'Fredoka', weight: 600, tracking: 0, case: 'none', decor: 'none', italic: false, icon: { name: 'balloon', pos: 'start', scale: 120, gap: 8, color: '#F97316' }, fill: solid('#7C3AED'), shadow: { on: false }, outline: { on: false } } },
-  { id: 'neon', patch: { type: 'text', font: 'Righteous', weight: 400, tracking: 4, case: 'upper', decor: 'none', italic: false, fill: grad('#22D3EE', '#E879F9', 90), shadow: { on: true, color: '#22D3EE', opacity: 0.9, blur: 14, x: 0, y: 0 }, outline: { on: false } } },
-  { id: 'retro', patch: { type: 'text', font: 'Alfa Slab One', weight: 400, tracking: 2, case: 'none', decor: 'none', italic: false, fill: solid('#FACC15'), shadow: { on: true, color: '#7C2D12', opacity: 1, blur: 0, x: 3, y: 3 }, outline: { on: true, color: '#7C2D12', width: 2 } } },
-  { id: 'minimal', patch: { type: 'text', font: 'Inter', weight: 500, tracking: 4, case: 'lower', decor: 'none', italic: false, fill: solid(), shadow: { on: false }, outline: { on: false } } },
-  { id: 'badge', patch: { type: 'monogram', font: 'Poppins', weight: 700, tracking: 0, case: 'upper', decor: 'none', italic: false, mono: { shape: 'squircle', bg: '', fg: '', scale: 150, text: '', withName: true }, fill: solid(), shadow: { on: false }, outline: { on: false } } },
-  { id: 'home', patch: { type: 'iconText', font: 'Lora', weight: 700, tracking: -1, case: 'none', decor: 'none', italic: false, icon: { name: 'home-variant-outline', pos: 'start', scale: 125, gap: 8, color: '' }, fill: solid(), shadow: { on: false }, outline: { on: false } } },
-  { id: 'calligraphy', patch: { type: 'text', font: 'Aref Ruqaa', weight: 700, tracking: 0, case: 'none', decor: 'none', italic: false, fill: grad('#0F766E', '#0EA5E9', 90), shadow: { on: false }, outline: { on: false } } },
-];
-const deepMerge = (a: any, b: any): any => {
-  if (!b || typeof b !== 'object' || Array.isArray(b)) return b;
-  const out = { ...a };
-  for (const k of Object.keys(b)) out[k] = a && typeof a[k] === 'object' && !Array.isArray(a[k]) ? deepMerge(a[k], b[k]) : b[k];
-  return out;
-};
-/** Applies a style over the current logo; the person's words, image and header placement stay. Fonts that cannot draw the name are swapped. */
-export function applyPreset(spec: LogoSpec, preset: Preset): LogoSpec {
-  const merged = deepMerge(spec, preset.patch) as LogoSpec;
-  const keep = { ...merged, name: spec.name, image: spec.image, top: spec.top, bottom: spec.bottom, align: spec.align, app: spec.app, palette: spec.palette };
-  const type = keep.type === 'image' ? spec.type : keep.type;
-  const next = { ...keep, type: spec.type === 'image' && preset.patch.type ? type : keep.type };
-  const word = spec.name + (spec.type === 'monogram' ? monoText(spec) : '');
-  next.font = fontFor(next.font, word);
-  return cleanSpec(next, spec.name);
-}
-
-/* -------------------------------------------------------------- randomise */
+/* -------------------------------------------------------------- randomness */
 export function rng(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 export interface Locks { font: boolean; color: boolean; layout: boolean }
-export function surprise(spec: LogoSpec, seed: number, locks: Locks): LogoSpec {
-  const r = rng(seed);
-  const pickOne = <T,>(list: readonly T[]) => list[Math.floor(r() * list.length)];
-  const next: LogoSpec = JSON.parse(JSON.stringify(spec));
-  const word = spec.name;
-  if (!locks.font) {
-    const pool = FONTS.filter((f) => supportsText(f.family, word) && (spec.type !== 'monogram' || f.cat !== 'script'));
-    const f = pickOne(pool.length ? pool : FONTS);
-    next.font = f.family;
-    const weights = availableWeights(f.family).filter((w) => w >= 400);
-    next.weight = pickOne(weights.length ? weights : availableWeights(f.family));
-    next.case = f.cat === 'script' || /[\u0600-\u06FF]/.test(word) ? 'none' : pickOne(['none', 'none', 'upper', 'lower', 'title'] as const);
-    next.tracking = /[\u0600-\u06FF]/.test(word) ? 0 : f.cat === 'script' ? 0 : next.case === 'upper' ? Math.round(r() * 22) : Math.round(r() * 8 - 4);
-    next.italic = f.italic && f.cat !== 'script' && r() < 0.12;
-  }
-  if (!locks.color) {
-    const palette = pickOne(READY_PALETTES).colors;
-    const harmony = pickOne(['analogous', 'complementary', 'triad', 'split', 'mono'] as const);
-    const base = fromHsl(Math.round(r() * 360), 55 + Math.round(r() * 35), 38 + Math.round(r() * 14));
-    const gen = brandPalette(base, harmony);
-    next.palette = { base, harmony };
-    const c1 = pickOne([...palette.slice(0, 3), gen[0]]), c2 = pickOne(gen.slice(1, 4));
-    next.fill = r() < 0.3 ? { mode: 'gradient', color: c1, color2: c2, angle: pickOne([0, 45, 90, 135]) } : { mode: 'solid', color: r() < 0.25 ? '' : c1, color2: c2, angle: 90 };
-    next.icon.color = r() < 0.4 ? c2 : '';
-    next.mono.bg = pickOne([c1, gen[0], '']);
-    next.shadow = r() < 0.15 ? { on: true, color: c1, opacity: 0.4, blur: 10, x: 0, y: 3 } : { ...next.shadow, on: false };
-    next.outline = { ...next.outline, on: false };
-    next.autoContrast = true;
-  }
-  if (!locks.layout) {
-    next.type = spec.type === 'image' ? 'image' : pickOne(['text', 'iconText', 'iconText', 'monogram'] as const);
-    next.decor = next.type === 'text' ? pickOne(['none', 'none', 'underline'] as const) : 'none';
-    next.icon.name = pickOne([...ICON_NAMES]);
-    next.icon.pos = pickOne(['start', 'start', 'top', 'end'] as const);
-    next.mono.shape = pickOne(['circle', 'squircle', 'square'] as const);
-    next.mono.withName = r() < 0.5;
-  }
-  return cleanSpec(next, spec.name);
-}
 
 /* ------------------------------------------------------------ diff labels */
 /** Groups the leaf changes between two specs into short group ids (translated in the UI). */

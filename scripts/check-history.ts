@@ -1,5 +1,6 @@
 /** Pure-logic checks of the admin undo / redo stack and of the menu geometry (`npm run check:history`). */
 import { createHistory, historyKeyAction, HISTORY_GAP_MS } from '../src/lib/draftHistory';
+import { createSourceLog, registerPopup, popupKeyAction, openPopups } from '../src/lib/popupHistory';
 import { MENU_GEO, activeKey, menuPositions } from '../src/lib/menuLayout';
 
 const fail = (m: string): never => { throw new Error(m); };
@@ -104,6 +105,31 @@ t('active menu entry', () => {
   const items = [{ key: 'dashboard', href: '/admin' }, { key: 'users', href: '/admin/users' }];
   eq(activeKey(items, '/admin'), 'dashboard', 'dashboard'); eq(activeKey(items, '/admin/'), 'dashboard', 'trailing slash');
   eq(activeKey(items, '/admin/users'), 'users', 'users'); eq(activeKey(items, '/admin/unknown'), undefined, 'unknown path has no entry');
+});
+
+
+/* ---------------- popup history ---------------- */
+function fakeSource() {
+  const st = { past: [] as string[], future: [] as string[], now: 'start' };
+  return { st, edit: (v: string) => { st.past.push(st.now); st.now = v; st.future = []; }, src: { canUndo: () => st.past.length > 0, canRedo: () => st.future.length > 0, undo: () => { st.future.push(st.now); st.now = st.past.pop() as string; }, redo: () => { st.past.push(st.now); st.now = st.future.pop() as string; }, breakGroup: () => {} } };
+}
+t('two sources are walked back in the order the edits were made', () => {
+  const a = fakeSource(), b = fakeSource(); let clock = 0;
+  const log = createSourceLog({ a: a.src, b: b.src }, { now: () => clock });
+  clock += 1000; log.note('a'); a.edit('a1'); clock += 1000; log.note('b'); b.edit('b1'); clock += 1000; log.note('a'); a.edit('a2');
+  log.undo(); eq([a.st.now, b.st.now], ['a1', 'b1'], 'undo 1'); log.undo(); eq([a.st.now, b.st.now], ['a1', 'start'], 'undo 2'); log.undo(); eq([a.st.now, b.st.now], ['start', 'start'], 'undo 3');
+  eq([log.canUndo(), log.canRedo()], [false, true], 'flags'); log.redo(); log.redo(); log.redo(); eq([a.st.now, b.st.now], ['a2', 'b1'], 'redo all');
+});
+t('a new edit clears the redo steps; a burst on one source is one step', () => {
+  const a = fakeSource(); let clock = 0; const log = createSourceLog({ a: a.src }, { now: () => clock });
+  clock += 1000; log.note('a'); a.edit('1'); clock += 100; log.note('a'); eq(log.size().past, 1, 'burst'); clock += 1000; log.note('a'); a.edit('2'); log.undo(); log.note('a'); eq(log.size().future, 0, 'redo cleared');
+});
+t('the topmost popup owns the keyboard', () => {
+  let ran = ''; const mk = (n: string, can: boolean) => ({ canUndo: can, canRedo: can, undo() { ran += `u${n}`; }, redo() { ran += `r${n}`; } });
+  eq(popupKeyAction('undo'), false, 'no popup: key is not ours');
+  const off1 = registerPopup(() => mk('1', true)), off2 = registerPopup(() => mk('2', true));
+  eq(openPopups(), 2, 'two open'); popupKeyAction('undo'); eq(ran, 'u2', 'top popup'); off2(); popupKeyAction('redo'); eq(ran, 'u2r1', 'next popup after close'); off1();
+  const off3 = registerPopup(() => mk('3', false)); eq(popupKeyAction('undo'), true, 'consumed even with nothing to undo'); eq(ran, 'u2r1', 'nothing ran'); off3();
 });
 
 console.log(`history checks passed (${n} groups)`);

@@ -1,13 +1,12 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { BackHandler, Platform, View } from 'react-native';
+import { BackHandler, Platform } from 'react-native';
 import { router as expoRouter, useRouter as useExpoRouter, useIsFocused } from 'expo-router';
 import { usePreventRemove, useNavigation } from 'expo-router/react-navigation';
 import { create } from 'zustand';
-import { Button } from '@/components/ui/Button';
-import { Sheet } from '@/components/ui/Sheet';
-import { Txt } from '@/components/ui/Txt';
+import { LeaveDialog } from '@/components/LeaveDialog';
 import i18n, { useT } from '@/i18n';
 import { changes, type Change } from '@/lib/changes';
+import { describeChange, uniqueChanges } from '@/lib/changeLabels';
 import { toast } from '@/store/useToast';
 import { currentPath, parentRoute, TAB_ROOTS } from '@/lib/route';
 
@@ -183,7 +182,7 @@ export function UnsavedChangesHost() {
     window.addEventListener('popstate', capture, true);
     return () => window.removeEventListener('popstate', capture, true);
   }, []);
-  const { t } = useT();
+  const { t, lang } = useT();
   const pending = dialog((s) => s.pending);
   const [busy, setBusy] = useState(false);
   const resolve = async (save: boolean) => {
@@ -202,32 +201,8 @@ export function UnsavedChangesHost() {
     finally { setBusy(false); }
   };
   if (!pending) return null;
-  return <Sheet visible={!!pending} history={false} onClose={() => { if (!busy) dialog.setState({ pending: null }); }} title={t('leaveConfirm.title')}>
-    <Txt testID="unsaved-message" className="font-bold text-[17px] mb-4">{t('leaveConfirm.message')}</Txt>
-    <View testID="unsaved-differences" className="gap-3 mb-4">
-      {[...new Map([...guards.values()].flatMap(guard => guard.changes?.() ?? []).map(change => [JSON.stringify([change.path, change.before, change.after]), change])).values()].map((change, index) => {
-        const label = change.label ?? change.path.split('.').map(key => {
-          const settingKeys: Record<string, string> = { frenchFont: 'improve.frenchFont', arabicFont: 'improve.arabicFont', galleryLayout: 'improve.galleryLayout', appSearchEnabled: 'improve.appSearch', adminSearchEnabled: 'improve.adminSearch', exitConfirmationEnabled: 'improve.exitEnabled', autoTranslate: 'improve.autoTranslate', userNavStyle: 'admin.iface.userNav', adminMenuDesign: 'mx.design.title', adminMenuAnim: 'mx.anim.title', defaultFreeCredits: 'admin.credits.defaultCredits' };
-          const translation = settingKeys[key] ?? ['admin.f.', 'improve.', 'admin.nav.'].map(prefix => prefix + key).find(candidate => i18n.exists(candidate));
-          return translation ? t(translation) : key;
-        }).join(' · ');
-        const value = (input: unknown) => {
-          if (change.secret) return t('improve.protectedValue');
-          if (input == null || input === '') return t('improve.emptyValue');
-          if (typeof input === 'boolean') return t(input ? 'improve.yes' : 'improve.no');
-          return String(input);
-        };
-        return <View key={index} className="border border-line rounded-xl p-3 gap-1">
-          <Txt className="font-bold text-[13px]">{label}{change.label && change.path.includes('.') ? ` · ${change.path.split('.').slice(1).join(' · ')}` : ''}</Txt>
-          <Txt testID={`change-old-${index}`} className="text-muted text-[13px]">{t('improve.oldValue')}: {value(change.before)}</Txt>
-          <Txt testID={`change-new-${index}`} className="text-[13px]">{t('improve.newValue')}: {value(change.after)}</Txt>
-        </View>;
-      })}
-    </View>
-    <View className="gap-2">
-      {[...guards.values()].some(guard => guard.changes?.().length) ? <Button testID="unsaved-save" title={t('improve.saveChanges')} loading={busy} onPress={() => resolve(true)} /> : null}
-      <Button testID="unsaved-discard" title={t('leaveConfirm.yes')} variant="soft" disabled={busy} onPress={() => resolve(false)} />
-      <Button testID="unsaved-cancel" title={t('leaveConfirm.no')} variant="ghost" disabled={busy} onPress={() => dialog.setState({ pending: null })} />
-    </View>
-  </Sheet>;
+  const list = uniqueChanges([...guards.values()].flatMap((guard) => guard.changes?.() ?? []));
+  const ctx = { lang, t: (k: string, o?: Record<string, unknown>) => String(t(k, o as never)), has: (k: string) => i18n.exists(k) };
+  return <LeaveDialog visible={!!pending} changes={list.map((c) => describeChange(c, ctx))} canSave={list.length > 0} busy={busy}
+    onSave={() => resolve(true)} onDiscard={() => resolve(false)} onStay={() => { if (!busy) dialog.setState({ pending: null }); }} />;
 }

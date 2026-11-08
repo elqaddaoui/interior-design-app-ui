@@ -2,7 +2,7 @@
 """
 Generates src/lib/brand/iconPaths.ts: SVG path data (24x24 grid) for the icons of the Branding studio.
  - UI_ICONS   : the editor's own interface icons (inline SVG, no icon font needed)
- - LOGO_ICONS : a curated set the admin can put in a logo (searchable, grouped); drawn into the exported SVG / PNG
+ - LOGO_ICONS : a curated interior-design set (furniture, lighting, rooms, architecture, decor), one outline style and stroke weight; drawn into the exported SVG / PNG
 Glyph outlines come from the official MaterialCommunityIcons font already shipped by @expo/vector-icons (Apache-2.0 / Pictogrammers),
 converted with the same 512 -> 24 unit mapping the MDI project uses. Run again after editing the lists:
     python3 scripts/gen-brand-icons.py        (needs: pip install fonttools; npm dependencies installed)
@@ -19,23 +19,18 @@ font = TTFont(f'{BASE}/Fonts/MaterialCommunityIcons.ttf')
 cmap = font.getBestCmap(); gs = font.getGlyphSet()
 K = 24 / 512  # font units -> 24 grid
 
+# Interior-design set only. Every glyph is an outline drawn with the same ~2 px stroke on the 24 grid
+# (measured: stroke 1.95-2.15, fill ratio < 0.66), so any of them pairs with any logo layout / font weight.
+# Heavy or solid glyphs (blinds, wall, fireplace, stairs, bookshelf, rug, door-open, garage...) are deliberately left out.
 LOGO = {
-  'home': ['home-variant-outline', 'home-roof', 'home-city-outline', 'home-heart', 'sofa-outline', 'sofa', 'bed-king-outline', 'lamp', 'floor-plan', 'door-open', 'wardrobe-outline',
-           'chair-rolling', 'table-furniture', 'palette-outline', 'brush', 'ruler', 'hammer-wrench', 'format-paint', 'window-closed-variant', 'office-building-outline', 'garage',
-           'stairs', 'fridge-outline', 'toilet', 'shower', 'ceiling-light-outline', 'floor-lamp-outline', 'texture-box', 'vector-square', 'cube-scan'],
-  'nature': ['leaf', 'flower-tulip-outline', 'flower-outline', 'pine-tree', 'tree-outline', 'sprout-outline', 'cactus', 'white-balance-sunny', 'weather-night', 'moon-waning-crescent',
-             'water-outline', 'fire', 'snowflake', 'image-filter-hdr-outline', 'waves', 'paw', 'butterfly-outline', 'bird', 'fish', 'clover', 'feather', 'weather-sunset', 'palm-tree', 'cloud-outline'],
-  'business': ['rocket-launch-outline', 'lightning-bolt', 'shield-check-outline', 'cube-outline', 'atom', 'code-tags', 'chart-line', 'briefcase-outline', 'lightbulb-on-outline', 'cog-outline',
-               'diamond-stone', 'crown-outline', 'trophy-outline', 'star-outline', 'heart-outline', 'hexagon-outline', 'triangle-outline', 'infinity', 'target', 'handshake-outline',
-               'bank-outline', 'wallet-outline', 'shopping-outline', 'store-outline', 'bullhorn-outline', 'puzzle-outline', 'key-outline', 'lock-outline', 'check-decagram-outline', 'medal-outline'],
-  'tech': ['cellphone', 'laptop', 'monitor', 'robot-outline', 'chip', 'database-outline', 'cloud-upload-outline', 'wifi', 'bluetooth', 'usb', 'console', 'gamepad-variant-outline', 'headphones',
-           'radar', 'satellite-variant', 'rocket-outline', 'qrcode', 'brain', 'magnify', 'power'],
-  'life': ['coffee-outline', 'silverware-fork-knife', 'cupcake', 'glass-cocktail', 'pizza', 'food-apple-outline', 'baguette', 'cookie-outline', 'ice-cream', 'tea-outline', 'bottle-wine-outline',
-           'chef-hat', 'shopping-outline', 'tshirt-crew-outline', 'hanger', 'ring', 'gift-outline', 'balloon', 'party-popper', 'baby-face-outline'],
-  'travel': ['airplane', 'compass-outline', 'map-marker-outline', 'earth', 'anchor', 'sail-boat', 'car-outline', 'bike', 'train', 'bus', 'tent', 'beach', 'bag-suitcase-outline', 'camera-outline', 'binoculars', 'map-outline'],
-  'health': ['heart-pulse', 'dumbbell', 'yoga', 'medical-bag', 'tooth-outline', 'pill', 'meditation', 'run', 'stethoscope', 'hospital-box-outline', 'spa-outline', 'flask-outline'],
-  'creative': ['music-note', 'movie-open-outline', 'microphone-outline', 'pencil-outline', 'book-open-variant', 'school-outline', 'theater', 'guitar-acoustic', 'camera-iris', 'draw', 'shape-outline',
-               'star-four-points-outline', 'creation', 'emoticon-happy-outline', 'flare', 'hexagram-outline', 'shimmer', 'vanish', 'crystal-ball', 'butterfly'],
+  'furniture': ['sofa-outline', 'sofa-single-outline', 'bed-king-outline', 'bed-double-outline', 'bed-single-outline', 'wardrobe-outline', 'dresser-outline',
+                'cupboard-outline', 'stool-outline', 'chair-rolling', 'bench-back', 'mirror-rectangle'],
+  'lighting': ['lamp-outline', 'floor-lamp-outline', 'floor-lamp-dual-outline', 'floor-lamp-torchiere-outline', 'ceiling-light-outline', 'ceiling-light-multiple-outline',
+               'wall-sconce-outline', 'wall-sconce-round-outline', 'desk-lamp', 'globe-light-outline', 'lamps-outline', 'lightbulb-variant-outline'],
+  'rooms': ['bathtub-outline', 'shower', 'door-closed', 'door-sliding', 'window-closed-variant', 'window-open-variant'],
+  'architecture': ['home-variant-outline', 'home-outline', 'home-city-outline', 'home-circle-outline', 'office-building-outline', 'city-variant-outline', 'floor-plan', 'greenhouse',
+                   'pencil-ruler-outline', 'ruler-square', 'compass-outline', 'cube-outline'],
+  'decor': ['flower-tulip-outline', 'tree-outline', 'image-frame', 'wallpaper', 'palette-outline', 'palette-swatch-outline', 'hanger', 'ceiling-fan', 'brush-outline', 'pine-tree-variant-outline'],
 }
 
 def path(name):

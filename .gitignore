@@ -57,3 +57,7 @@ server/.env.*
 !server/.env.example
 google-services.json
 GoogleService-Info.plist
+
+# crash dumps
+core
+core.[0-9]*

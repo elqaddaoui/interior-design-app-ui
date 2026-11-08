@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { usePopupHistory } from '@/hooks/usePopupHistory';
+import { PopupHistoryButtons } from '@/components/admin/PopupHistoryButtons';
 import { Pressable, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -233,6 +235,7 @@ export function Automations({ api: au }: { api: AutomationsApi }) {
   const [editing, setEditing] = useState<{ item: Automation; isNew: boolean } | null>(null);
   const [tried, setTried] = useState(false);
   const [del, setDel] = useState<Automation | null>(null);
+  const hist = usePopupHistory<Automation | null>(editing?.item ?? null, (item) => { if (item) setEditing((e) => (e ? { ...e, item } : e)); }, { active: !!editing, resetKey: editing?.item.id });
   const ids = list.map((a) => a.id);
   const reorder = useReorder(ids, [], (moving, to) => setList((l) => dropAutomation(l, moving, to)), list.length > 1);
   if (failed && !info) return <Card className="p-4 items-center gap-3"><Txt testID="asx-a-error" className="text-danger">{t('asx.loadFail')}</Txt><Button size="sm" title={t('asx.retry')} onPress={() => load()} /></Card>;
@@ -297,7 +300,7 @@ export function Automations({ api: au }: { api: AutomationsApi }) {
 
       <TestBox idPrefix="asx-all" />
 
-      <Sheet visible={!!editing} onClose={() => setEditing(null)} wide title={editing ? t(editing.isNew ? 'asx.a.newTitle' : 'asx.a.editTitle') : ''}
+      <Sheet visible={!!editing} onClose={() => setEditing(null)} wide title={editing ? t(editing.isNew ? 'asx.a.newTitle' : 'asx.a.editTitle') : ''} headerRight={editing ? <PopupHistoryButtons api={hist} prefix="asx" /> : undefined}
         footer={editing ? <View className="flex-row gap-2 justify-end"><Button testID="asx-editor-close" variant="ghost" title={t('asx.a.close')} onPress={() => setEditing(null)} /><Button testID="asx-editor-save" icon="check" title={t('asx.a.saveItem')} onPress={commit} /></View> : undefined}>
         {editing ? <Editor key={editing.item.id} value={editing.item} reveal={tried} onChange={(item) => setEditing({ ...editing, item })} /> : null}
       </Sheet>

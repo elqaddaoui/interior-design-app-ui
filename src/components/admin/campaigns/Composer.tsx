@@ -1,5 +1,7 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
+import { usePopupHistory } from '@/hooks/usePopupHistory';
+import { PopupHistoryButtons } from '@/components/admin/PopupHistoryButtons';
 import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
 import { Input } from '@/components/ui/Field';
@@ -100,6 +102,14 @@ export function Composer({ visible, onClose, mode, campaign }: { visible: boolea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, campaign?.id]);
 
+  // Undo / redo: every editable field travels as ONE snapshot (header buttons + Ctrl+Z / Ctrl+Y while this popup is on top).
+  const form = { name, title, body, url, segments, clientIds, newDays, inactiveDays, when, date, time, freq, days, dayOfMonth, endDate, event, delayMinutes, afterDays, cooldownDays, includeExisting, quiet, quietFrom, quietTo };
+  const hist = usePopupHistory(form, (f) => {
+    setName(f.name); setTitle(f.title); setBody(f.body); setUrl(f.url); setSegments(f.segments); setClientIds(f.clientIds); setNewDays(f.newDays); setInactiveDays(f.inactiveDays);
+    setWhen(f.when); setDate(f.date); setTime(f.time); setFreq(f.freq); setDays(f.days); setDayOfMonth(f.dayOfMonth); setEndDate(f.endDate); setEvent(f.event);
+    setDelayMinutes(f.delayMinutes); setAfterDays(f.afterDays); setCooldownDays(f.cooldownDays); setIncludeExisting(f.includeExisting); setQuiet(f.quiet); setQuietFrom(f.quietFrom); setQuietTo(f.quietTo);
+  }, { active: visible, resetKey: campaign?.id ?? 'new' });
+
   // Segment sizes (also react to the "new / inactive" thresholds).
   React.useEffect(() => {
     if (!visible || auto) return;
@@ -181,7 +191,7 @@ export function Composer({ visible, onClose, mode, campaign }: { visible: boolea
   );
 
   return (
-    <Sheet visible={visible} onClose={onClose} title={heading} wide footer={footer}>
+    <Sheet visible={visible} onClose={onClose} title={heading} wide footer={footer} headerRight={visible && !locked ? <PopupHistoryButtons api={hist} prefix="camp" /> : undefined}>
       {locked ? <View className="flex-row items-center gap-2 bg-surface2 rounded-xl p-3 mb-4"><Icon name="lock-outline" size={18} tone="muted" /><Txt className="flex-1 text-[13px]">{t('camp.locked')}</Txt></View> : null}
       <View pointerEvents={locked ? 'none' : 'auto'} style={{ opacity: locked ? 0.55 : 1 }}>
         <Section title={t('camp.name')} hint={t('camp.nameHint')}>

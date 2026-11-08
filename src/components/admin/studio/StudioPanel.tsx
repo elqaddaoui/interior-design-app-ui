@@ -8,7 +8,7 @@ import { ColorPicker } from '@/components/admin/ColorPicker';
 import { Shape } from '@/components/toolcard/PieceShape';
 import { useT } from '@/i18n';
 import { useTheme } from '@/theme/ThemeProvider';
-import { FX, FX_FADE, TIERS, TIER_ORDER } from '@/lib/toolCardFx';
+import { FX, FX_FADE } from '@/lib/toolCardFx';
 import {
   DEFAULT_STUDIO, EASE_ID, EASE_KEYS, LIBRARY, LIB_CATS, PIECE_MOTIONS, PIECE_SHAPES, PRESETS, cloneStudio, exportStudio, gradPoints, importStudio, mergeStudio, randomStudio, studioKey,
   type EaseKey, type LibCat, type Paint, type StudioStyle,
@@ -17,6 +17,7 @@ import type { SavedPreset } from '@/data/types';
 import { toast } from '@/store/useToast';
 import { CurvePreview } from './CurvePreview';
 import { Chips, Group, Line, Sld, Sw } from './ui';
+import { MainTab } from './MainTab';
 
 export type StudioTab = 'main' | 'motion' | 'bar' | 'els' | 'color' | 'looks';
 export const TABS: { key: StudioTab; icon: string }[] = [
@@ -79,28 +80,7 @@ export function StudioPanel({ tab, style, onChange, onReplace, effect, onEffect,
   const m = style.motion, b = style.bar, e = style.els, ti = style.tint;
   const def = FX[effect] ?? FX[FX_FADE];
 
-  const fxChip = (id: number) => ({ key: id, label: `${id} · ${t(`tc.fx.${id}`)}` });
-
-  if (tab === 'main') return (
-    <View>
-      <Group title={t('st.previewFx')} note={t('st.sameAllNote')}>
-        <Sw testID="st-force" label={t('st.sameAll')} value={style.force > 0} onChange={(on) => onChange({ force: on ? effect : 0 })} />
-        <Chips testID="st-fx" value={effect} options={[fxChip(FX_FADE)]} onChange={(id) => { onEffect(id); if (style.force > 0) onChange({ force: id }); }} />
-        {TIER_ORDER.map((tier) => (
-          <View key={tier} style={{ gap: 6 }}>
-            <Txt className="text-muted text-[12px] font-bold">{t(`tc.tier.${tier}`)}</Txt>
-            <Chips testID={`st-fx-${tier}`} value={effect} options={TIERS[tier].map(fxChip)} onChange={(id) => { onEffect(id); if (style.force > 0) onChange({ force: id }); }} />
-          </View>
-        ))}
-      </Group>
-      <Group title={t('st.accent')}>
-        <OptColor label={t('st.accent')} autoLabel={t('st.accentAuto')} value={style.accent} fallback="#FBDD2D" onChange={(accent) => onChange({ accent })} />
-        <Sld testID="st-seed" label={t('st.seed')} value={style.seed} min={1} max={200} step={1} onChange={(seed) => onChange({ seed })} />
-        <Pressable testID="st-seed-dice" accessibilityRole="button" accessibilityLabel={t('st.surprise')} onPress={() => onChange({ seed: 1 + Math.floor(Math.random() * 9000) })} className="self-start flex-row items-center gap-2 px-3 h-9 rounded-full bg-surface2"><Icon name="dice-multiple-outline" size={18} /><Txt className="text-[13px] font-bold">{t('st.seed')}</Txt></Pressable>
-        <Txt className="text-muted text-[12px]">{t('st.seedNote')} {t('st.speedNote')}</Txt>
-      </Group>
-    </View>
-  );
+  if (tab === 'main') return <MainTab style={style} effect={effect} onEffect={onEffect} onChange={onChange} />;
 
   if (tab === 'motion') {
     const kind = style.ease === 'auto' ? FX_EASE[def.ease] ?? 0 : EASE_ID[style.ease];

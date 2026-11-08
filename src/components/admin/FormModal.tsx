@@ -19,6 +19,8 @@ import { toast } from '@/store/useToast';
 import { translateLines, translationsIdle, usePendingTranslations } from '@/lib/autoTranslate';
 import { mediaUploadsEnabled, pickAndUploadVideo, uploadsIdle, usePendingUploads } from '@/lib/media';
 import { requestLeave, useLeaveGuard } from '@/hooks/useLeaveGuard';
+import { PopupHistoryContext, usePopupHistory } from '@/hooks/usePopupHistory';
+import { PopupHistoryButtons } from './PopupHistoryButtons';
 import { PartialSaveError } from '@/hooks/useReveal';
 import type { LText } from '@/data/types';
 
@@ -233,6 +235,8 @@ function FormDialog({ visible, title, fields, initial, onClose, onSubmit, onDraf
   const ctx: Ctx = { s, L, t };
   const latest = useRef(v);
   useEffect(() => { latest.current = v; });
+  // Undo / redo of the form's own edits (header buttons + Ctrl+Z / Ctrl+Y while this popup is the top one).
+  const hist = usePopupHistory<any>(v, (old) => { latest.current = old; setV(old); }, { active: visible });
   const submit = async () => {
     setBusy(true);
     // A picture or video still travelling would be saved as an empty field: wait for it, then save the finished form.
@@ -252,7 +256,7 @@ function FormDialog({ visible, title, fields, initial, onClose, onSubmit, onDraf
   useEffect(() => { if (visible) onDraftChange?.(v); }, [v, visible, onDraftChange]);
   const close = () => { if (!busy) requestLeave(onClose); };
   return (
-    <Sheet visible={visible} onClose={close} title={title} wide footer={<View className="flex-row gap-2.5">
+    <Sheet visible={visible} onClose={close} title={title} wide headerRight={visible ? <PopupHistoryButtons api={hist} prefix="form" /> : undefined} footer={<View className="flex-row gap-2.5">
       <Button title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" />
       <Button testID="form-save" title={t('improve.submit')} onPress={submit} loading={busy || uploading} className="flex-1" />
     </View>}>
@@ -266,7 +270,9 @@ function FormDialog({ visible, title, fields, initial, onClose, onSubmit, onDraf
         </View>
         {langKeys.length ? <LangDots all states={mergeStates(langKeys.map((key) => v[key]))} /> : null}
       </View> : null}
-      <FormFields fields={visible ? fields : []} value={v} errors={err} ctx={ctx} onChange={(key, value) => setV((old: any) => ({ ...old, [key]: value }))} />
+      <PopupHistoryContext.Provider value={hist}>
+        <FormFields fields={visible ? fields : []} value={v} errors={err} ctx={ctx} onChange={(key, value) => setV((old: any) => ({ ...old, [key]: value }))} />
+      </PopupHistoryContext.Provider>
     </Sheet>
   );
 }
