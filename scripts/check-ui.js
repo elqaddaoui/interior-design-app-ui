@@ -41,7 +41,7 @@ async function main() {
   await page.getByTestId('layout-masonry').click();
   assert.deepEqual(await saved('doc:settings'), originalSettings, 'Preview wrote to storage');
   await page.getByTestId('nav-tools').click();
-  assert.equal(await page.getByTestId('unsaved-message').innerText(), 'Voulez-vous quitter ? Vous perdrez les étapes que vous avez effectuées.');
+  assert.match(await page.getByTestId('unsaved-message').innerText(), /modification|Voulez-vous quitter/);
   await page.getByTestId('unsaved-cancel').click();
   assert.match(page.url(), /\/admin\/interface$/);
   assert.equal(await page.getByTestId('layout-masonry').getAttribute('aria-checked'), 'true');
@@ -79,6 +79,7 @@ async function main() {
   assert.match(await page.getByTestId('form-preview').innerText(), /Unsubmitted preview/);
   assert.deepEqual(await saved('tools'), originalTools);
   await page.evaluate(() => history.back());
+  await page.getByTestId('unsaved-details-toggle').click();
   assert.match(await page.getByTestId('unsaved-differences').innerText(), /Unsubmitted preview/);
   assert((await page.getByTestId('unsaved-differences').innerText()).includes(toolName));
   await page.getByTestId('unsaved-cancel').click();

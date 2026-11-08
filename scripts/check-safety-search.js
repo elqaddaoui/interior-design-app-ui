@@ -73,6 +73,9 @@ async function main() {
     const newValue = `${oldValue} 123`;
     await page.getByTestId(`lt-title-${lang}`).fill(newValue);
     await page.getByTestId('sheet-close').click();
+    await page.getByTestId('unsaved-dialog').waitFor();
+    assert.equal(await page.getByTestId('unsaved-differences').count(), 0, 'details start collapsed');
+    await page.getByTestId('unsaved-details-toggle').click();
     await page.getByTestId('unsaved-differences').waitFor();
     assert((await page.getByTestId('change-old-0').innerText()).includes(oldValue));
     assert((await page.getByTestId('change-new-0').innerText()).includes(newValue));

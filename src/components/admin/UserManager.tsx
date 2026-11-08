@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from 'react';
+import { usePopupHistory } from '@/hooks/usePopupHistory';
+import { PopupHistoryButtons } from '@/components/admin/PopupHistoryButtons';
 import { Pressable, ScrollView, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -233,8 +235,9 @@ function EditUser({ user, busy, onClose, onSave, onDelete }: { user: AppUser | n
   const step = (d: number) => setCredits(String(Math.min(MAX_CREDITS, Math.max(0, amount + d))));
   const dirty = !!user && (amount !== user.credits || blocked !== !!user.blocked);
   const locked = !!user && isProtected(user);
+  const hist = usePopupHistory({ credits, blocked }, (f) => { setCredits(f.credits); setBlocked(f.blocked); }, { active: !!user, resetKey: user?.id });
   return (
-    <Sheet visible={!!user} onClose={onClose} title={t('admin.um.editUser')}
+    <Sheet visible={!!user} onClose={onClose} title={t('admin.um.editUser')} headerRight={user && !locked ? <PopupHistoryButtons api={hist} prefix="um-edit" /> : undefined}
       footer={user ? <View className="flex-row gap-2.5"><Button testID="um-edit-cancel" variant="soft" className="flex-1" title={t('common.cancel')} onPress={onClose} /><Button testID="um-edit-save" className="flex-1" title={t('common.save')} disabled={!dirty} loading={busy} onPress={() => onSave(user, { credits: amount, blocked })} /></View> : undefined}>
       {user ? (
         <View>
@@ -269,8 +272,9 @@ function BulkCredits({ visible, users, busy, onClose, onApply }: { visible: bool
   const amount = parseInt(value || '0', 10) || 0;
   const quick = mode === 'set' ? [0, 1, 3, 5, 10] : [1, 3, 5, 10, 20];
   const sample = users.slice(0, 3);
+  const hist = usePopupHistory({ mode, value }, (f) => { setMode(f.mode); setValue(f.value); }, { active: visible });
   return (
-    <Sheet visible={visible} onClose={onClose} title={`${t('admin.um.editCredits')} · ${users.length}`}
+    <Sheet visible={visible} onClose={onClose} title={`${t('admin.um.editCredits')} · ${users.length}`} headerRight={visible ? <PopupHistoryButtons api={hist} prefix="um-credits" /> : undefined}
       footer={<View className="flex-row gap-2.5"><Button testID="um-credits-cancel" variant="soft" className="flex-1" title={t('common.cancel')} onPress={onClose} /><Button testID="um-credits-apply" className="flex-1" title={t('admin.um.apply', { count: users.length })} loading={busy} disabled={!users.length || (mode !== 'set' && amount === 0)} onPress={() => onApply(mode, amount)} /></View>}>
       <Segmented compact testID="um-mode" value={mode} onChange={setMode} options={[{ key: 'add', label: t('admin.um.modeAdd') }, { key: 'subtract', label: t('admin.um.modeSubtract') }, { key: 'set', label: t('admin.um.modeSet') }]} />
       <View className="mt-3"><Input testID="um-amount" label={t('admin.credits.amount')} value={value} onChangeText={(v) => setValue(digits(v))} keyboardType="number-pad" /></View>

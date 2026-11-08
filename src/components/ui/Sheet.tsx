@@ -14,7 +14,7 @@ function NativeOverlayBoundary({ visible, onClose }: { visible: boolean; onClose
 }
 
 /** Bottom sheet on phones, centred dialog on larger screens. Re-applies theme vars (needed for web portals). */
-export function Sheet({ visible, onClose, title, children, wide, footer, history = true, onBack }: { visible: boolean; onClose: () => void; title?: string; children: React.ReactNode; wide?: boolean; footer?: React.ReactNode; history?: boolean; onBack?: () => void }) {
+export function Sheet({ visible, onClose, title, children, wide, footer, history = true, onBack, headerRight }: { visible: boolean; onClose: () => void; title?: string; children: React.ReactNode; wide?: boolean; footer?: React.ReactNode; history?: boolean; onBack?: () => void; headerRight?: React.ReactNode }) {
   useBackCheckpoint(visible && history, onClose, 1);
   const insets = useSafeAreaInsets();
   const { style } = useTheme();
@@ -35,6 +35,7 @@ export function Sheet({ visible, onClose, title, children, wide, footer, history
                 <View testID="sheet-header" style={{ flexShrink: 0 }} className="flex-row items-center justify-between px-4 py-2.5 border-b border-line gap-3">
                   {onBack ? <Pressable accessibilityRole="button" accessibilityLabel={t('improve.back')} testID="sheet-back" onPress={onBack} hitSlop={8} className="w-8 h-8 rounded-full bg-surface2 items-center justify-center"><Icon name="chevron-left" size={20} flip /></Pressable> : null}
                   <Txt className="text-[16px] leading-[22px] font-extrabold flex-1" numberOfLines={2}>{title}</Txt>
+                  {headerRight}
                   <Pressable accessibilityRole="button" accessibilityLabel={t('common.close')} testID="sheet-close" onPress={onClose} hitSlop={8} className="w-8 h-8 rounded-full bg-surface2 items-center justify-center"><Icon name="close" size={18} /></Pressable>
                 </View>
               ) : null}

@@ -1,14 +1,17 @@
  
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { Icon } from '@/components/ui/Icon';
 import { Input } from '@/components/ui/Field';
 import { Txt } from '@/components/ui/Txt';
 import { useT } from '@/i18n';
+import { useTheme } from '@/theme/ThemeProvider';
 import { availableWeights, fontMeta } from '@/lib/brand/fontData';
 import { fontStyle, useFontRevision } from '@/lib/brand/fonts';
 import { needsJoined } from '@/lib/brand/script';
-import { LIMITS, PRESETS, applyPreset, type Issue, type Line, type LogoSpec, type LogoType } from '@/lib/brand/spec';
+import { LIMITS, sameSpec, type Issue, type Line, type LogoSpec, type LogoType } from '@/lib/brand/spec';
+import { PRESETS, applyPreset, swatchesOf } from '@/lib/brand/design';
+import type { Tone } from '@/lib/brand/palette';
 import { ColorField } from './ColorField';
 import { FontPicker, GlyphIcon, IconPicker } from './Pickers';
 import { ImagePanel } from './ImagePanel';
@@ -18,7 +21,7 @@ import { iconPath } from '@/lib/brand/icons';
 
 export type Up = (fn: (s: LogoSpec) => LogoSpec, key?: string) => void;
 export interface Locks { font: boolean; color: boolean; layout: boolean }
-interface Props { spec: LogoSpec; up: Up; issues: Issue[]; locks: Locks; setLocks: (l: Locks) => void; onSurprise: () => void; accent: string }
+interface Props { spec: LogoSpec; up: Up; issues: Issue[]; locks: Locks; setLocks: (l: Locks) => void; onSurprise: () => void; accent: string; tone: Tone | null; matchApp: boolean; setMatchApp: (v: boolean) => void }
 
 const msg = (t: (k: string, o?: any) => string, i?: Issue) => (i ? t(`br.issue.${i.key}`, i.params) : undefined);
 const WEIGHT_NAMES: Record<number, string> = { 100: 'Thin', 200: 'XLight', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semi', 700: 'Bold', 800: 'XBold', 900: 'Black', 1000: 'Ultra' };
@@ -36,8 +39,42 @@ function FontButton({ family, weight, italic, text, onPress, testID, label }: { 
   );
 }
 
-/** Style gallery: every preset drawn with the person's own name, plus Surprise me (with lock toggles). */
-function Styles({ spec, up, locks, setLocks, onSurprise, accent }: Props) {
+/** A switch drawn as a pill with an icon: the colour source of Surprise me and of the demos (the running app, or neutral interior colours). */
+function MatchApp({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  const { t } = useT();
+  return (
+    <Pressable testID="match-app" accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={t('br.matchApp')} onPress={() => onChange(!on)}
+      className={`flex-row items-center gap-2 h-10 pl-3 pr-3.5 rounded-full border active:opacity-80 ${on ? 'border-primary bg-soft' : 'border-line bg-surface'}`}>
+      <Icon name={on ? 'palette' : 'palette-outline'} size={18} tone={on ? 'primary' : 'muted'} />
+      <Txt className="text-[12.5px] font-bold" numberOfLines={1}>{t('br.matchApp')}</Txt>
+      <View className={`w-2.5 h-2.5 rounded-full ${on ? 'bg-primary' : 'bg-line'}`} />
+    </Pressable>
+  );
+}
+
+/** One demo: the person's own name drawn in a concept on the app's background, with its colour dots. Exactly what a click applies. */
+function DemoTile({ id, s, on, tone, accent, onPress }: { id: string; s: LogoSpec; on: boolean; tone: Tone | null; accent: string; onPress: () => void }) {
+  const { t } = useT();
+  const { colors, dark } = useTheme();
+  const bg = tone ? tone.bg : dark ? colors.surface2 : colors.bg;
+  const dots = swatchesOf(s, tone);
+  return (
+    <Pressable testID={`preset-${id}`} accessibilityRole="button" accessibilityState={{ selected: on }} accessibilityLabel={t(`br.preset.${id}`)} onPress={onPress}
+      className={`rounded-2xl border overflow-hidden active:opacity-80 ${on ? 'border-primary' : 'border-line'}`} style={{ flexBasis: '47%', flexGrow: 1, minWidth: 136, borderWidth: on ? 2 : 1 }}>
+      <View style={{ backgroundColor: bg, height: 84, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 }}>
+        <LogoView spec={{ ...s, top: { ...s.top, on: false }, bottom: { ...s.bottom, on: false } }} mode={tone ? (tone.dark ? 'dark' : 'light') : dark ? 'dark' : 'light'} accent={accent} bg={bg} fg={tone ? tone.fg : colors.fg} maxW={128} maxH={52} />
+      </View>
+      <View className="flex-row items-center gap-1.5 px-2.5 bg-surface" style={{ height: 30 }}>
+        <Txt className="text-[11px] font-bold flex-1" numberOfLines={1}>{t(`br.preset.${id}`)}</Txt>
+        {dots.map((c) => <View key={c} style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: c, borderWidth: 1, borderColor: colors.line }} />)}
+        {on ? <Icon name="check-circle" size={15} tone="primary" /> : null}
+      </View>
+    </Pressable>
+  );
+}
+
+/** Style gallery: one demo per design concept, drawn with the person's own name on the app's colours, plus Surprise me (with lock toggles). */
+function Styles({ spec, up, locks, setLocks, onSurprise, accent, tone, matchApp, setMatchApp }: Props) {
   const { t } = useT();
   const lock = (k: keyof Locks, icon: string) => (
     <Pressable key={k} testID={`lock-${k}`} accessibilityRole="switch" accessibilityState={{ checked: locks[k] }} accessibilityLabel={t(`br.lock.${k}`)} onPress={() => setLocks({ ...locks, [k]: !locks[k] })}
@@ -45,22 +82,16 @@ function Styles({ spec, up, locks, setLocks, onSurprise, accent }: Props) {
       <Icon name={locks[k] ? 'lock' : 'lock-open-variant-outline'} size={14} tone={locks[k] ? 'primary' : 'muted'} /><Txt className="text-[11px] font-bold">{t(`br.lock.${k}`)}</Txt>
     </Pressable>
   );
+  const demos = useMemo(() => PRESETS.map((p) => ({ id: p.id, s: applyPreset(spec, p, tone) })), [spec, tone]);
   return (
     <Panel id="styles" icon="shimmer" title={t('br.styles')} hint={t('br.stylesHint')}>
-      <View className="flex-row flex-wrap items-center gap-2 mb-3">
+      <View className="flex-row flex-wrap items-center gap-2 mb-2.5">
         <Pressable testID="surprise" accessibilityRole="button" onPress={onSurprise} className="flex-row items-center gap-1.5 h-10 px-4 rounded-full bg-primary active:opacity-80"><Icon name="dice-multiple-outline" size={18} tone="onprimary" /><Txt className="font-extrabold text-onprimary text-[13px]">{t('br.surprise')}</Txt></Pressable>
-        {lock('font', 'format-font')}{lock('color', 'palette')}{lock('layout', 'view-dashboard')}
+        <MatchApp on={matchApp} onChange={setMatchApp} />
       </View>
-      <View className="flex-row flex-wrap gap-2">
-        {PRESETS.map((p) => {
-          const s = applyPreset(spec, p);
-          return (
-            <Pressable key={p.id} testID={`preset-${p.id}`} accessibilityRole="button" accessibilityLabel={t(`br.preset.${p.id}`)} onPress={() => up(() => s)} className="rounded-xl border border-line bg-bg items-center justify-center active:opacity-80 overflow-hidden" style={{ flexBasis: '31%', flexGrow: 1, minWidth: 96, height: 76, paddingHorizontal: 4 }}>
-              <LogoView spec={{ ...s, top: { ...s.top, on: false }, bottom: { ...s.bottom, on: false } }} mode="light" accent={accent} maxW={92} maxH={40} />
-              <Txt className="text-[10px] text-muted font-bold mt-1" numberOfLines={1}>{t(`br.preset.${p.id}`)}</Txt>
-            </Pressable>
-          );
-        })}
+      <View className="flex-row flex-wrap items-center gap-1.5 mb-3">{lock('font', 'format-font')}{lock('color', 'palette')}{lock('layout', 'view-dashboard')}</View>
+      <View testID="demo-grid" className="flex-row flex-wrap gap-2.5">
+        {demos.map((d) => <DemoTile key={d.id} id={d.id} s={d.s} on={sameSpec(d.s, spec)} tone={tone} accent={accent} onPress={() => up(() => d.s)} />)}
       </View>
     </Panel>
   );

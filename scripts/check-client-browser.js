@@ -15,6 +15,11 @@ for (const lang of languages) for (const group of ['leaveConfirm', 'account']) {
   assert.deepEqual(Object.keys(dictionaries[lang][group]).sort(), Object.keys(dictionaries.fr[group]).sort());
   for (const value of Object.values(dictionaries[lang][group])) assert.equal(typeof value, 'string');
 }
+const leave = Object.fromEntries(languages.map(lang => {
+  const module = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/i18n/locales/leave.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { module, exports: module.exports });
+  return [lang, module.exports.leaveTexts[lang]];
+}));
 const visible = (page, id) => page.locator(`[data-testid="${id}"]:visible`).last();
 async function photo(page) {
   await visible(page, 'add-photo').click();
@@ -75,8 +80,8 @@ async function main() {
         await photo(page);
         await visible(page, 'step-close').click();
         await expect(page.getByTestId('unsaved-message')).toHaveText(dictionaries[lang].leaveConfirm.message);
-        await expect(page.getByTestId('unsaved-cancel')).toHaveText(dictionaries[lang].leaveConfirm.no);
-        await expect(page.getByTestId('unsaved-discard')).toHaveText(dictionaries[lang].leaveConfirm.yes);
+        await expect(page.getByTestId('unsaved-cancel')).toHaveText(leave[lang].stay);
+        await expect(page.getByTestId('unsaved-discard')).toHaveText(leave[lang].leave);
         assert.equal(await page.getByTestId('unsaved-message').evaluate(el => getComputedStyle(el).direction), lang === 'fr' ? 'ltr' : 'rtl');
         await page.getByTestId('unsaved-cancel').click();
         await visible(page, 'remove-photo').waitFor();

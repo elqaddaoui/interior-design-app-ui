@@ -1,5 +1,5 @@
  
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -21,7 +21,9 @@ import { storage } from '@/data/mock/storage';
 import type { BrandVersion } from '@/data/types';
 import { applyFavicon, faviconDataUrl } from '@/lib/brand/export';
 import * as H from '@/lib/brand/history';
-import { changedGroups, cleanSpec, hasErrors, legacyFields, sameSpec, specFromBranding, surprise, validateSpec, type LogoSpec } from '@/lib/brand/spec';
+import { changedGroups, cleanSpec, hasErrors, legacyFields, sameSpec, specFromBranding, validateSpec, type LogoSpec } from '@/lib/brand/spec';
+import { designLogo } from '@/lib/brand/design';
+import type { Tone } from '@/lib/brand/palette';
 import type { Locks } from '@/components/brand/Controls';
 
 const DRAFT_KEY = 'branding-draft';
@@ -46,7 +48,7 @@ const Tool = ({ icon, label, onPress, disabled, testID, on }: { icon: string; la
 function Studio() {
   const { t } = useT();
   const { desktop } = useBp();
-  const { colors } = useTheme();
+  const { colors, dark } = useTheme();
   const branding = useStore((s) => s.doc.branding);
   const published = useMemo(() => specFromBranding(branding), [branding]);
   const versions = useMemo<BrandVersion[]>(() => branding.versions ?? [], [branding.versions]);
@@ -61,6 +63,10 @@ function Studio() {
   const shown = useDebounced(spec, PREVIEW_DELAY);
 
   const [locks, setLocks] = useState<Locks>({ font: false, color: false, layout: false });
+  /* "match the app": colours of the running theme drive Surprise me and the demos (on by default: the logo lives inside the app) */
+  const [matchApp, setMatchApp] = useState(true);
+  const tone = useMemo<Tone | null>(() => (matchApp ? { primary: colors.primary, bg: colors.bg, surface: colors.surface, fg: colors.fg, ink: colors.ink, dark } : null), [matchApp, colors.primary, colors.bg, colors.surface, colors.fg, colors.ink, dark]);
+  const recent = useRef<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -93,7 +99,12 @@ function Studio() {
   /* actions */
   const undo = () => setHist(H.undo);
   const redo = () => setHist(H.redo);
-  const doSurprise = () => up((s) => surprise(s, Date.now(), locks));
+  /* each press = a new concept (never one of the last four), seeded by the clock, coloured from the app theme when matched */
+  const doSurprise = () => {
+    const d = designLogo(spec, Date.now(), locks, tone, { avoid: recent.current });
+    recent.current = [d.concept, ...recent.current].slice(0, 4);
+    up(() => d.spec);
+  };
   const discard = useCallback(() => { storage.write(DRAFT_KEY, null); setHist(H.init(published)); setSavedAt(0); }, [published]);
 
   const publish = useCallback(async (): Promise<boolean> => {
@@ -181,7 +192,7 @@ function Studio() {
   const controls = (
     <View style={{ flex: 1, minWidth: 0 }}>
       {draftBanner}
-      <Controls spec={spec} up={up} issues={issues} locks={locks} setLocks={setLocks} onSurprise={doSurprise} accent={accent} />
+      <Controls spec={spec} up={up} issues={issues} locks={locks} setLocks={setLocks} onSurprise={doSurprise} accent={accent} tone={tone} matchApp={matchApp} setMatchApp={setMatchApp} />
       {Platform.OS === 'web' && desktop ? <Txt className="text-[11px] text-muted text-center mt-2">{t('br.shortcuts')}</Txt> : null}
     </View>
   );

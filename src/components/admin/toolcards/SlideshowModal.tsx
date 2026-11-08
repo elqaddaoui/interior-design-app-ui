@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, View } from 'react-native';
 import type { Lang, LText, Media, Tool, ToolCardFx, ToolCardGradient } from '@/data/types';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +12,10 @@ import { AnimationPicker } from '@/components/admin/toolcards/AnimationPicker';
 import { AvailabilityModal } from '@/components/admin/toolcards/AvailabilityModal';
 import { SlideshowImages } from '@/components/admin/toolcards/SlideshowImages';
 import { useBackCheckpoint } from '@/hooks/useLeaveGuard';
+import { usePopupHistoryContext, useRegisterPopup } from '@/hooks/usePopupHistory';
+import { PopupHistoryButtons } from '@/components/admin/PopupHistoryButtons';
+import { createSourceLog } from '@/lib/popupHistory';
+import { adminHistory, docKey, useAdminHistory } from '@/store/adminHistory';
 import { useBp } from '@/hooks/useBp';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { LANGS, useL, useT } from '@/i18n';
@@ -72,9 +76,29 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
   const enabled = enabledIds(avail);
   const kept = fx.effects ?? enabled;
 
-  const setGlobal = (patch: Partial<Omit<typeof global, 'studio'>>) => settings.patch({ toolCards: patchGlobal(useStore.getState().doc.settings.toolCards, patch) });
-  const setFx = (patch: ToolCardFx) => onChange({ ...media, fx: cleanFx({ ...(media.fx ?? {}), ...patch }) });
-  const setImages = (next: string[]) => onChange({ ...media, images: next, uri: next[0] ?? '' });
+  // Undo / redo for everything this popup edits: the card's own media (the form's history) and the shared layout (the settings draft's history),
+  // walked back in the order the edits were made.
+  const formHist = usePopupHistoryContext();
+  const formRef = useRef(formHist);
+  useEffect(() => { formRef.current = formHist; });
+  const settingsHist = useAdminHistory(docKey('settings'));
+  // The closures read `formRef` only when undo / redo runs (never while rendering).
+  // eslint-disable-next-line react-hooks/refs
+  const [log] = useState(() => createSourceLog({
+    form: { canUndo: () => !!formRef.current?.canUndo, canRedo: () => !!formRef.current?.canRedo, undo: () => formRef.current?.undo(), redo: () => formRef.current?.redo(), breakGroup: () => formRef.current?.breakGroup?.() },
+    settings: { canUndo: () => adminHistory.canUndo(docKey('settings')), canRedo: () => adminHistory.canRedo(docKey('settings')), undo: () => { adminHistory.undo(); }, redo: () => { adminHistory.redo(); }, breakGroup: () => adminHistory.breakGroup() },
+  }));
+  const [, bump] = useState(0);
+  const slideHist = {
+    canUndo: !!formHist?.canUndo || settingsHist.canUndo, canRedo: !!formHist?.canRedo || settingsHist.canRedo,
+    undo: () => { log.undo(); bump((n) => n + 1); }, redo: () => { log.redo(); bump((n) => n + 1); },
+  };
+  useRegisterPopup(true, slideHist);
+  const send = (m: Media) => { log.note('form'); onChange(m); };
+
+  const setGlobal = (patch: Partial<Omit<typeof global, 'studio'>>) => { log.note('settings'); settings.patch({ toolCards: patchGlobal(useStore.getState().doc.settings.toolCards, patch) }); };
+  const setFx = (patch: ToolCardFx) => send({ ...media, fx: cleanFx({ ...(media.fx ?? {}), ...patch }) });
+  const setImages = (next: string[]) => send({ ...media, images: next, uri: next[0] ?? '' });
 
   // Done publishes the shared layout; the X discards it (the form decides about the rest).
   const done = async () => { if (!settings.dirty || (await settings.save())) onClose(); };
@@ -120,6 +144,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
             <View className="px-3 pt-2 pb-2 border-b border-line bg-bg" style={{ zIndex: 5 }}>
               <View className="flex-row items-center gap-2 mb-2">
                 <Txt className="text-[16px] font-extrabold flex-1" accessibilityRole="header" numberOfLines={1}>{t('tc.configure')}</Txt>
+                <PopupHistoryButtons api={slideHist} prefix="slideshow" />
                 <Pressable testID="slideshow-close" accessibilityRole="button" accessibilityLabel={t('common.close')} onPress={cancel} hitSlop={8} className="w-8 h-8 rounded-full bg-surface2 items-center justify-center"><Icon name="close" size={18} /></Pressable>
               </View>
               {simTheme === APP ? card : <ThemeScope config={themeCfg} className="rounded-2xl p-2">{card}</ThemeScope>}
