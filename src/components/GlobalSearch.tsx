@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Field';
 import { Sheet } from '@/components/ui/Sheet';
 import { Txt } from '@/components/ui/Txt';
 import { ADMIN_NAV } from '@/lib/adminNav';
+import { SETTINGS_MAP } from '@/lib/settingsMap';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSearchInset } from '@/hooks/useSearchInset';
 import { useBp } from '@/hooks/useBp';
@@ -66,6 +67,7 @@ function SearchDialog({ admin, onClose }: { admin: boolean; onClose: () => void 
     for (const item of s.models) add(item.id, item.name, t('admin.nav.models'), '/admin/models', [item.id, item.name, item.provider], 'robot-outline');
     for (const item of s.users) add(item.id, item.name || item.whatsapp, t('admin.nav.users'), '/admin/users', [item.id, item.name, item.whatsapp], 'account-outline');
     for (const item of s.requests) add(item.id, item.name, t('admin.nav.requests'), '/admin/requests', [item.id, item.name, item.whatsapp], 'inbox-outline');
+    for (const e of SETTINGS_MAP) add(`set-${e.id}`, t(`sm.${e.id}`), `${t('sm.title')} · ${t(`sm.aud_${e.audience}`)}`, e.href, [t(`sm.${e.id}`), t(`sm.${e.id}_d`)], e.icon);
     for (const item of ADMIN_NAV) add(`menu-${item.key}`, t(`admin.nav.${item.key}`), t('admin.title'), item.href, t(`admin.nav.${item.key}`), item.icon);
   } else {
     for (const item of s.tools.filter((x) => x.visible)) add(item.id, L(item.title), t('home.all'), '/', [item.id, item.title], 'toolbox-outline');

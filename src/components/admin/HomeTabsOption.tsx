@@ -1,6 +1,7 @@
 import React from 'react';
 import { View } from 'react-native';
 import { Card } from '@/components/ui/Card';
+import { SettingAnchor } from '@/components/admin/AudienceBadge';
 import { Icon } from '@/components/ui/Icon';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
@@ -14,7 +15,7 @@ export function HomeTabsOption() {
   const { patch } = useDraftDoc('settings');
   const on = useStore((s) => s.doc.settings.homeTabsVisible) !== false;
   return (
-    <Card className="p-4 mb-4 flex-row items-center gap-3">
+    <SettingAnchor id="homeTabs"><Card className="p-4 mb-4 flex-row items-center gap-3">
       <View className="w-10 h-10 rounded-xl bg-soft items-center justify-center"><Icon name="view-grid-outline" size={20} /></View>
       <View className="flex-1">
         <Txt className="font-bold text-[14px]">{t('admin.tabsOpt.showAllTitle')}</Txt>
@@ -22,6 +23,6 @@ export function HomeTabsOption() {
       </View>
       <Toggle testID="home-tabs-visible" label={t('admin.tabsOpt.showAllTitle')} value={on}
         onValueChange={(v) => patch({ homeTabsVisible: v })} />
-    </Card>
+    </Card></SettingAnchor>
   );
 }

@@ -96,7 +96,7 @@ export default function AssistantAdmin() {
   ) : null;
 
   return (
-    <AdminPage title={t('asx.title')} max={820} floating={bar}>
+    <AdminPage title={t('asx.title')} max={820} floating={bar} audience="clients">
       <Txt className="text-[13px] text-muted mb-3">{t('asx.intro')}</Txt>
       {live ? <Flow /> : null}
       {!backendEnabled ? <Note tone="info" testID="asx-offline" text={t('asx.offline')} /> : null}

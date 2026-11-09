@@ -10,6 +10,7 @@ import { RequestInfo, RequestViewer, Shot, useRequestShots } from '@/components/
 import { Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
+import { SettingAnchor } from '@/components/admin/AudienceBadge';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
 import { RightClick, sep, type MenuItem } from '@/components/admin/ContextMenu';
@@ -168,10 +169,10 @@ export default function Requests() {
     <AdminPage title={t('admin.req.title')}>
       <PushNotifications />
       {typeof call === 'string' && /^\+?\d{6,20}$/.test(call) ? <Button testID="push-call-fallback" title={t('push.call')} icon="phone" onPress={() => Linking.openURL(`tel:${call}`)} className="mb-3" /> : null}
-      <Card className="p-4 mb-4 flex-row items-center gap-3">
+      <SettingAnchor id="autoWhatsApp"><Card className="p-4 mb-4 flex-row items-center gap-3">
         <View className="flex-1"><Txt className="font-bold text-[14px]">{t('admin.req.autoSend')}</Txt><Txt className="text-muted text-[12px] leading-[20px] mt-2">{t('admin.req.autoSendNote')}</Txt></View>
         <Toggle testID="req-auto" label={t('admin.req.autoSend')} value={auto} onValueChange={(v) => patch({ autoSendWhatsApp: v })} />
-      </Card>
+      </Card></SettingAnchor>
       <View className="flex-row flex-wrap gap-2 mb-4">
         {(['all', ...STATUSES] as const).map((k) => (
           <Pressable key={k} testID={`filter-${k}`} onPress={() => setFilter(k)} className={`px-3.5 h-9 rounded-full justify-center ${filter === k ? 'bg-primary' : 'bg-surface2'}`}>

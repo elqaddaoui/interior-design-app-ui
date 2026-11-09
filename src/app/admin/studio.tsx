@@ -145,7 +145,7 @@ function Studio({ appRtl }: { appRtl: boolean }) {
   );
 
   return (
-    <AdminPage title={t('st.title')} right={right} max={1280}>
+    <AdminPage title={t('st.title')} right={right} max={1280} audience="clients">
       <Txt className="text-muted text-[12px] mb-3">{t('st.note')}</Txt>
 
       <View className="mb-3" style={{ gap: 6 }}>

@@ -18,7 +18,7 @@ export default function PerformanceAdmin() {
   if (!contentReady) return <AdminPage title={t('admin.nav.performance')}><AdminLoading /></AdminPage>;
   const global = resolveGlobal(settings.toolCards);
   return (
-    <AdminPage title={t('admin.nav.performance')} right={<Button testID="performance-submit" size="sm" title={t('improve.submit')} disabled={!dirty} onPress={async () => { if (await save()) toast(t('admin.crud.saved')); }} />}>
+    <AdminPage title={t('admin.nav.performance')} audience="clients" right={<Button testID="performance-submit" size="sm" title={t('improve.submit')} disabled={!dirty} onPress={async () => { if (await save()) toast(t('admin.crud.saved')); }} />}>
       <Txt className="text-muted text-[12px] mb-3">{t('ax.vid.pageNote')}</Txt>
       <VideoPanel videoMode={global.videoMode} onMode={(videoMode) => patch({ toolCards: patchGlobal(settings.toolCards, { videoMode }) })}
         extras={global.videoExtras} onExtras={(videoExtras) => patch({ toolCards: patchGlobal(settings.toolCards, { videoExtras }) })}

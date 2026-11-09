@@ -5,6 +5,7 @@ type NavGroup = { key: 'overview' | 'content' | 'creation' | 'ai' | 'appearance'
 export const ADMIN_GROUPS: NavGroup[] = [
   { key: 'overview', items: [
     { key: 'dashboard', icon: 'view-dashboard-outline', href: '/admin' },
+    { key: 'settingsMap', icon: 'tune-variant', href: '/admin/settings' },
     { key: 'requests', icon: 'inbox-full-outline', href: '/admin/requests' },
     { key: 'users', icon: 'account-group-outline', href: '/admin/users' },
     { key: 'chats', icon: 'message-text-outline', href: '/admin/chats' },

@@ -303,6 +303,7 @@ const fr = {
       performance: 'Performance',
       studio: 'Studio d’animation',
       layouts: 'Mises en page',
+      settingsMap: 'Carte des réglages',
       chats: 'Conversations',
       notifications: 'Notifications',
     },
