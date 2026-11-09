@@ -72,7 +72,7 @@ export interface Ctx {
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const isEnumPath = (path: string) => ENUM_KEYS.has(path.split('.').pop() ?? '');
-const SETTING_KEYS: Record<string, string> = { frenchFont: 'improve.frenchFont', arabicFont: 'improve.arabicFont', galleryLayout: 'improve.galleryLayout', appSearchEnabled: 'improve.appSearch', adminSearchEnabled: 'improve.adminSearch', exitConfirmationEnabled: 'improve.exitEnabled', autoTranslate: 'improve.autoTranslate', userNavStyle: 'admin.iface.userNav', adminMenuDesign: 'mx.design.title', adminMenuAnim: 'mx.anim.title', defaultFreeCredits: 'admin.credits.defaultCredits' };
+const SETTING_KEYS: Record<string, string> = { frenchFont: 'improve.frenchFont', arabicFont: 'improve.arabicFont', galleryLayout: 'improve.galleryLayout', layouts: 'ly.title', appSearchEnabled: 'improve.appSearch', adminSearchEnabled: 'improve.adminSearch', exitConfirmationEnabled: 'improve.exitEnabled', autoTranslate: 'improve.autoTranslate', userNavStyle: 'admin.iface.userNav', adminMenuDesign: 'mx.design.title', adminMenuAnim: 'mx.anim.title', defaultFreeCredits: 'admin.credits.defaultCredits' };
 
 /** "fill.color" -> "اللون"; unknown segments are dropped when a known one exists; an index (`0`) is never shown. */
 export function labelOf(path: string, ctx: Ctx, given?: string): string {

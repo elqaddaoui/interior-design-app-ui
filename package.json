@@ -91,7 +91,10 @@
     "check:dashboard": "sucrase-node scripts/check-dashboard.ts",
     "check:history": "sucrase-node scripts/check-history.ts",
     "check:leave": "sucrase-node scripts/check-leave.ts",
-    "check:credits": "sucrase-node scripts/check-credits.ts"
+    "check:credits": "sucrase-node scripts/check-credits.ts",
+    "check:layouts": "sucrase-node scripts/check-layouts.ts",
+    "check:layouts:browser": "node scripts/check-layouts-browser.js",
+    "check:layouts:wow": "node scripts/check-layouts-wow-browser.js"
   },
   "private": true,
   "engines": {

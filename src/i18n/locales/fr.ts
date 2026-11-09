@@ -302,6 +302,7 @@ const fr = {
       interface: 'Interface & menus',
       performance: 'Performance',
       studio: 'Studio d’animation',
+      layouts: 'Mises en page',
       chats: 'Conversations',
       notifications: 'Notifications',
     },

@@ -12,11 +12,13 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Screen } from '@/components/ui/Screen';
 import { Txt } from '@/components/ui/Txt';
 import { BrandHeader } from '@/components/BrandHeader';
-import { ToolCard } from '@/components/ToolCard';
+import { HomeLayout } from '@/components/layouts/HomeLayouts';
+import { deviceOf, resolveLayout } from '@/lib/layouts';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { boot } from '@/lib/boot';
 import { resolveGlobal } from '@/lib/toolCards';
+import { ToolCard } from '@/components/ToolCard';
 
 const ALL = '__all__';
 
@@ -24,7 +26,7 @@ export default function Home() {
   const { t } = useT();
   const { target } = useLocalSearchParams<{ target?: string }>();
   const L = useL();
-  const { desktop, pick } = useBp();
+  const { desktop, tablet, width, pick } = useBp();
   const tabs = useStore((s) => s.tabs);
   const tools = useStore((s) => s.tools);
   const contentReady = useStore((s) => s.contentReady);
@@ -38,6 +40,10 @@ export default function Home() {
   const list = sorted(tools).filter((x) => x.visible && (x.id === target || tabId === ALL || x.tabId === tabId));
   const pills = useMemo(() => [{ id: ALL, label: t('home.all') }].concat(visibleTabs.map((x) => ({ id: x.id, label: L(x.title) }))), [visibleTabs, t, L]);
   const cols = pick(1, 2, 3);
+  // Admin > Page layouts: the demo layout this device shows (the classic grid when nothing is chosen).
+  const layoutsCfg = useStore((s) => s.doc.settings.layouts);
+  const device = deviceOf(width);
+  const layout = useMemo(() => resolveLayout(layoutsCfg, 'home', device), [layoutsCfg, device]);
   // One global card height for every card (Admin > Tools cards); the placeholders use it too so nothing jumps.
   const cardHeight = useStore((s) => resolveGlobal(s.doc.settings.toolCards).height);
 
@@ -77,7 +83,7 @@ export default function Home() {
           </View>
         ) : list.length === 0 ? (
           <EmptyState icon="tools" title={t('home.empty')} />
-        ) : (
+        ) : layout.id === 'grid' && !layoutsCfg ? (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -8 }}>
             {list.map((tool, i) => (
               <View key={tool.id} style={{ width: `${100 / cols}%`, padding: 8 }}>
@@ -85,6 +91,8 @@ export default function Home() {
               </View>
             ))}
           </View>
+        ) : (
+          <HomeLayout id={layout.id} params={layout.params} device={device} tablet={tablet} tools={list} tabs={visibleTabs} onOpen={open} onPaint={(i) => boot.cardPainted(i)} />
         )}
       </View>
     </Screen>
