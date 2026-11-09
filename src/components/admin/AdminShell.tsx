@@ -20,6 +20,8 @@ import { useSearchObstacle } from '@/hooks/useSearchInset';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useHistoryShortcuts } from '@/hooks/useHistoryShortcuts';
 import { AdminMenu } from '@/components/admin/AdminMenu';
+import { AudienceBadge } from '@/components/admin/AudienceBadge';
+import type { Audience } from '@/lib/settingsMap';
 import { HistoryButtons } from '@/components/admin/HistoryButtons';
 import type { AdminMenuDesign } from '@/data/types';
 
@@ -126,7 +128,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 }
 
 /** Standard admin page: title row + scrollable, width-limited body. */
-export function AdminPage({ title, right, children, max = 1100, floating }: { title: string; right?: React.ReactNode; children: React.ReactNode; max?: number; floating?: React.ReactNode }) {
+/** `audience` = who the settings of this page affect (see lib/settingsMap.ts): shown as a badge under the title. */
+export function AdminPage({ title, right, children, max = 1100, floating, audience }: { title: string; right?: React.ReactNode; children: React.ReactNode; max?: number; floating?: React.ReactNode; audience?: Audience }) {
   const { tablet } = useBp();
   const measureFloating = useSearchObstacle(!!floating, 20);
   const router = useRouter();
@@ -139,6 +142,7 @@ export function AdminPage({ title, right, children, max = 1100, floating }: { ti
           <Txt className="text-[26px] leading-[32px] font-black flex-1" accessibilityRole="header" style={{ minWidth: 80, flexBasis: 120, letterSpacing: -0.6 }}>{title}</Txt>
           {right}
         </View>
+        {audience ? <View className="flex-row items-center mb-3" style={{ marginTop: -8, gap: 8 }}><AudienceBadge testID="page-audience" audience={audience} /></View> : null}
         {children}
       </View>
     </RememberScroll>{floating ? <View onLayout={measureFloating} style={{ position: 'absolute', bottom: 20, left: 12, right: 12, maxWidth: 700, alignSelf: 'center', marginHorizontal: 'auto', zIndex: 10 } as any}>{floating}</View> : null}</View>

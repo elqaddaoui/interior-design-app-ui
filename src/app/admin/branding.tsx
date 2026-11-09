@@ -198,7 +198,7 @@ function Studio() {
   );
 
   return (
-    <AdminPage title={t('admin.nav.branding')} max={1180} right={tools} floating={bar}>
+    <AdminPage title={t('admin.nav.branding')} max={1180} right={tools} floating={bar} audience="both">
       {desktop ? (
         <View className="flex-row gap-4 items-start">
           {controls}

@@ -54,7 +54,7 @@ export default function LayoutsAdmin() {
   const devLabel = (d: LayoutDevice) => t(`ly.${d}`);
 
   return (
-    <AdminPage title={t('ly.title')} right={<Button testID="layouts-submit" size="sm" title={t('ly.submit')} disabled={!dirty} onPress={async () => { if (await save()) toast(t('ly.saved')); }} />}>
+    <AdminPage title={t('ly.title')} audience="clients" right={<Button testID="layouts-submit" size="sm" title={t('ly.submit')} disabled={!dirty} onPress={async () => { if (await save()) toast(t('ly.saved')); }} />}>
       <Txt className="text-muted text-[13px] leading-[20px] mb-3">{t('ly.intro')}</Txt>
       <Card className="p-3 mb-3">
         <View className="flex-row flex-wrap items-center gap-3">

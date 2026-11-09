@@ -304,6 +304,7 @@ const dar: Dict = {
       performance: 'الأداء',
       studio: 'ستوديو الحركة',
       layouts: 'تخطيطات الصفحات',
+      settingsMap: 'خريطة الإعدادات',
       chats: 'المحادثات',
       notifications: 'الإشعارات',
     },

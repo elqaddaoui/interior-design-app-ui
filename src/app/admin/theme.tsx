@@ -88,7 +88,7 @@ export default function ThemeAdmin() {
 
   if (!contentReady) return <AdminPage title={t('admin.theme.title')}><AdminLoading /></AdminPage>;
   return (
-    <AdminPage title={t('admin.theme.title')} right={<Button testID="theme-save" size="sm" icon="check" title={t('improve.submit')} disabled={!dirty} onPress={save} />}>
+    <AdminPage title={t('admin.theme.title')} audience="both" right={<Button testID="theme-save" size="sm" icon="check" title={t('improve.submit')} disabled={!dirty} onPress={save} />}>
       <View className={desktop ? 'flex-row gap-6 items-start' : 'gap-5'}>
         <View className="flex-1" style={{ minWidth: 0 }}>
           <Card className="p-4 mb-4">

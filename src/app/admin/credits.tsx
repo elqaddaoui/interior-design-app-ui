@@ -96,7 +96,7 @@ export default function Credits() {
     toastAction(t('cr.granted', { n, name: g.name }), { label: t('cr.undo'), run: () => { void undo(g); } });
   };
 
-  if (!s.contentReady || !s.adminLoaded) return <AdminPage title={t('admin.nav.credits')} max={980}><AdminLoading /></AdminPage>;
+  if (!s.contentReady || !s.adminLoaded) return <AdminPage title={t('admin.nav.credits')} max={980} audience="clients"><AdminLoading /></AdminPage>;
 
   const when = (at: number) => { const a = ago(at); return t(`cr.${a.unit}`, { n: a.n }); };
 
@@ -221,7 +221,7 @@ export default function Credits() {
   );
 
   return (
-    <AdminPage title={t('admin.nav.credits')} max={980}>
+    <AdminPage title={t('admin.nav.credits')} max={980} audience="clients">
       <View testID="credits-stats" className="flex-row mb-3" style={{ gap: 10 }}>
         <Stat id="credits-stat-users" icon="account-multiple-outline" value={users.length} label={t('cr.statUsers')} />
         <Stat id="credits-stat-month" icon="gift-outline" value={monthTotal(log)} label={t('cr.statMonth')} />

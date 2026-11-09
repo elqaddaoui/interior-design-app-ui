@@ -12,6 +12,7 @@ import { useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/useToast';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
+import { SettingAnchor } from '@/components/admin/AudienceBadge';
 
 type Engine = { label: string; configured: boolean; source: 'env' | 'db' | 'model' | 'none' };
 type Rotation = { on: boolean; ids: string[]; pool: { id: string; name: string; engine: string; modelName: string }[]; next: string; active: boolean };
@@ -37,7 +38,7 @@ function RotationBox({ status }: { status: Status | null }) {
   const toggle = (id: string) => set(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
   const next = status?.rotation?.active ? status.rotation.next : '';
   return (
-    <View testID="ai-rotation" className="pt-3 mt-1 border-t border-line" style={{ gap: 10 }}>
+    <SettingAnchor id="modelRotation"><View testID="ai-rotation" className="pt-3 mt-1 border-t border-line" style={{ gap: 10 }}>
       <View className="flex-row items-center gap-3">
         <View className="w-10 h-10 rounded-2xl bg-soft items-center justify-center"><Icon name="autorenew" size={22} tone="primary" /></View>
         <View className="flex-1" style={{ minWidth: 0 }}>
@@ -74,7 +75,7 @@ function RotationBox({ status }: { status: Status | null }) {
           </View>
         )
       ) : null}
-    </View>
+    </View></SettingAnchor>
   );
 }
 
@@ -131,13 +132,13 @@ export function AiEnginePanel() {
       {status?.chainI2I.length ? <Txt className="text-[12px] text-muted mb-1">{t('admin.ai.chainPhoto')}: {status.chainI2I.join(' → ')}</Txt> : null}
       {status?.chainT2I.length ? <Txt className="text-[12px] text-muted mb-3">{t('admin.ai.chainText')}: {status.chainT2I.join(' → ')}</Txt> : null}
       <RotationBox status={status} />
-      <View className="flex-row items-center gap-3 pt-3 mt-3 border-t border-line">
+      <SettingAnchor id="modelPicker"><View className="flex-row items-center gap-3 pt-3 mt-3 border-t border-line">
         <View className="flex-1">
           <Txt className="font-bold text-[14px]">{t('admin.ai.picker')}</Txt>
           <Txt className="text-muted text-[12px] mt-0.5">{t('admin.ai.pickerDesc')}</Txt>
         </View>
         <Toggle testID="ai-model-picker" label={t('admin.ai.picker')} value={picker} onValueChange={(v) => patch({ aiModelPicker: v })} />
-      </View>
+      </View></SettingAnchor>
     </Card>
   );
 }

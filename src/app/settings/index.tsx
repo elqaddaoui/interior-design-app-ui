@@ -57,29 +57,32 @@ export default function Settings() {
 
   return (
     <Screen max={640} header={<PageHeader title={t('settings.title')} onBack={() => router.back()} />}>
-      <Txt className="text-muted font-bold text-[12px] mb-2 mt-2 uppercase">{t('settings.language')}</Txt>
-      <Card className="flex-row p-1.5 gap-1.5 mb-5">
+      <Txt className="text-muted text-[12.5px] leading-[19px] mb-3 mt-1" testID="settings-note">{t('sm.userNote')}</Txt>
+
+      <Txt className="text-muted font-bold text-[12px] mb-2 mt-2 uppercase" accessibilityRole="header">{t('sm.mine')}</Txt>
+      <Txt className="text-muted font-bold text-[12px] mb-1.5">{t('settings.language')}</Txt>
+      <Card className="flex-row p-1.5 gap-1.5 mb-3">
         {LANGS.map((l) => (
           <Pressable key={l} testID={`lang-${l}`} onPress={() => setLang(l)} className={`flex-1 h-11 rounded-xl items-center justify-center ${lang === l ? 'bg-primary' : 'active:bg-surface2'}`}>
             <Txt className={`font-bold text-[13px] ${lang === l ? 'text-onprimary' : ''}`}>{t(`lang.${l}`)}</Txt>
           </Pressable>
         ))}
       </Card>
-
       <Card className="overflow-hidden mb-5">
-        <Row icon="star-four-points-outline" title={t('settings.credits')} sub={t('settings.creditsLeft', { count: me?.credits ?? 0 })} onPress={() => router.push('/pro')} testID="row-credits"
-          right={<View className="bg-primary rounded-lg px-3 py-1"><Txt className="text-onprimary font-extrabold text-[12px]">{t('settings.pro')}</Txt></View>} />
-        <View className="h-px bg-line mx-4" />
         <Row icon="bell-outline" title={t('settings.notifications')} sub={pausedByAdmin ? t('inbox.offByAdmin') : t('settings.notificationsDesc')}
           right={<Toggle testID="switch-notif" label={t('settings.notifications')} disabled={pausedByAdmin} value={prefs?.notifications === true || (prefs?.notifications !== false && devicePush === 'enabled')} onValueChange={(v) => { void changeNotifications(v); }} />} />
+        <View className="h-px bg-line mx-4" />
+        <Row icon="star-four-points-outline" title={t('settings.credits')} sub={t('settings.creditsLeft', { count: me?.credits ?? 0 })} onPress={() => router.push('/pro')} testID="row-credits"
+          right={<View className="bg-primary rounded-lg px-3 py-1"><Txt className="text-onprimary font-extrabold text-[12px]">{t('settings.pro')}</Txt></View>} />
       </Card>
 
+      <Txt className="text-muted font-bold text-[12px] mb-2 uppercase" accessibilityRole="header">{t('sm.app')}</Txt>
       <Card className="overflow-hidden mb-5">
         <Row icon="information-outline" title={t('settings.about')} onPress={() => setDoc('about')} testID="row-about" />
         <View className="h-px bg-line mx-4" />
         <Row icon="shield-lock-outline" title={t('settings.privacy')} onPress={() => setDoc('privacy')} testID="row-privacy" />
         <View className="h-px bg-line mx-4" />
-        <Row icon="cog-box" title={t('settings.admin')} onPress={() => router.push('/admin')} testID="row-admin" />
+        <Row icon="cog-box" title={t('settings.admin')} sub={t('sm.adminRowSub')} onPress={() => router.push('/admin')} testID="row-admin" />
       </Card>
       {user ? <Card className="overflow-hidden mb-5"><Row icon="logout" title={t('account.logout')} sub={user.whatsapp} onPress={() => { void logout(); }} testID="user-logout" /></Card> : null}
       <Txt className="text-muted text-center text-[12px]">{branding.appName} · {t('settings.version')} {ver}</Txt>

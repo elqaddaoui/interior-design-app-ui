@@ -304,6 +304,7 @@ const ar: Dict = {
       performance: 'الأداء',
       studio: 'استوديو الحركة',
       layouts: 'تخطيطات الصفحات',
+      settingsMap: 'خريطة الإعدادات',
       chats: 'المحادثات',
       notifications: 'الإشعارات',
     },

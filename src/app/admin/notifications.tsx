@@ -1,5 +1,5 @@
 import React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -16,6 +16,7 @@ import { useAdminCampaigns, type Campaign } from '@/store/useAdminCampaigns';
 import { useLocal } from '@/store/useLocal';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useT } from '@/i18n';
+import { SettingAnchor } from '@/components/admin/AudienceBadge';
 import { api, backendEnabled } from '@/lib/backend';
 import { toast } from '@/store/useToast';
 
@@ -38,22 +39,34 @@ export default function Notifications() {
     return api<{ users: Subscriber[] }>('/admin/notification-subscribers').then(r => { setUsers(r.users); setFailed(false); }).catch(() => setFailed(true));
   }, []);
   useFocusEffect(React.useCallback(() => { void load(); void useAdminCampaigns.getState().load().catch(() => {}); }, [load]));
+  const cap = Math.max(0, Math.min(168, Math.round(Number(draft.campaignCapHours ?? 24))));
   const rows: { key: 'notifyAdmins' | 'notifyUsers'; title: string; desc: string }[] = [
     { key: 'notifyAdmins', title: t('inbox.admins'), desc: t('inbox.adminsDesc') },
     { key: 'notifyUsers', title: t('inbox.users'), desc: t('inbox.usersDesc') },
   ];
   return (
-    <AdminPage title={t('inbox.notifTitle')} max={820} right={<Button testID="notifications-submit" size="sm" title={t('improve.submit')} disabled={!dirty} onPress={async () => { if (await save()) { toast(t('admin.crud.saved')); void load(); } }} />}>
+    <AdminPage title={t('inbox.notifTitle')} max={820} audience="clients" right={<Button testID="notifications-submit" size="sm" title={t('improve.submit')} disabled={!dirty} onPress={async () => { if (await save()) { toast(t('admin.crud.saved')); void load(); } }} />}>
       <Txt className="text-muted text-[13px] mb-3">{t('inbox.notifIntro')}</Txt>
       <Card className="px-4 mb-4">
         {rows.map((row, i) => (
-          <View key={row.key} className={`flex-row items-center gap-3 py-3.5 ${i ? 'border-t border-line' : ''}`}>
+          <View key={row.key} testID={`anchor-${row.key}`} className={`flex-row items-center gap-3 py-3.5 ${i ? 'border-t border-line' : ''}`}>
             <View className="w-10 h-10 rounded-full bg-soft items-center justify-center"><Icon name={draft[row.key] !== false ? 'bell-ring-outline' : 'bell-outline'} size={20} tone="primary" /></View>
             <View className="flex-1"><Txt className="font-bold text-[15px]">{row.title}</Txt><Txt className="text-muted text-[12px] mt-0.5">{row.desc}</Txt></View>
             <Toggle testID={`notify-${row.key}`} label={row.title} value={draft[row.key] !== false} onValueChange={value => patch({ [row.key]: value })} />
           </View>
         ))}
       </Card>
+      <SettingAnchor id="notifyCap"><Card className="px-4 py-3 mb-4">
+        <View className="flex-row items-center gap-3">
+          <View className="w-10 h-10 rounded-full bg-soft items-center justify-center"><Icon name="timer-sand" size={20} tone="primary" /></View>
+          <View className="flex-1"><Txt className="font-bold text-[15px]">{t('sm.notifyCap')}</Txt><Txt className="text-muted text-[12px] mt-0.5">{t('sm.capHint')}</Txt></View>
+          <View className="flex-row items-center" style={{ gap: 8, direction: 'ltr' } as never}>
+            <Pressable testID="cap-minus" accessibilityRole="button" accessibilityLabel={t('sm.minus')} onPress={() => patch({ campaignCapHours: Math.max(0, cap - (cap > 24 ? 12 : cap > 6 ? 6 : 1)) })} className="w-10 h-10 rounded-full bg-surface2 items-center justify-center active:opacity-70"><Icon name="minus" size={20} /></Pressable>
+            <Txt testID="cap-value" className="font-extrabold text-[15px] text-center" style={{ minWidth: 64, textAlign: 'center' }}>{cap === 0 ? t('sm.noLimit') : t('sm.hours', { count: cap })}</Txt>
+            <Pressable testID="cap-plus" accessibilityRole="button" accessibilityLabel={t('sm.plus')} onPress={() => patch({ campaignCapHours: Math.min(168, cap + (cap >= 24 ? 12 : cap >= 6 ? 6 : 1)) })} className="w-10 h-10 rounded-full bg-primary items-center justify-center active:opacity-70"><Icon name="plus" size={20} tone="onprimary" /></Pressable>
+          </View>
+        </View>
+      </Card></SettingAnchor>
       <View className="mb-4">
         <Segmented testID="notif-tabs" optionPrefix="notif-tab" value={tab} onChange={setTab} options={[
           { key: 'campaigns', label: t('camp.campaigns') }, { key: 'automations', label: t('camp.automations') }, { key: 'devices', label: t('camp.devices') },

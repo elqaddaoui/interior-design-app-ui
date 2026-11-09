@@ -6,6 +6,8 @@ import { Icon } from '@/components/ui/Icon';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt, ARABIC_FONTS, FRENCH_FONTS } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
+import { AudienceSection, SettingAnchor } from '@/components/admin/AudienceBadge';
+import { useRouter } from '@/hooks/useLeaveGuard';
 import { AdminLoading } from '@/components/admin/AdminLoading';
 import { NavPreview } from '@/components/admin/NavPreview';
 import { useL, useT } from '@/i18n';
@@ -20,6 +22,7 @@ import { ENTITIES } from '@/admin/entities';
 import { MENU_DESIGNS } from '@/components/admin/AdminMenu';
 import { MenuPreview } from '@/components/admin/MenuPreview';
 import type { UserNavStyle } from '@/data/types';
+import type { Href } from 'expo-router';
 
 const USER: UserNavStyle[] = ['classic', 'floating', 'minimal'];
 
@@ -37,11 +40,26 @@ function Option({ id, active, title, desc, testID, onPress, children }: { id: st
   );
 }
 
+/** One switch: title, optional hint, and the state spelled out (never only a colour). */
+function SwitchRow({ id, title, hint, value, onChange, state, first }: { id: string; title: string; hint?: string; value: boolean; onChange: (v: boolean) => void; state?: string; first?: boolean }) {
+  return (
+    <View className={`flex-row items-center justify-between gap-3 py-2.5 ${first ? '' : 'border-t border-line'}`}>
+      <View className="flex-1">
+        <Txt className="font-semibold">{title}</Txt>
+        {hint ? <Txt className="text-muted text-[12px] leading-[19px] mt-0.5">{hint}</Txt> : null}
+        {state ? <Txt testID={`setting-${id}-state`} className="text-[12px] leading-[19px] font-bold mt-0.5 text-primary">{state}</Txt> : null}
+      </View>
+      <Toggle testID={`setting-${id}`} label={title} value={value} onValueChange={onChange} />
+    </View>
+  );
+}
+
 export default function InterfaceAdmin() {
   const contentReady = useStore((s) => s.contentReady);
   const { t } = useT();
   const L = useL();
   const store = useStore();
+  const router = useRouter();
   const { draft: settings, patch: set, save, discard, dirty } = useDraftDoc('settings');
   const [exitOpen, setExitOpen] = useState(false);
   const wrap = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 12 };
@@ -49,102 +67,93 @@ export default function InterfaceAdmin() {
   return (
     <AdminPage title={t('admin.iface.title')} right={<Button testID="interface-submit" size="sm" title={t('improve.submit')} disabled={!dirty} onPress={async () => { if (await save()) toast(t('admin.crud.saved')); }} />}>
       <Txt className="text-muted text-[12px] mb-3">{t('improve.previewNote')}</Txt>
-      <Card className="p-3 mb-3">
-        {(['appSearchEnabled', 'adminSearchEnabled', 'exitConfirmationEnabled'] as const).map((key) => <View key={key} className="flex-row items-center justify-between py-2 gap-3">
-          <Txt className="flex-1 font-semibold">{t(`improve.${key === 'appSearchEnabled' ? 'appSearch' : key === 'adminSearchEnabled' ? 'adminSearch' : 'exitEnabled'}`)}</Txt>
-          <Toggle testID={`setting-${key}`} label={t(`improve.${key === 'appSearchEnabled' ? 'appSearch' : key === 'adminSearchEnabled' ? 'adminSearch' : 'exitEnabled'}`)} value={settings[key] !== false} onValueChange={(value) => set({ [key]: value })} />
-        </View>)}
-        <View className="py-2">
-          <View className="flex-row items-center justify-between gap-3">
-            <Txt className="flex-1 font-semibold">{t('improve.autoTranslate')}</Txt>
-            <Toggle testID="setting-autoTranslate" label={t('improve.autoTranslate')} value={settings.autoTranslate !== false} onValueChange={(value) => set({ autoTranslate: value })} />
+      <Pressable testID="iface-map-link" accessibilityRole="link" onPress={() => router.push('/admin/settings' as Href)} className="flex-row items-center gap-2 rounded-2xl bg-soft px-3.5 py-3 active:opacity-80">
+        <Icon name="tune-variant" size={19} tone="primary" />
+        <Txt className="flex-1 font-bold text-[13px]">{t('sm.mapLink')}</Txt>
+        <Icon name="chevron-right" size={18} tone="muted" flip />
+      </Pressable>
+
+      <AudienceSection testID="iface-sec-clients" audience="clients" title={t('sm.sec_clients')} desc={t('sm.sec_clients_d')}>
+        <SettingAnchor id="appSearch"><Card className="p-3 mb-3">
+          <SwitchRow first id="appSearchEnabled" title={t('improve.appSearch')} hint={t('sm.appSearch_d')} value={settings.appSearchEnabled !== false} onChange={(value) => set({ appSearchEnabled: value })} />
+        </Card></SettingAnchor>
+        <SettingAnchor id="exitConfirm"><Card className="p-3 mb-3">
+          <SwitchRow first id="exitConfirmationEnabled" title={t('improve.exitEnabled')} hint={t('sm.exitConfirm_d')} value={settings.exitConfirmationEnabled !== false} onChange={(value) => set({ exitConfirmationEnabled: value })} />
+          <View className="border-t border-line pt-1">
+            <Pressable testID="exit-edit-toggle" accessibilityRole="button" accessibilityState={{ expanded: exitOpen }} onPress={() => setExitOpen((v) => !v)} className="flex-row items-center justify-between gap-3 py-2 active:opacity-70">
+              <Txt className="flex-1 font-semibold">{t('improve.exitSettings')}</Txt>
+              <View className="flex-row items-center gap-1.5 bg-surface2 rounded-full px-3 h-9"><Icon name={exitOpen ? 'chevron-up' : 'pencil-outline'} size={16} /><Txt className="text-[12px] font-bold">{exitOpen ? t('mx.exit.close') : t('mx.exit.edit')}</Txt></View>
+            </Pressable>
+            {exitOpen ? <View testID="exit-edit-panel" className="pt-2">
+              {(['exitTitle', 'exitMessage'] as const).map((key) => <Field key={key} f={{ key, kind: 'ltext', label: t(`improve.${key}`), multiline: key === 'exitMessage' }} value={settings[key]} ctx={{ s: store, L, t }} onChange={(value) => set({ [key]: value })} />)}
+            </View> : null}
           </View>
-          <Txt className="text-muted text-[12px] mt-1">{t('improve.autoTranslateHint')}</Txt>
-        </View>
-        <View className="border-t border-line mt-1 pt-2">
-          <Pressable testID="exit-edit-toggle" accessibilityRole="button" accessibilityState={{ expanded: exitOpen }} onPress={() => setExitOpen((v) => !v)} className="flex-row items-center justify-between gap-3 py-2 active:opacity-70">
-            <View className="flex-1">
-              <Txt className="font-semibold">{t('improve.exitSettings')}</Txt>
-              <Txt className="text-muted text-[12px] mt-0.5">{settings.exitConfirmationEnabled !== false ? t('improve.exitEnabled') : t('mx.anim.off')}</Txt>
-            </View>
-            <View className="flex-row items-center gap-1.5 bg-surface2 rounded-full px-3 h-9"><Icon name={exitOpen ? 'chevron-up' : 'pencil-outline'} size={16} /><Txt className="text-[12px] font-bold">{exitOpen ? t('mx.exit.close') : t('mx.exit.edit')}</Txt></View>
-          </Pressable>
-          {exitOpen ? <View testID="exit-edit-panel" className="pt-2">
-            {(['exitTitle', 'exitMessage'] as const).map((key) => <Field key={key} f={{ key, kind: 'ltext', label: t(`improve.${key}`), multiline: key === 'exitMessage' }} value={settings[key]} ctx={{ s: store, L, t }} onChange={(value) => set({ [key]: value })} />)}
-          </View> : null}
-        </View>
-      </Card>
-      <Card className="p-3 mb-3">
-        <View className="flex-row items-center justify-between gap-3">
-          <View className="flex-1">
-            <Txt className="font-semibold">{t('md.chat.title')}</Txt>
-            <Txt className="text-muted text-[12px] leading-[19px] mt-1">{t('md.chat.hint')}</Txt>
-            <Txt testID="setting-waChat-state" className="text-[12px] leading-[19px] font-bold mt-1 text-primary">{settings.waChat !== false ? t('md.chat.on') : t('md.chat.off')}</Txt>
+        </Card></SettingAnchor>
+        <SettingAnchor id="waChat"><Card className="p-3 mb-3">
+          <SwitchRow first id="waChat" title={t('md.chat.title')} hint={t('md.chat.hint')} state={settings.waChat !== false ? t('md.chat.on') : t('md.chat.off')} value={settings.waChat !== false} onChange={(value) => set({ waChat: value })} />
+        </Card></SettingAnchor>
+        <SettingAnchor id="modeChoice"><Card className="p-3 mb-3">
+          <SwitchRow first id="modeChoice" title={t('improve.modeChoice')} hint={t('improve.modeChoiceHint')} state={settings.modeChoice !== false ? t('improve.modeChoiceState') : t('improve.modeChoiceOffState')} value={settings.modeChoice !== false} onChange={(value) => set({ modeChoice: value })} />
+        </Card></SettingAnchor>
+        <SettingAnchor id="loader"><LoaderSettings settings={settings} set={set} /></SettingAnchor>
+        <SettingAnchor id="userNav"><Card className="p-3 mb-3">
+          <Txt className="font-extrabold text-[17px]">{t('admin.iface.userNav')}</Txt>
+          <Txt className="text-muted text-[13px] mb-4">{t('admin.iface.userNavDesc')}</Txt>
+          <View style={wrap}>
+            {USER.map((id) => (
+              <Option key={id} id={id} testID={`usernav-${id}`} active={(settings.userNavStyle ?? 'floating') === id} title={t(`admin.iface.${id}`)} desc={t(`admin.iface.${id}Desc`)} onPress={() => set({ userNavStyle: id })}>
+                <NavPreview kind="user" id={id} />
+              </Option>
+            ))}
           </View>
-          <Toggle testID="setting-waChat" label={t('md.chat.title')} value={settings.waChat !== false} onValueChange={(value) => set({ waChat: value })} />
-        </View>
-      </Card>
-      <Card className="p-3 mb-3">
-        <View className="flex-row items-center justify-between gap-3">
-          <View className="flex-1">
-            <Txt className="font-semibold">{t('improve.modeChoice')}</Txt>
-            <Txt className="text-muted text-[12px] leading-[19px] mt-1">{t('improve.modeChoiceHint')}</Txt>
-            <Txt testID="setting-modeChoice-state" className="text-[12px] leading-[19px] font-bold mt-1 text-primary">{settings.modeChoice !== false ? t('improve.modeChoiceState') : t('improve.modeChoiceOffState')}</Txt>
+        </Card></SettingAnchor>
+        <SettingAnchor id="gallery"><Card className="p-3 mb-3">
+          <Txt className="font-bold text-[17px] mb-1">{t('improve.planning')}</Txt>
+          <Txt className="text-muted text-[12px] mb-3">{t('improve.planningDesc')}</Txt>
+          <ExhibitionLayouts value={settings.galleryLayout ?? 'grid'} onChange={(galleryLayout) => set({ galleryLayout })} />
+        </Card></SettingAnchor>
+      </AudienceSection>
+
+      <AudienceSection testID="iface-sec-both" audience="both" title={t('sm.sec_both')} desc={t('sm.sec_both_d')}>
+        <SettingAnchor id="fonts"><Card className="p-3 mb-3">
+          <Txt className="font-extrabold text-[17px] mb-4">{t('improve.fonts')}</Txt>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+            <View style={{ flexGrow: 1, flexBasis: 280, minWidth: 0 }}><FontSelector language="fr" options={FRENCH_FONTS} value={settings.frenchFont} onChange={(frenchFont) => set({ frenchFont })} /></View>
+            <View style={{ flexGrow: 1, flexBasis: 280, minWidth: 0 }}><FontSelector language="ar" options={ARABIC_FONTS} value={settings.arabicFont} onChange={(arabicFont) => set({ arabicFont })} /></View>
           </View>
-          <Toggle testID="setting-modeChoice" label={t('improve.modeChoice')} value={settings.modeChoice !== false} onValueChange={(value) => set({ modeChoice: value })} />
-        </View>
-      </Card>
-      <LoaderSettings settings={settings} set={set} />
-      <Card className="p-3 mb-3">
-        <Txt className="font-extrabold text-[17px]">{t('admin.iface.userNav')}</Txt>
-        <Txt className="text-muted text-[13px] mb-4">{t('admin.iface.userNavDesc')}</Txt>
-        <View style={wrap}>
-          {USER.map((id) => (
-            <Option key={id} id={id} testID={`usernav-${id}`} active={(settings.userNavStyle ?? 'floating') === id} title={t(`admin.iface.${id}`)} desc={t(`admin.iface.${id}Desc`)} onPress={() => set({ userNavStyle: id })}>
-              <NavPreview kind="user" id={id} />
-            </Option>
-          ))}
-        </View>
-      </Card>
-      <Card className="p-3 mb-3">
-        <Txt className="font-extrabold text-[17px]">{t('mx.design.title')}</Txt>
-        <Txt className="text-muted text-[13px] mb-4">{t('mx.design.desc')}</Txt>
-        <View style={wrap}>
-          {MENU_DESIGNS.map((id) => (
-            <Option key={id} id={id} testID={`menudesign-${id}`} active={(settings.adminMenuDesign ?? 'glide') === id} title={t(`mx.design.${id}`)} desc={t(`mx.design.${id}Desc`)} onPress={() => set({ adminMenuDesign: id })}>
-              <MenuPreview design={id} animated={settings.adminMenuAnim !== false} />
-            </Option>
-          ))}
-        </View>
-        <View className="flex-row items-center justify-between gap-3 mt-4 pt-3 border-t border-line">
-          <View className="flex-1">
-            <Txt className="font-semibold">{t('mx.anim.title')}</Txt>
-            <Txt className="text-muted text-[12px] leading-[19px] mt-1">{t('mx.anim.hint')}</Txt>
-            <Txt testID="setting-adminMenuAnim-state" className="text-[12px] leading-[19px] font-bold mt-1 text-primary">{settings.adminMenuAnim !== false ? t('mx.anim.on') : t('mx.anim.off')}</Txt>
+        </Card></SettingAnchor>
+      </AudienceSection>
+
+      <AudienceSection testID="iface-sec-admins" audience="admins" title={t('sm.sec_admins')} desc={t('sm.sec_admins_d')}>
+        <SettingAnchor id="adminSearch"><Card className="p-3 mb-3">
+          <SwitchRow first id="adminSearchEnabled" title={t('improve.adminSearch')} hint={t('sm.adminSearch_d')} value={settings.adminSearchEnabled !== false} onChange={(value) => set({ adminSearchEnabled: value })} />
+        </Card></SettingAnchor>
+        <SettingAnchor id="autoTranslate"><Card className="p-3 mb-3">
+          <SwitchRow first id="autoTranslate" title={t('improve.autoTranslate')} hint={t('improve.autoTranslateHint')} value={settings.autoTranslate !== false} onChange={(value) => set({ autoTranslate: value })} />
+        </Card></SettingAnchor>
+        <SettingAnchor id="menuDesign"><Card className="p-3 mb-3">
+          <Txt className="font-extrabold text-[17px]">{t('mx.design.title')}</Txt>
+          <Txt className="text-muted text-[13px] mb-4">{t('mx.design.desc')}</Txt>
+          <View style={wrap}>
+            {MENU_DESIGNS.map((id) => (
+              <Option key={id} id={id} testID={`menudesign-${id}`} active={(settings.adminMenuDesign ?? 'glide') === id} title={t(`mx.design.${id}`)} desc={t(`mx.design.${id}Desc`)} onPress={() => set({ adminMenuDesign: id })}>
+                <MenuPreview design={id} animated={settings.adminMenuAnim !== false} />
+              </Option>
+            ))}
           </View>
-          <Toggle testID="setting-adminMenuAnim" label={t('mx.anim.title')} value={settings.adminMenuAnim !== false} onValueChange={(value) => set({ adminMenuAnim: value })} />
-        </View>
-      </Card>
-      <Card className="p-3 mb-3">
-        <Txt className="font-extrabold text-[17px] mb-4">{t('improve.fonts')}</Txt>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-          <View style={{ flexGrow: 1, flexBasis: 280, minWidth: 0 }}><FontSelector language="fr" options={FRENCH_FONTS} value={settings.frenchFont} onChange={(frenchFont) => set({ frenchFont })} /></View>
-          <View style={{ flexGrow: 1, flexBasis: 280, minWidth: 0 }}><FontSelector language="ar" options={ARABIC_FONTS} value={settings.arabicFont} onChange={(arabicFont) => set({ arabicFont })} /></View>
-        </View>
-      </Card>
-      <Card className="p-3 mb-3">
-        <Txt className="font-bold text-[17px] mb-1">{t('improve.planning')}</Txt>
-        <Txt className="text-muted text-[12px] mb-3">{t('improve.planningDesc')}</Txt>
-        <ExhibitionLayouts value={settings.galleryLayout ?? 'grid'} onChange={(galleryLayout) => set({ galleryLayout })} />
-      </Card>
-      <Card className="p-4">
-        <Txt className="font-extrabold text-[17px] mb-2">{t('improve.bulkPanels')}</Txt>
-        <Txt className="text-muted text-[13px] mb-4">{t('improve.bulkDesc')}</Txt>
-        {Object.entries(ENTITIES).map(([key, cfg]) => <View key={key} className="flex-row items-center justify-between py-2 border-t border-line gap-3">
-          <Txt className="flex-1 font-semibold">{t(`admin.nav.${cfg.navKey}`)}</Txt>
-          <Toggle testID={`bulk-enable-${key}`} label={t(`admin.nav.${cfg.navKey}`)} value={settings.bulkPanels?.includes(key) ?? false} onValueChange={(on) => set({ bulkPanels: on ? [...(settings.bulkPanels ?? []), key] : (settings.bulkPanels ?? []).filter((x) => x !== key) })} />
-        </View>)}
-      </Card>
+          <View className="mt-4 pt-1 border-t border-line">
+            <SwitchRow first id="adminMenuAnim" title={t('mx.anim.title')} hint={t('mx.anim.hint')} state={settings.adminMenuAnim !== false ? t('mx.anim.on') : t('mx.anim.off')} value={settings.adminMenuAnim !== false} onChange={(value) => set({ adminMenuAnim: value })} />
+          </View>
+        </Card></SettingAnchor>
+        <SettingAnchor id="bulk"><Card className="p-4">
+          <Txt className="font-extrabold text-[17px] mb-2">{t('improve.bulkPanels')}</Txt>
+          <Txt className="text-muted text-[13px] mb-4">{t('improve.bulkDesc')}</Txt>
+          {Object.entries(ENTITIES).map(([key, cfg]) => <View key={key} className="flex-row items-center justify-between py-2 border-t border-line gap-3">
+            <Txt className="flex-1 font-semibold">{t(`admin.nav.${cfg.navKey}`)}</Txt>
+            <Toggle testID={`bulk-enable-${key}`} label={t(`admin.nav.${cfg.navKey}`)} value={settings.bulkPanels?.includes(key) ?? false} onValueChange={(on) => set({ bulkPanels: on ? [...(settings.bulkPanels ?? []), key] : (settings.bulkPanels ?? []).filter((x) => x !== key) })} />
+          </View>)}
+        </Card></SettingAnchor>
+      </AudienceSection>
       <View className="flex-row flex-wrap gap-2 mt-3"><Button title={t('improve.discardDraft')} variant="soft" disabled={!dirty} onPress={discard} /><Button testID="interface-submit-bottom" title={t('improve.submit')} disabled={!dirty} onPress={save} /></View>
     </AdminPage>
   );
