@@ -7,6 +7,7 @@ import { Txt } from '@/components/ui/Txt';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { Note, Tabs } from '@/components/admin/promptcards/ui';
 import { Automations, useAutomations } from '@/components/admin/assistant/Automations';
+import { DemoMessages } from '@/components/admin/assistant/DemoMessages';
 import { Behaviour } from '@/components/admin/assistant/Behaviour';
 import { Knowledge } from '@/components/admin/assistant/Knowledge';
 import { Providers, useProviders } from '@/components/admin/assistant/Providers';
@@ -16,8 +17,8 @@ import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useT } from '@/i18n';
 import { toast } from '@/store/useToast';
 
-type TabKey = 'behaviour' | 'providers' | 'knowledge' | 'automations';
-const TAB_ICON: Record<TabKey, string> = { behaviour: 'tune-variant', providers: 'server-network', knowledge: 'book-open-page-variant-outline', automations: 'lightning-bolt-outline' };
+type TabKey = 'behaviour' | 'providers' | 'knowledge' | 'automations' | 'demo';
+const TAB_ICON: Record<TabKey, string> = { behaviour: 'tune-variant', providers: 'server-network', knowledge: 'book-open-page-variant-outline', automations: 'lightning-bolt-outline', demo: 'message-text-outline' };
 
 /** The three steps a customer message goes through, so the four tabs make sense at a glance. */
 function Flow() {
@@ -78,6 +79,7 @@ export default function AssistantAdmin() {
   const live = backendEnabled && c.type === 'ai';
   const tabs: { key: TabKey; label: string; icon: string; dot: boolean }[] = [
     { key: 'behaviour', label: t('asx.tabs.behaviour'), icon: TAB_ICON.behaviour, dot: doc.dirty && tab !== 'knowledge' },
+    { key: 'demo' as TabKey, label: t('da.tab'), icon: TAB_ICON.demo, dot: false },
     ...(live ? [
       { key: 'providers' as TabKey, label: t('asx.tabs.providers'), icon: TAB_ICON.providers, dot: prov.dirty },
       { key: 'knowledge' as TabKey, label: t('asx.tabs.knowledge'), icon: TAB_ICON.knowledge, dot: false },
@@ -103,6 +105,7 @@ export default function AssistantAdmin() {
       {tabs.length > 1 ? <Tabs prefix="asx" value={current} onChange={setTab} options={tabs} /> : null}
       <View className="mt-3">
         {current === 'behaviour' ? <Behaviour c={c} setC={doc.set} /> : null}
+        {current === 'demo' ? <DemoMessages c={c} setC={doc.set} /> : null}
         {current === 'providers' ? <Providers api={prov} totals={auto.info?.totals} /> : null}
         {current === 'knowledge' ? <Knowledge c={c} setC={doc.set} /> : null}
         {current === 'automations' ? <Automations api={auto} /> : null}

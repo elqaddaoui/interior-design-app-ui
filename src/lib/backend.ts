@@ -83,7 +83,8 @@ export async function apiBlob(path: string, timeoutMs = 30000): Promise<Blob> {
 }
 /** Built-in default admin login. It must always open the admin panel, even if the API is unreachable or outdated. */
 export const isDefaultAdmin = (email: string, password: string) => email.trim().toLowerCase() === 'admin' && password === 'admin';
-export async function backendLogin(email: string, password: string) {
+export type LoginResult = { ok: true; user: { id: string; name: string } } | { ok: false; reason: 'invalid' | 'limited' | 'unreachable' };
+export async function backendLogin(email: string, password: string): Promise<LoginResult> {
   try {
     const result = await api<{ ok: true; user: { id: string; name: string }; token?: string }>('/admin/login', { method: 'POST', body: { email, password } });
     if (Platform.OS !== 'web' && result.token) {
@@ -91,15 +92,18 @@ export async function backendLogin(email: string, password: string) {
       await setItemAsync('dwira-backend-session', result.token);
     }
     useLocal.getState().set({ adminOffline: false });
-    return { ok: true as const, user: result.user };
-  } catch {
+    return { ok: true, user: result.user };
+  } catch (error) {
+    // The server answered: wrong credentials (401) or too many tries (429). Never fall back to the built-in login then,
+    // because the password may have been changed on the server.
+    if (error instanceof BackendError && (error.status === 401 || error.status === 429)) return { ok: false, reason: error.status === 429 ? 'limited' : 'invalid' };
     // Server missing (static hosting, /api not proxied) or running an older build without the default login:
     // still accept admin/admin locally. Server-protected data stays protected by the server itself.
     if (isDefaultAdmin(email, password)) {
       useLocal.getState().set({ adminOffline: true });
-      return { ok: true as const, user: { id: 'usr_admin', name: 'Admin' } };
+      return { ok: true, user: { id: 'usr_admin', name: 'Admin' } };
     }
-    return { ok: false as const };
+    return { ok: false, reason: 'unreachable' };
   }
 }
 export async function backendLogout() {

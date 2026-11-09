@@ -1,4 +1,5 @@
 import { QuickReplies } from '@/components/chat/QuickReplies';
+import { DemoCards, DemoNext } from '@/components/chat/DemoCards';
 import React, { useEffect, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import { Image } from 'expo-image';
@@ -16,9 +17,12 @@ import { pickPhoto, pickPhotos } from '@/lib/photo';
 import { uid } from '@/lib/uid';
 import { replyDelayMs, typeStep } from '@/lib/chatPace';
 import { toast } from '@/store/useToast';
+import { router } from '@/hooks/useLeaveGuard';
+import { demoAction, demoConfigOf, demoMeta, nextOptions } from '@/lib/demoMessages';
+import { trackDemoClick } from '@/lib/demoApi';
 import { VoiceBubble, useVoicePlayback, type Recorded } from './voice';
 import { ChatComposer } from './ChatComposer';
-import type { ChatMessage, Conversation } from '@/data/types';
+import type { ChatMessage, Conversation, DemoMessage, ReplyMeta } from '@/data/types';
 
 const MAX_IMAGES = 10;
 
@@ -43,7 +47,7 @@ function dayName(time: number, t: (key: string) => string) {
  * classic chat; the admin switches between the two in Interface.
  */
 export function WaChat({ conversationId, onCreated, header }: { conversationId?: string; onCreated?: (id: string) => void; header?: React.ReactNode }) {
-  const { t } = useT();
+  const { t, lang } = useT();
   const L = useL();
   const config = useStore((s) => s.doc.assistant);
   const userId = useUserSession((s) => s.user?.id) || VISITOR;
@@ -56,6 +60,8 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
   const [viewer, setViewer] = useState<number | null>(null);
   const [typing, setTyping] = useState<{ id: string; shown: number } | null>(null);
   const [optimistic, setOptimistic] = useState<ChatMessage[] | null>(null);
+  // The demo message whose answer is the last one of the chat (follow-ups and its button show under it).
+  const [activeDemo, setActiveDemo] = useState<string | undefined>();
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const list = useRef<FlatList>(null);
@@ -105,7 +111,7 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
   };
 
   /** Saves the new messages, then (for text / pictures) asks the assistant, paced like a person. */
-  const deliver = async (fresh: ChatMessage[], askAssistant: boolean, buttonId?: string) => {
+  const deliver = async (fresh: ChatMessage[], askAssistant: boolean, buttonId?: string, canned?: { text: string; meta: ReplyMeta }) => {
     setBusy(true);
     const st = useStore.getState();
     let c: Conversation | undefined = conv;
@@ -129,8 +135,10 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
     const started = Date.now();
     let answer = '';
     let meta: ChatMessage['meta'];
-    try { const out = await services.chat.reply({ messages: next, config, ...(buttonId ? { buttonId } : {}) }); answer = out.text; meta = out.meta; } catch { answer = t('assistant.error'); }
-    const wait = replyDelayMs(config, answer) - (Date.now() - started);
+    if (canned) { answer = canned.text; meta = canned.meta; }
+    else { try { const out = await services.chat.reply({ messages: next, config, ...(buttonId ? { buttonId } : {}) }); answer = out.text; meta = out.meta; } catch { answer = t('assistant.error'); } }
+    // The owner's written answer needs no AI: a short pause (typing dots) is all that is kept.
+    const wait = (canned ? Math.min(replyDelayMs(config, answer), 900) : replyDelayMs(config, answer)) - (Date.now() - started);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     const am: ChatMessage = { id: uid('m'), role: 'assistant', text: answer, createdAt: Date.now(), ...(meta ? { meta } : {}) };
     const animate = config.typewriter !== false && config.replyDelayMode !== 'off' && alive.current && answer.length > 0;
@@ -152,12 +160,14 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
   useEffect(() => { let on = true; services.chat.buttons().then((list) => { if (on) setButtons(list); }); return () => { on = false; }; }, []);
   const pressButton = async (button: { id: string; label: string }) => {
     if (busy) return;
+    setActiveDemo(undefined);
     await deliver([{ id: uid('m'), role: 'user', text: button.label, createdAt: Date.now() }], true, button.id);
   };
 
   const canSend = !busy && (!!text.trim() || staged.length > 0);
   const send = async () => {
     if (!canSend) return;
+    setActiveDemo(undefined);
     const caption = text.trim();
     const pictures = staged;
     setText(''); setStaged([]);
@@ -169,7 +179,22 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
     await deliver(fresh, true);
   };
 
+  /** A tap on a demo message: count it, then fill the box / show the owner's answer at once / let the assistant answer. */
+  const demo = React.useMemo(() => demoConfigOf(config), [config]);
+  const pickDemo = async (item: DemoMessage) => {
+    if (busy) return;
+    trackDemoClick(item.id);
+    const action = demoAction(item, lang);
+    if (action.kind === 'fill') { setText(action.text); return; }
+    setActiveDemo(item.id);
+    const question: ChatMessage = { id: uid('m'), role: 'user', text: action.question, createdAt: Date.now() };
+    await deliver([question], true, undefined, action.kind === 'answer' ? { text: action.answer, meta: demoMeta(item, lang) } : undefined);
+  };
+  const next = React.useMemo(() => nextOptions(demo, lang, messages, activeDemo), [demo, lang, messages, activeDemo]);
+  const followUps = next.item && !busy && !typing ? <DemoNext item={next.item} options={next.options} disabled={busy} onPick={pickDemo} onCta={(href) => router.push(href as never)} /> : null;
+
   const sendVoice = async (result: Recorded) => {
+    setActiveDemo(undefined);
     const id = uid('m');
     playUris.current[id] = result.playUri;
     // The assistant cannot hear: a voice note goes to the team (they are notified) and no automatic answer is made.
@@ -223,10 +248,12 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
             <Icon name="star-four-points" size={34} tone="primary" />
             <Txt className="text-[22px] font-extrabold text-center mt-3">{t('assistant.hello')}</Txt>
             {L(config.welcome) ? <Txt className="text-muted text-center mt-2 px-6">{L(config.welcome)}</Txt> : <Txt className="text-muted text-center mt-2 px-6">{t('md.chat.empty')}</Txt>}
+            <View style={{ height: 22 }} />
+            <DemoCards config={demo} onPick={pickDemo} disabled={busy} />
           </Animated.View>
         }
         renderItem={renderItem}
-        ListFooterComponent={busy && !optimistic ? <View testID="chat-typing" accessibilityLabel={t('assistant.typing')} className="self-start bg-surface2 rounded-2xl px-4 py-3.5 flex-row gap-1.5 items-center mt-1"><Dot d={0} /><Dot d={150} /><Dot d={300} /></View> : null}
+        ListFooterComponent={busy && !optimistic ? <View testID="chat-typing" accessibilityLabel={t('assistant.typing')} className="self-start bg-surface2 rounded-2xl px-4 py-3.5 flex-row gap-1.5 items-center mt-1"><Dot d={0} /><Dot d={150} /><Dot d={300} /></View> : followUps}
       />
 
       {buttons.length && !staged.length && !text.trim() ? <QuickReplies items={buttons} busy={busy} onPick={pressButton} /> : null}

@@ -68,7 +68,7 @@ export const mockServices: Services = {
     async loginAdmin(email, password) {
       await wait(500);
       if ((email.trim().toLowerCase() === 'admin' && password === 'admin') || (email.trim().toLowerCase() === 'admin@dwira.app' && password === 'admin123')) return { ok: true, user: { id: 'usr_admin', name: 'Admin' } };
-      return { ok: false };
+      return { ok: false, reason: 'invalid' };
     },
   },
   upload: {

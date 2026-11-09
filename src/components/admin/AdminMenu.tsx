@@ -6,8 +6,10 @@ import { useRouter } from '@/hooks/useLeaveGuard';
 import { SearchTarget, RememberScroll } from '@/hooks/useViewState';
 import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
-import { Initials } from '@/components/admin/dashboard/Kit';
-import { CONTEXT_MENU_WIDTH, RightClick, contextMenuHeight, openContextMenu, sep, type MenuItem } from '@/components/admin/ContextMenu';
+import { AdminAvatar } from '@/components/admin/AdminAvatar';
+import { AccountMenu, type Anchor } from '@/components/admin/AccountMenu';
+import { RightClick, type MenuItem } from '@/components/admin/ContextMenu';
+import { useAdminProfile } from '@/store/useAdminProfile';
 import { ADMIN_GROUPS, ADMIN_NAV, type NavItem } from '@/lib/adminNav';
 import { MENU_GEO, activeKey, menuPositions } from '@/lib/menuLayout';
 import { useT } from '@/i18n';
@@ -142,17 +144,11 @@ export function AdminMenu({ collapsed, design, anim, fill, insetTop = 0, onNavig
     ...(Platform.OS === 'web' ? [{ key: 'newtab', label: t('ax.openNewTab'), icon: 'open-in-new', onPress: () => { (globalThis as any).window?.open?.(n.href, '_blank', 'noopener'); } } as MenuItem] : []),
   ], [t, router]);
 
-  const openAccount = () => {
-    const items: MenuItem[] = [
-      { key: 'open-app', label: t('admin.openApp'), icon: 'open-in-new', onPress: () => { onNavigate?.(); router.push('/'); } },
-      sep('s1'),
-      { key: 'logout', label: t('admin.logout'), icon: 'logout', danger: true, onPress: onLogout },
-    ];
-    account.current?.measureInWindow((x, y, w) => {
-      const left = rtl ? x + w - CONTEXT_MENU_WIDTH : x;
-      openContextMenu(left, y - contextMenuHeight(items) - 8, items);
-    });
-  };
+  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const profile = useAdminProfile((s) => s.profile);
+  const adminName = (profile?.name || '').trim() || t('dx.shell.admin');
+  const openAccount = () => { account.current?.measureInWindow((x, y, w) => setAnchor({ x, y, w })); };
+  const closeAccount = () => setAnchor(null);
 
   return (
     <Animated.View testID="admin-menu" style={[fill ? { flex: 1 } : widthStyle, { backgroundColor: colors.surface, borderEndWidth: 1, borderColor: colors.line, paddingTop: insetTop, overflow: 'hidden' }]}>
@@ -186,15 +182,16 @@ export function AdminMenu({ collapsed, design, anim, fill, insetTop = 0, onNavig
         <View ref={account} collapsable={false}>
           <Pressable testID="admin-account" accessibilityRole="button" accessibilityLabel={t('dx.shell.admin')} {...(Platform.OS === 'web' ? ({ 'aria-haspopup': 'menu', title: t('dx.shell.admin') } as object) : {})} onPress={openAccount}
             className="flex-row items-center rounded-2xl hover:bg-surface2 active:bg-surface2 overflow-hidden" style={{ height: 52, paddingStart: 5, paddingEnd: 8, gap: 10 }}>
-            <Initials name={name || 'A'} size={34} />
+            <AdminAvatar name={adminName} uri={profile?.avatar} size={34} />
             <Animated.View style={[{ flex: 1, minWidth: 0 }, fade]}>
-              <Txt numberOfLines={1} className="font-extrabold text-[13px]">{t('dx.shell.admin')}</Txt>
+              <Txt numberOfLines={1} className="font-extrabold text-[13px]">{adminName}</Txt>
               <Txt numberOfLines={1} className="text-muted text-[11px]">{pending > 0 ? `${t('dx.shell.pending')} · ${pending}` : t('dx.shell.noPending')}</Txt>
             </Animated.View>
             <Animated.View style={fade}><Icon name="unfold-more-horizontal" size={18} tone="muted" /></Animated.View>
           </Pressable>
         </View>
       </View>
+      <AccountMenu anchor={anchor} onClose={closeAccount} fallbackName={t('dx.shell.admin')} onGo={(href) => { onNavigate?.(); router.push(href as Href); }} onOpenApp={() => { onNavigate?.(); router.push('/'); }} onLogout={onLogout} />
     </Animated.View>
   );
 }

@@ -343,6 +343,32 @@ export interface AssistantConfig {
   typewriter?: boolean;
   /** The owner's own facts for the assistant (opening hours, offers, delivery...), added to the built-in app knowledge. */
   knowledgeNotes?: string;
+  /** Demo messages shown by default in an empty chat (Admin > Assistant > Demo messages). Missing = the built-in starter set. */
+  demo?: DemoConfig;
+}
+/** How a demo message works: `click` sends it with one tap and shows its answer; `write` drops a starter sentence in the message box for the person to finish. */
+export type DemoMode = 'click' | 'write';
+/** `text` = the owner's written answer (instant, in the person's language); `ai` = the normal pipeline (automations, then the AI) answers. */
+export type DemoReplyType = 'text' | 'ai';
+/** A button shown under the written answer. */
+export type DemoCta = 'none' | 'tools' | 'explore' | 'pro';
+export interface DemoMessage {
+  id: Id; enabled: boolean; icon: string; label: LText;
+  mode: DemoMode;
+  /** `write` mode: the sentence put in the message box (the label when empty). */
+  prompt?: LText;
+  reply: { type: DemoReplyType; text: LText };
+  /** Demo messages offered right after the answer (ids, at most 4): the person decides what to pick next. */
+  followUps: Id[];
+  cta: DemoCta;
+}
+export interface DemoConfig {
+  enabled: boolean;
+  title?: LText; subtitle?: LText;
+  /** `cards` = a grid of tiles with an icon; `chips` = a compact wrapping list. */
+  layout?: 'cards' | 'chips';
+  /** Keep offering follow-ups and the pick list again after each answer. */
+  items: DemoMessage[];
 }
 export type UserNavStyle = 'classic' | 'floating' | 'minimal';
 /** Page layouts (Admin > Page layouts): which demo layout Home / Explore use on a phone and on a computer. */

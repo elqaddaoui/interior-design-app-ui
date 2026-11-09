@@ -188,3 +188,10 @@ node scripts/check-inbox-browser.js    # admin chat deep link + reply, notificat
 node scripts/check-sync-browser.js     # two browsers: content, leads and preferences sync (server serving dist/)
 ```
 Phone-only login is the existing behavior (no OTP verification); do not treat knowledge of a phone number as production-grade proof of identity. Real push delivery to Google/Apple and physical devices remain manual checks.
+
+## Admin account, logins and demo messages
+
+- **Separate logins**: admins sign in at `/admin/login` (dark UI), customers at `/login` (light UI). `/admin/*` redirects to `/admin/login?next=…` when signed out.
+- **Admin account** (`/admin/account`, "Compte"): name, title, phone, e-mail, credits, profile photo, password change (scrypt hash stored in `admin_accounts`, overrides the built-in `admin/admin`), and signed-in devices. Set `DISABLE_DEFAULT_ADMIN=true` in production.
+- **Account menu** (admin sidebar): credits chip, language fast-select (DAR / AR / FR), Compte, Carte des réglages, Ouvrir l'app, Déconnexion.
+- **Demo messages**: shown by default in the empty `/assistant` chat. Managed in **Admin > Assistant > Messages démo**: toggle, cards/chips layout, title, drag-reorder, per-message click or write mode, instant owner answer or AI answer, follow-ups, CTA button, tap counters, "most asked by customers" suggestions and a live preview. Checks: `npm run check:demo`.

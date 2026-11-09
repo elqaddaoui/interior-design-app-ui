@@ -10,6 +10,7 @@
 const { detectLanguage } = require('../chat');
 const A = require('./automations');
 const knowledge = require('./knowledge');
+const { createDemo } = require('./demo');
 
 const LIST_KEY = 'assistant_automations';
 const fail = (status, code) => Object.assign(new Error(code), { status });
@@ -155,7 +156,8 @@ function createAssistant(db, { chat, content, clock = Date.now } = {}) {
     }
   }
 
-  return { answer, test, overview, saveList, buttons, getList };
+  const demo = createDemo(db, { clock });
+  return { answer, test, overview, saveList, buttons, getList, demo };
 }
 
 module.exports = { createAssistant };
