@@ -18,6 +18,7 @@ export function ModelBadge({ tool, draft, onChange, hasPhoto }: { tool: Tool; dr
   const models = useStore((s) => s.models);
   const picker = useStore((s) => s.doc.settings.aiModelPicker) === true;
   const status = useAiStatus();
+  const rotating = !!status?.live && status.rotation === true;
   const allowed = [...models].filter((m) => m.enabled && m.visible !== false && tool.modelIds.includes(m.id)).sort((a, b) => a.order - b.order);
   const activeId = draft.modelId && allowed.some((m) => m.id === draft.modelId) ? draft.modelId : resolveModelId(tool, models);
   const label = (id?: string) => {
@@ -31,9 +32,9 @@ export function ModelBadge({ tool, draft, onChange, hasPhoto }: { tool: Tool; dr
       <View className="flex-row items-center gap-2">
         <Icon name="creation" size={16} tone="muted" />
         <Txt className="text-[12.5px] text-muted">{t('wizard.modelActive')}</Txt>
-        <Txt testID="model-active" className="text-[13px] font-extrabold flex-1" numberOfLines={1}>{status && !status.live ? t('wizard.modelDemo') : label(activeId)}</Txt>
+        <Txt testID="model-active" className="text-[13px] font-extrabold flex-1" numberOfLines={1}>{status && !status.live ? t('wizard.modelDemo') : rotating ? t('wizard.modelRotation') : label(activeId)}</Txt>
       </View>
-      {picker && allowed.length > 1 ? (
+      {picker && !rotating && allowed.length > 1 ? (
         <View className="flex-row flex-wrap gap-2 mt-2.5">
           {allowed.map((m) => {
             const on = m.id === activeId;

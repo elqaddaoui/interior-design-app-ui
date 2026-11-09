@@ -162,7 +162,6 @@ export function LivePreview({ rules, scope, tc, onCase, highlight, onPickStep, a
 
       {res ? (
         <View className={`mt-4 ${busy ? 'opacity-70' : ''}`} testID="pc-prev-result">
-          {res.appliesTo === 'explore' && !res.explore ? <Note tone="info" text={t('pc.prevLimited')} /> : null}
           {!res.model.live ? <Note tone="info" text={t('pc.prevNoKey')} /> : null}
           {res.warnings.map((w) => <Note key={w.code} tone="warn" testID={`pc-warn-${w.code}`} text={t(`pc.warn.${w.code}`, { items: (w.items ?? []).join(', ') })} />)}
 

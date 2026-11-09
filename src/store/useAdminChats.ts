@@ -11,7 +11,7 @@ export const useAdminChats = create<{
   chats: AdminConversation[];
   loaded: boolean;
   load(): Promise<void>;
-  reply(id: string, text: string): Promise<void>;
+  reply(id: string, text: string, audio?: { uri: string; durationMs: number }): Promise<void>;
   clear(): void;
 }>((set, get) => ({
   chats: [],
@@ -29,8 +29,8 @@ export const useAdminChats = create<{
     const merged = [...delta.chats, ...get().chats.filter(chat => keep.has(chat.id) && !changed.has(chat.id))];
     set({ chats: merged.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), loaded: true });
   },
-  async reply(id, text) {
-    const updated = await api<AdminConversation>(`/admin/conversations/${encodeURIComponent(id)}`, { method: 'POST', body: { text } });
+  async reply(id, text, audio) {
+    const updated = await api<AdminConversation>(`/admin/conversations/${encodeURIComponent(id)}`, { method: 'POST', body: { text, ...(audio ? { audio } : {}) } });
     set({ chats: [updated, ...get().chats.filter(chat => chat.id !== id)] });
   },
   clear: () => set({ chats: [], loaded: false }),

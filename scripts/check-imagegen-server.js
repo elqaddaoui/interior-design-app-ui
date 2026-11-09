@@ -185,6 +185,37 @@ test('admin: engine keys are write-only; an admin model with an engine runs firs
   } finally { backend.server.emit('close'); }
 });
 
+test('rotation: each new creation uses the next selected model, skips a resting one, and is off by default', async () => {
+  const api = fakeApi({ 'model-b': 429 });
+  const { backend, auth, admin } = await setup({ POLLINATIONS_API_KEY: 'sk_test_key_123456', IMAGEGEN_API_KEY: 'sk_openai_key_123456' }, api);
+  try {
+    const row = (id, name, order, extra = {}) => call(backend, `/api/admin/content/models/${id}`, { method: 'PUT', headers: admin, body: { name, provider: 'x', engine: 'openai', modelName: name, apiKey: '', enabled: true, isDefault: false, order, visible: true, ...extra } });
+    await row('rot_a', 'model-a', 1); await row('rot_b', 'model-b', 2); await row('rot_c', 'model-c', 3); await row('rot_off', 'model-off', 4);
+    const render = async n => { const id = `rotation-claim-${n}0000`; await call(backend, '/api/requests', { method: 'POST', headers: auth, body: demand(id) }); const out = await call(backend, '/api/ai/render', { method: 'POST', headers: auth, body: { id } }); assert.equal(out.status, 200, JSON.stringify(out.body)); return out.body.model; };
+    // Off: the free chain runs, exactly as before.
+    assert.equal(await render(0), 'black-forest-labs/flux.2-klein-4b');
+    // On with three models (one unrelated model is not selected).
+    const patch = await call(backend, '/api/admin/doc/settings', { method: 'PATCH', headers: admin, body: { aiRotation: { on: true, ids: ['rot_a', 'rot_b', 'rot_c', 'rot_a', 'bad id!'] } } });
+    assert.equal(patch.status, 200, JSON.stringify(patch.body));
+    const info = (await call(backend, '/api/admin/ai/status', { headers: admin })).body.rotation;
+    assert.deepEqual(info.pool.map(m => m.id), ['rot_a', 'rot_b', 'rot_c']);
+    assert.equal(info.next, 'rot_a');
+    assert.equal(info.active, true);
+    // 1st creation: a. 2nd: b answers 429 -> the next pool model (c) answers instead, b rests. 3rd: a. 4th: c (b is still resting).
+    assert.equal(await render(1), 'model-a');
+    assert.equal(await render(2), 'model-c');
+    assert.equal(await render(3), 'model-a');
+    assert.equal(await render(4), 'model-c');
+    // The app only learns that rotation is on, never the pool's keys.
+    const pub = await call(backend, '/api/ai/status', { headers: auth });
+    assert.equal(pub.body.rotation, true);
+    assert.equal(JSON.stringify(pub.body).includes('sk_'), false);
+    // Switched off again: back to the tool's model / free chain.
+    await call(backend, '/api/admin/doc/settings', { method: 'PATCH', headers: admin, body: { aiRotation: { on: false, ids: ['rot_a', 'rot_b'] } } });
+    assert.equal(await render(5), 'black-forest-labs/flux.2-klein-4b');
+  } finally { backend.server.emit('close'); }
+});
+
 test.after(closeShared);
 
 /**

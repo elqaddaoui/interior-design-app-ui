@@ -192,16 +192,10 @@ export function OutputTab({ value, onChange }: { value: PromptSet['output']; onC
 }
 
 /* ------------------------------------------------------------------ Explorer page */
-/** Everything about the Explore page in one place: when the rules apply, the extra rules, and the wording of the Explorer picture step. */
-export function ExplorerRules({ appliesTo, onApplies, text, onText }: { appliesTo: 'all' | 'explore'; onApplies: (v: 'all' | 'explore') => void; text: string; onText: (v: string) => void }) {
+/** Explore page: ONE field, the extra rules added to the prompt only when the client generates from an Explore picture. */
+export function ExplorerRules({ text, onText }: { text: string; onText: (v: string) => void }) {
   const { t } = useT();
   return (<>
-    <Note tone="info" text={t('pc.exploreAlways')} />
-    <Label hint={t('pc.whenHint')}>{t('pc.whenTitle')}</Label>
-    <View className="mb-4"><OptionTiles testID="pc-applies" value={appliesTo} onChange={onApplies} options={[
-      { key: 'all', label: t('pc.whenAll'), sub: t('pc.whenAllSub'), icon: 'layers-outline' },
-      { key: 'explore', label: t('pc.whenExplore'), sub: t('pc.whenExploreSub'), icon: 'compass-outline' },
-    ]} /></View>
     <Label hint={t('pc.exploreRulesHint')}>{t('pc.exploreRulesTitle')}</Label>
     <Input tight testID="pc-rules-explore" value={text} onChangeText={onText} multiline placeholder={t('pc.explorePlaceholder')} style={area} maxLength={RULES_MAX} />
     <Txt className="text-[11px] text-muted text-end mt-1 mb-1">{text.length} / {RULES_MAX}</Txt>

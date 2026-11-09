@@ -445,6 +445,19 @@ export const PRESETS: StudioPreset[] = [
   preset('ocean', 'waves', { ease: 'spring', sp: [2, 3], motion: { dir: 'fixed', angle: 0, sweep: 18 }, bar: { mode: 'custom', size: 10, paint: P('gradient', '#38BDF8', '#0EA5E9', 90), glow: 24, trail: 160, trailColor: '#38BDF8', opacity: 0.85 }, els: { mode: 'custom', shape: 'ring', motion: 'rise', count: 12, size: 16, sizeVar: 0.6, colors: 'palette', palette: ['#FFFFFF', '#BAE6FD', '#7DD3FC'], stagger: 0.8, opacity: 0.85 }, tint: { on: true, kind: 'gradient', c1: '#0EA5E9', c2: '#14B8A6', c3: '', ang: 90, amount: 0.22, peak: 'mid' } }),
 ];
 
+/** Seeds are whole numbers in this range (what `cleanStudio` keeps). */
+export const SEED_MIN = 1;
+export const SEED_MAX = 9999;
+export const clampSeed = (n: number) => Math.min(SEED_MAX, Math.max(SEED_MIN, Math.round(Number.isFinite(n) ? n : DEFAULT_STUDIO.seed)));
+/** A fresh seed, never the current one. */
+export const newSeed = (current: number, rand: () => number = Math.random) => { let n = SEED_MIN + Math.floor(rand() * (SEED_MAX - SEED_MIN + 1)); if (n === current) n = n === SEED_MAX ? SEED_MIN : n + 1; return n; };
+/** A lively random accent colour (full saturation family, mid lightness), as #RRGGBB. */
+export function randomAccent(rand: () => number = Math.random): string {
+  const h = Math.floor(rand() * 360), s = 0.82, l = 0.55, a = s * Math.min(l, 1 - l);
+  const f = (n: number) => { const k = (n + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); };
+  return `#${f(0)}${f(8)}${f(4)}`.toUpperCase();
+}
+
 /** "Surprise me": a coherent random style (same seed = same result). Every part stays inside the ranges the editor offers. */
 export function randomStudio(seed: number): StudioStyle {
   const r = (k: number) => rnd(seed, k);

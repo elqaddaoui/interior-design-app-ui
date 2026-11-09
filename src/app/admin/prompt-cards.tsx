@@ -103,7 +103,7 @@ export default function PromptCards() {
   if (explore) {
     page = (
       <Card className="p-3" testID="pc-panel-explore">
-        <ExplorerRules appliesTo={draft.appliesTo} onApplies={(v) => change((d) => ({ ...d, appliesTo: v }))} text={draft.global.rules.exploreText} onText={(v) => change((d) => ({ ...d, global: { ...d.global, rules: { ...d.global.rules, exploreText: v } } }))} />
+        <ExplorerRules text={draft.global.rules.exploreText} onText={(v) => change((d) => ({ ...d, global: { ...d.global, rules: { ...d.global.rules, exploreText: v } } }))} />
         <View className="mt-3">{steps}</View>
       </Card>
     );

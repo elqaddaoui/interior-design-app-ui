@@ -67,7 +67,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   async function status() {
     const engines = {};
     for (const name of Object.keys(ENGINES)) { const { source } = await keyOf(name); engines[name] = { label: ENGINES[name].label, configured: source !== 'none', source }; }
-    return { engines, live: Object.values(engines).some(engine => engine.configured), chainI2I: chainOf(true), chainT2I: chainOf(false) };
+    return { engines, live: Object.values(engines).some(engine => engine.configured), chainI2I: chainOf(true), chainT2I: chainOf(false), rotation: await rotationInfo() };
   }
   /** Write-only: a string stores/replaces a key, an empty string removes it, undefined leaves it alone. */
   async function setKeys(input) {
@@ -90,7 +90,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   const chainOf = i2i => (list(env[i2i ? 'IMAGEGEN_MODELS_I2I' : 'IMAGEGEN_MODELS_T2I']).concat(i2i ? CHAIN_I2I : CHAIN_T2I)).filter((m, i, all) => all.indexOf(m) === i);
 
   /** Models to try, in order: the admin's model for the tool first, then the free chain. */
-  async function candidates(row, needImage) {
+  async function candidates(rows, needImage) {
     const out = [];
     const add = async (engine, model, extra = {}) => {
       if (!ENGINES[engine] || !model || out.some(c => c.engine === engine && c.model === model)) return;
@@ -99,11 +99,65 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       const { key } = await keyOf(engine, extra.key);
       if (!key) return;
       if ((cooling.get(`${engine}|${model}`) || 0) > clock()) return;
-      out.push({ engine, model, key, base: baseOf(engine, extra.row), label: extra.label || cap.title, cap, requested: !!extra.row });
+      out.push({ engine, model, key, base: baseOf(engine, extra.row), label: extra.label || cap.title, cap, requested: !!extra.row, rowId: extra.row?.id });
     };
-    if (row?.engine && ENGINES[row.engine] && row.enabled !== false) await add(row.engine, String(row.modelName || '').trim(), { key: row.apiKey, row, label: row.name });
+    // `rows`: the admin's model for the tool, or (rotation) the pool starting at the model whose turn it is; the others are fallbacks.
+    for (const row of [].concat(rows || [])) if (row?.engine && ENGINES[row.engine] && row.enabled !== false) await add(row.engine, String(row.modelName || '').trim(), { key: row.apiKey, row, label: row.name });
     for (const model of chainOf(needImage)) await add('pollinations', model);
     return out;
+  }
+
+  /* ------------------------------------------------------------ rotation (Admin > AI models): each new creation uses the next selected model */
+  const ROTATION_KEY = 'image_rotation';
+  const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
+  /** The saved switch + the chosen model ids (Settings.aiRotation), sanitised. */
+  const rotationSetting = settings => {
+    const raw = settings?.aiRotation;
+    const ids = Array.isArray(raw?.ids) ? raw.ids.filter(id => typeof id === 'string' && ID_RE.test(id)).slice(0, 50) : [];
+    return { on: raw?.on === true, ids: ids.filter((id, i) => ids.indexOf(id) === i) };
+  };
+  const rotationLast = async () => { try { const row = (await db.query('SELECT value FROM settings WHERE key=$1', [ROTATION_KEY]))[0]; return row ? String(JSON.parse(row.value).last || '') : ''; } catch { return ''; } };
+  /** The selected models that exist, are switched on, have an engine, and (with a photo) can take one. In the admin's list order. */
+  function rotationPool(collections, setting, needImage) {
+    const chosen = new Set(setting.ids);
+    return (collections.models || []).filter(m => chosen.has(m.id) && m.enabled !== false && m.visible !== false && m.engine && ENGINES[m.engine] && String(m.modelName || '').trim())
+      .filter(m => !needImage || capability(m.engine, String(m.modelName).trim()).i2i)
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+  }
+  /** The pool as it is right now: usable models only (key present, not resting), rotated so the model whose turn it is comes first. */
+  async function rotationOrder(collections, setting, needImage, last) {
+    const usable = [];
+    for (const m of rotationPool(collections, setting, needImage)) {
+      const model = String(m.modelName).trim();
+      if (!(await keyOf(m.engine, m.apiKey)).key || (cooling.get(`${m.engine}|${model}`) || 0) > clock()) continue;
+      usable.push(m);
+    }
+    const at = usable.findIndex(m => m.id === last);
+    return at < 0 ? usable : [...usable.slice(at + 1), ...usable.slice(0, at + 1)];
+  }
+  /** Takes the turn: the next usable model in the pool is reserved (so two renders at once never start on the same one). Null = rotation is off / nothing to rotate. */
+  async function takeTurn(collections, settings, needImage) {
+    const setting = rotationSetting(settings);
+    if (!setting.on) return null;
+    const pick = await db.tx(async q => {
+      const stored = (await q('SELECT value FROM settings WHERE key=$1 FOR UPDATE', [ROTATION_KEY]))[0];
+      const order = await rotationOrder(collections, setting, needImage, stored ? String(JSON.parse(stored.value).last || '') : '');
+      if (!order.length) return null;
+      await q('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [ROTATION_KEY, JSON.stringify({ last: order[0].id, at: clock() })]);
+      return order;
+    });
+    return pick ? { order: pick, size: rotationPool(collections, setting, needImage).length } : null;
+  }
+  /** A fallback model answered instead of the one whose turn it was: the next turn continues after the one that really ran. */
+  const rotationUsed = (id, setting) => id && setting.ids.includes(id)
+    ? db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [ROTATION_KEY, JSON.stringify({ last: id, at: clock() })]).catch(() => {})
+    : Promise.resolve();
+  /** What the admin screen shows: the switch, the pool in order, and which model is next (read only: nothing is taken). */
+  async function rotationInfo() {
+    const snapshot = await content.snapshot(true), c = snapshot.collections, setting = rotationSetting(snapshot.docs?.settings);
+    const pool = rotationPool(c, setting, false);
+    const order = await rotationOrder(c, setting, false, await rotationLast());
+    return { on: setting.on, ids: setting.ids, pool: pool.map(m => ({ id: m.id, name: m.name, engine: m.engine, modelName: m.modelName })), next: order[0]?.id || '', active: setting.on && order.length > 0 };
   }
 
   /* ------------------------------------------------------------ pictures in and out */
@@ -220,10 +274,10 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     // Admin > Interface: with the Relooking / Renovation choice switched off, every generation (even an old draft) is a Relooking.
     const modeChoice = snapshot.docs?.settings?.modeChoice !== false;
     const english = translate ? await toEnglish(clean(draft.prompt, 500)) : '';
-    // The admin's rules for this tool. They may be limited to generations that start from an Explore picture.
+    // The admin's rules for this tool. They always apply; only the Explore-specific text needs an Explore picture (see resolveRules).
     const stored = rules || await loadRules();
     const explore = !!draft.inspirationId;
-    const limited = stored.appliesTo === 'explore' && !explore;
+    const limited = false;
     const active = resolveRules(limited ? defaultRules() : stored, draft.toolId, explore);
     // The extra pictures the rules ask for. Order = priority when a model takes fewer pictures than asked.
     const wanted = [];
@@ -248,7 +302,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       roomTypeId: draft.roomTypeId, roomTitle: ROOM_EN[draft.roomTypeId] || clean(lt(room?.title), 60), styleId: draft.styleId, styleTitle: lt(style?.title),
       mode: modeChoice ? draft.mode : 'restyle', colors, colorSource, paletteName: lt(palette?.title), surprise: !colors.length && !!palette?.isSurprise, prompt: draft.prompt, promptEnglish: english, rules: active,
     };
-    return { c, tool, room, style, palette, inspiration, row, base, english, active, extras, off, explore, limited, stored, size: fitSize(photo?.size, active.output.maxSide || Number(env.IMAGEGEN_MAX_SIDE) || 1024) };
+    return { c, settings: snapshot.docs?.settings || {}, tool, room, style, palette, inspiration, row, base, english, active, extras, off, explore, limited, stored, size: fitSize(photo?.size, active.output.maxSide || Number(env.IMAGEGEN_MAX_SIDE) || 1024) };
   }
   /** What one model really receives: it takes `cap.refs - 1` extra pictures at most, and the prompt only speaks of the pictures that are sent. */
   function compose(planned, cap) {
@@ -278,12 +332,15 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     if (request.photoUri && !photo) throw fail(422, 'PHOTO_UNREADABLE');
     const planned = await plan({ draft, photo });
     const { tool, room, style, palette, inspiration, row, english, size } = planned;
-    const list = await candidates(row, !!photo);
+    // Rotation (Admin > AI models): this creation takes the next selected model; the tool's own model and the free chain stay as fallbacks.
+    const turn = await takeTurn(planned.c, planned.settings, !!photo);
+    const list = await candidates(turn ? [...turn.order, row] : row, !!photo);
     if (!list.length) throw fail(503, (await status()).live ? 'NO_PROVIDER' : 'AI_NOT_CONFIGURED');
     // The inputs as the admin will see them: titles are stored as they were at generation time, so a later rename or deletion changes nothing.
     const run = {
       at: started, size: `${size.width}x${size.height}`, photo: photo ? { width: photo.size?.width || 0, height: photo.size?.height || 0, bytes: photo.body.length } : null,
       english: english || undefined, tried: [],
+      rotation: turn ? { turn: turn.order[0].id, pool: turn.size } : undefined,
       rules: { explore: planned.explore, appliesTo: planned.stored.appliesTo, applied: !planned.limited, scope: planned.active.scope },
       inputs: {
         tool: tool ? { id: tool.id, title: tool.title } : { id: draft.toolId }, room: room ? { id: room.id, title: room.title } : draft.roomTypeId ? { id: draft.roomTypeId } : null,
@@ -307,6 +364,8 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
         const out = await callEngine(candidate, { prompt: brief.prompt, photo, references: photo ? references : [], size, signal: Math.min(left, Number(env.IMAGEGEN_ATTEMPT_MS) || (env.VERCEL ? 24000 : 40000)) });
         const imageUri = await media.storeMedia({ body: out.bytes, mime: out.mime });
         cooling.delete(`${candidate.engine}|${candidate.model}`);
+        // Another pool model answered (the one whose turn it was rested): the next creation continues after it.
+        if (turn && candidate.rowId && candidate.rowId !== turn.order[0].id) await rotationUsed(candidate.rowId, rotationSetting(planned.settings));
         step.ok = true; step.ms = clock() - t0; run.tried.push(step);
         run.used = { engine: candidate.engine, model: candidate.model, label: candidate.label, referenceSent: references.length > 0, imagesSent: references.length };
         run.durationMs = clock() - started;
@@ -346,10 +405,12 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const planned = await plan({ draft, photo: withPhoto ? { size: { width: 1280, height: 960 } } : null, rules: input.rules ? cleanRules(input.rules) : undefined, loadPictures: false });
     planned.preview = true;
     // The model that would run first, with or without a key (a preview works before any engine is configured).
-    const list = await candidates(planned.row, withPhoto);
+    const setting = rotationSetting(planned.settings);
+    const upcoming = setting.on ? await rotationOrder(planned.c, setting, withPhoto, await rotationLast()) : [];
+    const list = await candidates(setting.on ? [...upcoming, planned.row] : planned.row, withPhoto);
     const first = list[0];
     const fallback = chainOf(withPhoto)[0];
-    const model = first ? { label: first.label, model: first.model, engine: first.engine, refs: first.cap.refs, live: true } : { label: capability('pollinations', fallback).title, model: fallback, engine: 'pollinations', refs: capability('pollinations', fallback).refs, live: false };
+    const model = first ? { label: first.label, model: first.model, engine: first.engine, refs: first.cap.refs, live: true, rotating: setting.on && !!first.rowId && upcoming.some(m => m.id === first.rowId) } : { label: capability('pollinations', fallback).title, model: fallback, engine: 'pollinations', refs: capability('pollinations', fallback).refs, live: false };
     const { brief, images } = compose(planned, { refs: model.refs });
     const templates = Object.values(planned.active.blocks.items).flatMap(item => Object.values(item.texts || {}));
     const unknown = [...new Set(templates.flatMap(unknownPlaceholders))];
@@ -405,7 +466,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       const cap = engine ? capability(engine, m.modelName) : null;
       return { id: m.id, name: m.name, engine: engine || 'auto', modelName: engine ? m.modelName : '', i2i: cap ? cap.i2i : true, free: cap ? cap.free : true };
     });
-    return { live, models, chain: { image: chainOf(true).map(m => capability('pollinations', m).title), text: chainOf(false).map(m => capability('pollinations', m).title) } };
+    return { live, models, rotation: (await rotationInfo()).active, chain: { image: chainOf(true).map(m => capability('pollinations', m).title), text: chainOf(false).map(m => capability('pollinations', m).title) } };
   }
   return { renderRequest, status, setKeys, publicStatus, rulesInfo, setRules, previewPrompt, buildPrompt: input => buildBrief(input).prompt, buildBrief };
 }

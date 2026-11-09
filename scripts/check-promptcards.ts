@@ -142,7 +142,7 @@ ok('touched: a fresh install has no dot, each change lights only its tab', () =>
   const o = fresh(); o.global.output.maxSide = 1024; assert(M.touched(o, 'output', catalog));
   const w = fresh(); w.vocab.styles.st_a = 'x'; assert(M.touched(w, 'words', catalog));
   const b = fresh(); b.global.blocks.order = M.moveStep(b.global.blocks.order, 'task', 1); assert(M.touched(b, 'blocks', catalog));
-  const e = fresh(); e.appliesTo = 'explore'; assert(M.touched(e, 'explore', catalog) && !M.touched(e, 'rules', catalog));
+  const e = fresh(); e.global.rules.exploreText = 'x'; assert(M.touched(e, 'explore', catalog) && !M.touched(e, 'rules', catalog));
   const s = fresh(); s.global.blocks.items.task = { texts: { photo: catalog.blocks.task.photo } }; assert(!M.touched(s, 'blocks', catalog), 're-typed default is no change');
 });
 

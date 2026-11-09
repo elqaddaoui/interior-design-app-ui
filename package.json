@@ -86,6 +86,7 @@
     "check:knowledge": "node scripts/build-knowledge.js --check",
     "check:studio": "node scripts/check-studio-browser.js",
     "check:voice": "sucrase-node scripts/check-voice-mime.ts",
+    "check:icons": "python3 scripts/subset-icons.py --check",
     "check:brand": "sucrase-node scripts/check-brand.ts",
     "check:dashboard": "sucrase-node scripts/check-dashboard.ts",
     "check:history": "sucrase-node scripts/check-history.ts",

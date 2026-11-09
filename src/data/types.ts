@@ -392,6 +392,8 @@ export interface AppSettings {
   modeChoice?: boolean;
   /** Let clients switch between the AI models a tool allows (default off: the admin's model is used). */
   aiModelPicker?: boolean;
+  /** Admin > AI models: each new creation uses the next of the selected models (round-robin). `ids` = the models in the rotation. */
+  aiRotation?: { on: boolean; ids: string[] };
   /** New WhatsApp-style chat page for clients (voice notes, fast image preview). On unless false. */
   waChat?: boolean;
   /** Bulk/reorder operations must be explicitly enabled per content panel. */

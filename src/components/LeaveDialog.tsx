@@ -21,7 +21,7 @@ function Value({ v, strong, max }: { v: Val; strong?: boolean; max: number }) {
 /** old → new, inline. The arrow mirrors in RTL. */
 function Delta({ before, after, max = 14 }: { before: Val; after: Val; max?: number }) {
   return (
-    <View className="flex-row items-center" style={{ gap: 5 }}>
+    <View className="flex-row items-center" style={{ gap: 5, flexShrink: 0 }}>
       <Value v={before} max={max} />
       <Icon name="arrow-right" size={13} tone="muted" flip />
       <Value v={after} strong max={max} />
@@ -32,7 +32,7 @@ function Delta({ before, after, max = 14 }: { before: Val; after: Val; max?: num
 function Chip({ d, index }: { d: Described; index: number }) {
   return (
     <View testID={`unsaved-chip-${index}`} className="flex-row items-center rounded-full bg-surface2 border border-line" style={{ gap: 7, height: 32, paddingHorizontal: 11, maxWidth: '100%' }}>
-      <Txt className="text-[11px] font-bold text-muted" numberOfLines={1} style={{ flexShrink: 1 }}>{clip(d.label, 14)}</Txt>
+      <Txt className="text-[11px] font-bold text-muted" numberOfLines={1} style={{ flexShrink: 1, minWidth: 0 }}>{clip(d.label, 30)}</Txt>
       <Delta before={d.before} after={d.after} />
     </View>
   );
@@ -75,7 +75,7 @@ export function LeaveDialog({ visible, changes, canSave, busy, onSave, onDiscard
               style={{ padding: 22, gap: 18, ...(Platform.OS === 'web' ? ({ boxShadow: `0 18px 48px ${colors.ink}40` } as object) : { elevation: 12 }) }}>
               {/* focal point: the title and ONE sentence */}
               <View className="items-center" style={{ gap: 12 }}>
-                <View className="w-12 h-12 rounded-full bg-soft items-center justify-center"><Icon name={n > 0 ? 'content-save-edit-outline' : 'exit-run'} size={24} tone="primary" flip={n === 0} /></View>
+                <View testID="unsaved-badge" className="w-14 h-14 rounded-full bg-primary items-center justify-center"><Icon name={n > 0 ? 'content-save-edit-outline' : 'exit-run'} size={28} tone="onprimary" flip={n === 0} /></View>
                 <View className="items-center" style={{ gap: 4 }}>
                   <Txt accessibilityRole="header" className="text-[20px] leading-[26px] font-black text-center">{t('leaveConfirm.title')}</Txt>
                   <Txt testID="unsaved-message" className="text-[14px] leading-[20px] text-muted text-center">{summary}</Txt>

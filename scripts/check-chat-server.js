@@ -95,6 +95,20 @@ test('a client message notifies admins with a link to that conversation; the adm
     assert.equal(stale.body.messages.some(m => m.id === 'forged'), false);
     assert.equal(stale.body.messages.some(m => m.role === 'admin' && m.text.startsWith('Bonjour Amine')), true);
     assert.deepEqual((await call(backend, '/api/user/conversations', { headers: b.headers })).body, []);
+    // Admin voice note: stored as media, notifies the owner with a mic preview; fake audio or an empty reply is refused.
+    sent.length = 0;
+    const webm = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(2000, 7)]);
+    const voiceNote = await call(backend, `/api/admin/conversations/${id}`, { method: 'POST', headers: admin, body: { text: '', audio: { uri: `data:audio/webm;codecs=opus;base64,${webm.toString('base64')}`, durationMs: 3210.4 } } });
+    assert.equal(voiceNote.status, 200, JSON.stringify(voiceNote.body));
+    const note = voiceNote.body.messages.at(-1);
+    assert.equal(note.role, 'admin');
+    assert.match(note.audio.uri, /^\/api\/media\/[a-f0-9]{32}\.weba$/);
+    assert.equal(note.audio.durationMs, 3210);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].body, '🎤');
+    assert.equal((await call(backend, `/api/admin/conversations/${id}`, { method: 'POST', headers: admin, body: { text: '', audio: { uri: `data:audio/webm;base64,${Buffer.from('<html>no</html>').toString('base64')}` } } })).status, 400);
+    assert.equal((await call(backend, `/api/admin/conversations/${id}`, { method: 'POST', headers: admin, body: { text: '', audio: { uri: 'https://evil.example/x.mp3' } } })).status, 400);
+    assert.equal((await call(backend, `/api/admin/conversations/${id}`, { method: 'POST', headers: admin, body: { text: '', audio: null } })).status, 400);
     // sync: admins see a `chats` version, clients their own counter.
     const sync = await call(backend, '/api/sync', { headers: admin });
     assert(Number.isInteger(sync.body.chats));

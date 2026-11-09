@@ -9,6 +9,8 @@ Native builds keep using the full TTF from @expo/vector-icons (this file is web 
 Which names are kept: every quoted string anywhere in src/ or server/seed-content.json that is a real MaterialCommunityIcons name
 (this covers ICON_CHOICES, the admin icon picker, and the seed data). Run it again after adding a new icon:
     python3 scripts/subset-icons.py        (needs: pip install fonttools brotli; npm dependencies installed)
+    python3 scripts/subset-icons.py --check   (writes nothing; exits 1 when an icon used in src/ is missing from the web font,
+                                               i.e. it would render as an EMPTY box on the web: run it before every commit)
 """
 import glob, json, re, sys
 from fontTools import subset
@@ -27,6 +29,14 @@ for path in glob.glob(f'{ROOT}/src/**/*.ts*', recursive=True) + [f'{ROOT}/server
             names.add(match.group(1))
 if len(names) < 100:
     sys.exit('refusing to subset: found suspiciously few icon names')
+
+if '--check' in sys.argv:
+    have = set(TTFont(OUT).getBestCmap())
+    absent = sorted(name for name in names if glyph_map[name] not in have)
+    if absent:
+        sys.exit(f'icons missing from the web font (run: python3 scripts/subset-icons.py): {", ".join(absent)}')
+    print(f'ok: all {len(names)} icons used in src/ are in the web font')
+    sys.exit(0)
 
 options = subset.Options()
 options.flavor = 'woff2'

@@ -431,14 +431,23 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         if (adminChat && req.method === 'POST') {
           admin();
           const body = await readBody(req), text = typeof body.text === 'string' ? body.text.trim() : '';
-          if (!text || text.length > 4000) throw fail(400, 'INVALID_MESSAGE');
-          const message = { id: `a_${crypto.randomUUID()}`, role: 'admin', text, createdAt: Date.now() };
+          if (text.length > 4000) throw fail(400, 'INVALID_MESSAGE');
+          // A voice note: `audio: { uri: <data URL>, durationMs }`, stored as an /api/media file (its real type is checked from the bytes).
+          let audio;
+          if (body.audio != null) {
+            const data = body.audio?.uri;
+            if (typeof data !== 'string' || !/^data:audio\//i.test(data)) throw fail(400, 'INVALID_MESSAGE');
+            const uri = (await media.externalize({ file: data }, { remote: 'skip', svg: false })).value.file;
+            audio = { uri, ...(Number.isFinite(body.audio.durationMs) ? { durationMs: Math.max(0, Math.min(600000, Math.round(body.audio.durationMs))) } : {}) };
+          }
+          if (!text && !audio) throw fail(400, 'INVALID_MESSAGE');
+          const message = { id: `a_${crypto.randomUUID()}`, role: 'admin', text, ...(audio ? { audio } : {}), createdAt: Date.now() };
           const { conversation, clientId, deviceHash } = await clients.adminReply(adminChat[1], text, message);
           // A visitor has no account to notify: their open chat picks the answer up through the sync loop.
           if (!clientId) { await sync.bump('chats', `g:${deviceHash}`); return json(200, conversation); }
           await sync.bump(...touch(clientId, 'conversations'), 'chats');
           const jobId = `reply:${conversation.id}:${message.id}`;
-          await enqueue('reply', jobId, { id: conversation.id, text, audience: { type: 'client', id: clientId } });
+          await enqueue('reply', jobId, { id: conversation.id, text, audio: !!audio, audience: { type: 'client', id: clientId } });
           await withTimeout(pump(jobId), Number(env.PUSH_WAIT_MS) || 8000);
           return json(200, conversation);
         }

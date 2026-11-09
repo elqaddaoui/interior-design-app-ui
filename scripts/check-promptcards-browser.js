@@ -109,7 +109,7 @@ async function run(lang, width, mobile) {
   // 8. Explorer page: the rules for the Explorer picture, shared tabs gone.
   await id('pc-scope-explore').click();
   await id('pc-rules-explore').waitFor();
-  await id('pc-applies').waitFor();
+  assert.equal(await id('pc-applies').count(), 0, `${tag}: the "when do the rules apply" options are gone`);
   assert.equal(await id('pc-tabs').count(), 0, `${tag}: Explorer has no tabs`);
   await settled();
   await shot('5-explore');

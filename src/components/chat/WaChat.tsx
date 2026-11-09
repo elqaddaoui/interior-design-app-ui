@@ -1,6 +1,6 @@
 import { QuickReplies } from '@/components/chat/QuickReplies';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
@@ -11,25 +11,16 @@ import { services, VISITOR } from '@/data/repositories';
 import { useL, useT } from '@/i18n';
 import { Icon } from '@/components/ui/Icon';
 import { ImageViewer, type ViewerItem } from '@/components/ui/ImageViewer';
-import { Txt, useAppFont } from '@/components/ui/Txt';
+import { Txt } from '@/components/ui/Txt';
 import { pickPhoto, pickPhotos } from '@/lib/photo';
 import { uid } from '@/lib/uid';
 import { replyDelayMs, typeStep } from '@/lib/chatPace';
-import { useTheme } from '@/theme/ThemeProvider';
 import { toast } from '@/store/useToast';
-import { MAX_VOICE_MS, VoiceBubble, formatVoiceTime, useVoicePlayback, useVoiceRecorder } from './voice';
+import { VoiceBubble, useVoicePlayback, type Recorded } from './voice';
+import { ChatComposer } from './ChatComposer';
 import type { ChatMessage, Conversation } from '@/data/types';
 
 const MAX_IMAGES = 10;
-
-/**
- * Web only: Enter sends, Shift+Enter adds a line. Not while an input method is composing (Arabic / Chinese / Japanese keyboards use Enter to
- * confirm a word) and not on touch screens, where the on-screen Enter key means "new line" and the send button is right there.
- */
-function enterSends(e: { key?: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number } | undefined) {
-  if (Platform.OS !== 'web' || !e || e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return false;
-  return !(typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
-}
 
 function Dot({ d }: { d: number }) {
   const v = useSharedValue(0.3);
@@ -46,14 +37,6 @@ function dayName(time: number, t: (key: string) => string) {
   return key === dayKey(now) ? t('md.chat.today') : key === dayKey(now - 86400000) ? t('md.chat.yesterday') : new Date(time).toLocaleDateString();
 }
 
-/** Pulsing red dot while a voice note is being recorded. */
-function RecDot() {
-  const v = useSharedValue(1);
-  useEffect(() => { v.value = withRepeat(withSequence(withTiming(0.25, { duration: 600 }), withTiming(1, { duration: 600 })), -1); }, [v]);
-  const s = useAnimatedStyle(() => ({ opacity: v.value }));
-  return <Animated.View style={[s, { width: 10, height: 10, borderRadius: 5, backgroundColor: '#ef4444' }]} />;
-}
-
 /**
  * WhatsApp-style chat: plain messages, voice notes (tap the mic, tap send), pictures that show at once and open in the viewer
  * with one tap, several pictures sent together with a caption. Same conversations, same AI replies, same admin inbox as the
@@ -62,8 +45,6 @@ function RecDot() {
 export function WaChat({ conversationId, onCreated, header }: { conversationId?: string; onCreated?: (id: string) => void; header?: React.ReactNode }) {
   const { t } = useT();
   const L = useL();
-  const { colors } = useTheme();
-  const fontFamily = useAppFont();
   const config = useStore((s) => s.doc.assistant);
   const userId = useUserSession((s) => s.user?.id) || VISITOR;
   const conv = useStore((s) => s.conversations.find((c) => c.id === conversationId && c.userId === userId));
@@ -80,7 +61,6 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
   const list = useRef<FlatList>(null);
   const playUris = useRef<Record<string, string>>({});
   const playback = useVoicePlayback();
-  const voice = useVoiceRecorder();
   const stored = conv?.messages;
   const messages = React.useMemo(() => optimistic ?? stored ?? [], [optimistic, stored]);
 
@@ -189,28 +169,12 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
     await deliver(fresh, true);
   };
 
-  const startVoice = async () => {
-    if (busy) return;
-    setPanel(false);
-    const error = await voice.start();
-    if (error === 'permission') toast(t('md.chat.micDenied')); else if (error) toast(t('md.chat.micFailed'));
-  };
-  const sendVoice = async () => {
-    const result = await voice.send();
-    if (!result) return;
-    if (typeof result === 'string') { toast(result === 'short' ? t('md.chat.tooShort') : t('md.chat.micFailed')); return; }
+  const sendVoice = async (result: Recorded) => {
     const id = uid('m');
     playUris.current[id] = result.playUri;
     // The assistant cannot hear: a voice note goes to the team (they are notified) and no automatic answer is made.
     await deliver([{ id, role: 'user', text: '', audio: { uri: result.dataUrl, durationMs: result.durationMs }, createdAt: Date.now() }], false);
   };
-  // A recording ends by itself at the cap, and is dropped (not sent) when the screen goes away.
-  const sendVoiceRef = useRef(sendVoice);
-  useEffect(() => { sendVoiceRef.current = sendVoice; });
-  useEffect(() => { if (voice.recording && voice.elapsedMs >= MAX_VOICE_MS) void sendVoiceRef.current(); }, [voice.recording, voice.elapsedMs]);
-  const cancelRef = useRef(voice.cancel);
-  useEffect(() => { cancelRef.current = voice.cancel; });
-  useEffect(() => () => { void cancelRef.current(); }, []);
 
   const lastDay = (index: number) => (index === 0 ? '' : dayKey(messages[index - 1].createdAt));
   const dayLabel = (time: number) => dayName(time, t);
@@ -292,35 +256,10 @@ export function WaChat({ conversationId, onCreated, header }: { conversationId?:
         </View>
       ) : null}
 
-      {voice.recording ? (
-        <View testID="wa-recording" className="flex-row items-center gap-2 px-3 py-2.5">
-          <Pressable testID="wa-voice-cancel" accessibilityRole="button" accessibilityLabel={t('md.chat.cancel')} onPress={() => voice.cancel()} className="w-12 h-12 rounded-full bg-surface2 items-center justify-center"><Icon name="trash-can-outline" size={22} tone="danger" /></Pressable>
-          <View className="flex-1 flex-row items-center gap-2.5 bg-surface2 rounded-3xl px-4" style={{ minHeight: 48 }}>
-            <RecDot />
-            <Txt testID="wa-voice-timer" className="text-[16px] leading-[22px] font-bold" style={{ fontVariant: ['tabular-nums'] }}>{formatVoiceTime(voice.elapsedMs)}</Txt>
-            <Txt className="text-muted text-[12px] leading-[18px] flex-1" numberOfLines={1}>{t('md.chat.recording')}</Txt>
-          </View>
-          <Pressable testID="wa-voice-send" accessibilityRole="button" accessibilityLabel={t('md.chat.send')} onPress={sendVoice} className="w-12 h-12 rounded-full bg-primary items-center justify-center"><Icon name="send" size={20} tone="onprimary" flip /></Pressable>
-        </View>
-      ) : (
-        <View className="flex-row items-end gap-2 px-3 py-2.5">
-          <View className="flex-1 flex-row items-end bg-surface2 rounded-3xl ps-1 pe-2" style={{ minHeight: 48 }}>
-            <Pressable testID="chat-attach" accessibilityRole="button" accessibilityLabel={t('assistant.attach')} onPress={() => setPanel((v) => !v)} className="h-12 w-10 items-center justify-center"><Icon name={panel ? 'close' : 'paperclip'} size={22} tone="muted" /></Pressable>
-            <TextInput testID="chat-input" value={text} onChangeText={setText} onFocus={() => setPanel(false)} placeholder={staged.length ? t('md.chat.caption') : t('assistant.placeholder')} placeholderTextColor={colors.muted} multiline
-              onKeyPress={(e: any) => { if (enterSends(e.nativeEvent)) { e.preventDefault?.(); void send(); } }}
-              style={{ fontFamily, flex: 1, color: colors.fg, fontSize: 16, maxHeight: 110, paddingVertical: 13, outlineStyle: 'none' } as any} />
-            {!text.trim() && !staged.length ? <Pressable testID="chat-camera" accessibilityRole="button" accessibilityLabel={t('md.chat.camera')} onPress={() => addPictures('camera')} className="h-12 w-9 items-center justify-center"><Icon name="camera-outline" size={22} tone="muted" /></Pressable> : null}
-          </View>
-          {text.trim() || staged.length ? (
-            <View>
-              <Pressable testID="chat-send" accessibilityRole="button" accessibilityLabel={t('md.chat.send')} disabled={!canSend} onPress={send} className="w-12 h-12 rounded-full bg-primary items-center justify-center active:opacity-80"><Icon name="send" size={20} tone="onprimary" flip /></Pressable>
-              {staged.length > 1 ? <View testID="wa-count" className="absolute -top-1 -end-1 min-w-[22px] h-[22px] px-1 rounded-full bg-ink items-center justify-center border-2 border-bg"><Txt className="text-onink text-[11px] leading-[14px] font-black">{staged.length}</Txt></View> : null}
-            </View>
-          ) : (
-            <Pressable testID="chat-mic" accessibilityRole="button" accessibilityLabel={t('md.chat.voice')} disabled={busy} onPress={startVoice} className="w-12 h-12 rounded-full bg-primary items-center justify-center active:opacity-80"><Icon name="microphone" size={22} tone="onprimary" /></Pressable>
-          )}
-        </View>
-      )}
+      <ChatComposer value={text} onChange={setText} onSend={send} canSend={canSend} busy={busy} badge={staged.length}
+        placeholder={staged.length ? t('md.chat.caption') : t('assistant.placeholder')}
+        onAttach={() => setPanel((v) => !v)} attachOpen={panel} onCamera={() => addPictures('camera')} onFocus={() => setPanel(false)}
+        onVoice={(r) => { setPanel(false); return sendVoice(r); }} />
       <ImageViewer items={shots} index={viewer} onIndexChange={setViewer} onClose={() => setViewer(null)} />
     </KeyboardAvoidingView>
   );
