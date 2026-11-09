@@ -303,6 +303,7 @@ const ar: Dict = {
       interface: 'الواجهة والقوائم',
       performance: 'الأداء',
       studio: 'استوديو الحركة',
+      layouts: 'تخطيطات الصفحات',
       chats: 'المحادثات',
       notifications: 'الإشعارات',
     },

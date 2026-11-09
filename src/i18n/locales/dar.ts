@@ -303,6 +303,7 @@ const dar: Dict = {
       interface: 'الواجهة والمينيو',
       performance: 'الأداء',
       studio: 'ستوديو الحركة',
+      layouts: 'تخطيطات الصفحات',
       chats: 'المحادثات',
       notifications: 'الإشعارات',
     },

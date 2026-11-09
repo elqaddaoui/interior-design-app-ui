@@ -345,6 +345,19 @@ export interface AssistantConfig {
   knowledgeNotes?: string;
 }
 export type UserNavStyle = 'classic' | 'floating' | 'minimal';
+/** Page layouts (Admin > Page layouts): which demo layout Home / Explore use on a phone and on a computer. */
+export type LayoutScreen = 'home' | 'explore';
+export type LayoutDevice = 'mobile' | 'desktop';
+export type LayoutDevices = LayoutDevice | 'both';
+/** Per-demo editing: every key optional (missing = the demo's own default, clamped when read, see lib/layouts.ts). */
+export interface LayoutDemoCfg { devices?: LayoutDevices; enabled?: boolean; gap?: number; radius?: number; colsM?: number; colsD?: number; heightM?: number; heightD?: number }
+export interface LayoutsConfig {
+  /** Demo id used on each device, per screen (missing / not allowed on that device = the screen's default demo). */
+  home?: Partial<Record<LayoutDevice, string>>;
+  explore?: Partial<Record<LayoutDevice, string>>;
+  /** Edits per demo, keyed `screen.id` (e.g. `home.hero`). */
+  demos?: Record<string, LayoutDemoCfg>;
+}
 /** Startup loading screen: four built-in animations or the admin's own image (GIF / SVG / PNG / WebP). */
 export type LoaderStyle = 'ring' | 'dots' | 'pulse' | 'bars' | 'zellige' | 'arch' | 'lantern' | 'mosaic' | 'custom';
 export type LoaderAnim = 'none' | 'spin' | 'pulse';
@@ -370,6 +383,8 @@ export interface AppSettings {
   /** Show the home tab filters; hiding them never hides tool cards. */
   homeTabsVisible?: boolean;
   userNavStyle: UserNavStyle;
+  /** Home / Explore demo layouts per device (Admin > Page layouts). Missing = the classic layouts. */
+  layouts?: LayoutsConfig;
   /** Admin side-menu design (default glide) and whether its motion is on (default on). */
   adminMenuDesign?: AdminMenuDesign;
   adminMenuAnim?: boolean;
