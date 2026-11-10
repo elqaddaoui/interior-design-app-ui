@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { createDb } = require('./db');
 const { sendBuffer } = require('./compress');
 const { createClients } = require('./clients');
+const { createAdmins, passwordMatches } = require('./admins');
 const { createSync } = require('./sync');
 const { createContent } = require('./content');
 const { r2Status } = require('./media');
@@ -19,18 +20,6 @@ const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => Object.assign(new Error(message), { status });
-function passwordMatches(password, encoded) {
-  const [salt, digest] = String(encoded || '').split(':');
-  if (!salt || !digest || !/^[a-f0-9]{128}$/.test(digest)) return false;
-  return crypto.timingSafeEqual(crypto.scryptSync(String(password), salt, 64), Buffer.from(digest, 'hex'));
-}
-// Built-in default admin login (admin / admin) unless DISABLE_DEFAULT_ADMIN=true. ADMIN_EMAIL / ADMIN_PASSWORD_HASH work in addition.
-/** Returns the stable admin identity (preferences and notification devices are stored per admin) or null. */
-function adminIdentity(env, email, password) {
-  const user = email.trim().toLowerCase();
-  if (env.DISABLE_DEFAULT_ADMIN !== 'true' && user === 'admin' && password === 'admin') return 'admin';
-  return !!env.ADMIN_EMAIL && user === env.ADMIN_EMAIL.toLowerCase() && passwordMatches(password, env.ADMIN_PASSWORD_HASH) ? user : null;
-}
 async function readBody(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw fail(415, 'JSON required');
   let size = 0;
@@ -119,6 +108,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   const sync = createSync(db, { cacheMs: env.VERCEL ? 0 : Math.max(0, Math.min(10000, Number(env.SYNC_CACHE_MS ?? 2000) || 0)) });
   const content = createContent(db, sync, { env, ...mediaOptions });
   const media = content.media;
+  const admins = createAdmins(db, { env, sync, media });
   // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
   const campaigns = createCampaigns(db, notifier, { sync, settings: () => content.getDoc('settings') });
   const imagegen = createImageGen(db, { env, media, content, sync, ...(imageFetch ? { fetch: imageFetch } : {}) });
@@ -238,7 +228,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           }
           return sendBuffer(req, res, 200, headers, file.body);
         }
-        const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : url.pathname === '/api/chat/reply' ? 'chat' : 'api';
+        const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
         const key = `${address(req)}:${bucketName}`;
         const now = Date.now();
         if (buckets.size > 10000) for (const [id, bucket] of buckets) if (bucket.until < now) buckets.delete(id);
@@ -505,6 +495,12 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           try { return json(200, await assistant.answer(body, { config, client })); }
           catch (error) { if (error.message === 'NO_PROVIDER') return json(503, { error: 'NO_PROVIDER', tried: error.tried || [] }); throw error; }
         }
+        // One tap on a demo message (counter only: never trusts or stores anything but the id).
+        if (url.pathname === '/api/chat/demo-click' && req.method === 'POST') {
+          if (!client && !clientHash) throw fail(400, 'Client token required');
+          await assistant.demo.click((await readBody(req)).id);
+          return json(200, { ok: true });
+        }
         // Quick-reply buttons of the chat (labels only).
         if (url.pathname === '/api/chat/buttons' && req.method === 'GET') {
           if (!client && !clientHash) throw fail(400, 'Client token required');
@@ -544,6 +540,12 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         // What the assistant knows (sections built from the docs and the app data) for the Knowledge tab.
         if (url.pathname === '/api/admin/assistant/knowledge' && req.method === 'GET') { admin(); return json(200, knowledge.overview()); }
+        // Demo messages: usage counters and the questions customers really ask (to promote them to demo messages).
+        if (url.pathname === '/api/admin/assistant/demo' && req.method === 'GET') {
+          admin();
+          const chats = (await clients.adminConversations()).chats;
+          return json(200, { stats: await assistant.demo.stats(), popular: assistant.demo.popular(chats, { limit: 8 }) });
+        }
         if (url.pathname === '/api/admin/clients/bulk' && req.method === 'POST') {
           admin();
           const body = await readBody(req), result = await clients.bulk(body);
@@ -627,15 +629,33 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         if (req.method === 'POST' && url.pathname === '/api/admin/login') {
           const body = await readBody(req);
-          const identity = typeof body.email === 'string' && typeof body.password === 'string' && body.password.length <= 512 ? adminIdentity(env, body.email, body.password) : null;
+          const identity = typeof body.email === 'string' && typeof body.password === 'string' ? await admins.verify(body.email, body.password) : null;
           if (!identity) throw fail(401, 'Invalid credentials');
           const token = crypto.randomBytes(32).toString('hex');
           await db.query('DELETE FROM admin_sessions WHERE expires_at<=$1', [now]);
-          await db.query('INSERT INTO admin_sessions(token_hash,expires_at,admin_id) VALUES($1,$2,$3)', [hash(token), now + 7 * 86400000, identity]);
+          await db.query('INSERT INTO admin_sessions(token_hash,expires_at,admin_id,created_at,ua) VALUES($1,$2,$3,$4,$5)', [hash(token), now + 7 * 86400000, identity, now, String(req.headers['user-agent'] || '').slice(0, 300)]);
+          await admins.touchLogin(identity);
           res.setHeader('Set-Cookie', cookie('dwira_admin', token, 604800));
-          return json(200, { ok: true, user: { id: 'usr_admin', name: 'Admin' }, ...(req.headers['x-dwira-native'] === '1' ? { token } : {}) });
+          const profile = await admins.get(identity);
+          return json(200, { ok: true, user: { id: 'usr_admin', name: profile.name || 'Admin' }, ...(req.headers['x-dwira-native'] === '1' ? { token } : {}) });
         }
-        if (req.method === 'GET' && url.pathname === '/api/admin/session') { admin(); return json(200, { ok: true, prefs: await content.adminPrefs(adminId) }); }
+        if (req.method === 'GET' && url.pathname === '/api/admin/session') { admin(); return json(200, { ok: true, prefs: await content.adminPrefs(adminId), profile: await admins.get(adminId) }); }
+        // ---- Administrator account (profile, password, signed-in devices) ----
+        if (url.pathname === '/api/admin/account') {
+          admin();
+          if (req.method === 'GET') return json(200, await admins.get(adminId));
+          if (req.method === 'PATCH') return json(200, await admins.update(adminId, await readBody(req)));
+          throw fail(405, 'Method not allowed');
+        }
+        if (url.pathname === '/api/admin/account/password' && req.method === 'POST') {
+          admin();
+          const body = await readBody(req);
+          return json(200, await admins.changePassword(adminId, body.current, body.next, session.token_hash));
+        }
+        if (url.pathname === '/api/admin/account/sessions' && req.method === 'GET') { admin(); return json(200, { sessions: await admins.sessions(adminId, session.token_hash) }); }
+        if (url.pathname === '/api/admin/account/sessions' && req.method === 'DELETE') { admin(); await admins.revokeOthers(adminId, session.token_hash); return json(200, { ok: true }); }
+        const sessionId = url.pathname.match(/^\/api\/admin\/account\/sessions\/([a-f0-9]{16})$/);
+        if (sessionId && req.method === 'DELETE') { admin(); await admins.revoke(adminId, sessionId[1], session.token_hash); return json(200, { ok: true }); }
         if (req.method === 'POST' && url.pathname === '/api/admin/logout') {
           if (session) await db.query('DELETE FROM admin_sessions WHERE token_hash=$1', [session.token_hash]);
           res.setHeader('Set-Cookie', cookie('dwira_admin', '', 0));

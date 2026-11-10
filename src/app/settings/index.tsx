@@ -16,6 +16,7 @@ import { Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { toast } from '@/store/useToast';
+import { USER_LOGIN } from '@/lib/loginRoutes';
 
 function Row({ icon, title, sub, right, onPress, testID }: { icon: string; title: string; sub?: string; right?: React.ReactNode; onPress?: () => void; testID?: string }) {
   return (
@@ -84,7 +85,8 @@ export default function Settings() {
         <View className="h-px bg-line mx-4" />
         <Row icon="cog-box" title={t('settings.admin')} sub={t('sm.adminRowSub')} onPress={() => router.push('/admin')} testID="row-admin" />
       </Card>
-      {user ? <Card className="overflow-hidden mb-5"><Row icon="logout" title={t('account.logout')} sub={user.whatsapp} onPress={() => { void logout(); }} testID="user-logout" /></Card> : null}
+      {user ? <Card className="overflow-hidden mb-5"><Row icon="logout" title={t('account.logout')} sub={user.whatsapp} onPress={() => { void logout(); }} testID="user-logout" /></Card>
+        : <Card className="overflow-hidden mb-5"><Row icon="login" title={t('ac.userSignInLink')} sub={t('ac.userNoPassword')} onPress={() => router.push(USER_LOGIN as never)} testID="user-login-link" /></Card>}
       <Txt className="text-muted text-center text-[12px]">{branding.appName} · {t('settings.version')} {ver}</Txt>
 
       <Sheet visible={doc !== null} onClose={() => setDoc(null)} title={doc ? t(`settings.${doc}`) : ''}>

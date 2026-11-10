@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createMedia } = require('./media');
+const { cleanDemo } = require('./assistant/demo');
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 /** Collections and documents that make up the app content. The database is their only source of truth. */
@@ -119,6 +120,8 @@ function createContent(db, sync, mediaOptions = {}) {
   async function patchDoc(name, patch) {
     if (!DOCS.includes(name)) throw fail(404, 'Unknown document');
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw fail(400, 'Invalid document');
+    // The demo messages of the assistant are validated here, so a broken or oversized list can never reach the customers' chat.
+    if (name === 'assistant' && patch.demo !== undefined) patch = { ...patch, demo: cleanDemo(patch.demo) };
     await ensureSeed();
     const current = (await db.query('SELECT data FROM content_docs WHERE name=$1', [name]))[0];
     const clean = (await media.externalize(patch, { known: strings(current && JSON.parse(current.data)) })).value; // outside the transaction: it writes media rows itself

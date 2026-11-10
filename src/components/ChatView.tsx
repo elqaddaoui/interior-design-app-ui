@@ -1,5 +1,6 @@
 import { Txt } from '@/components/ui/Txt';
 import { QuickReplies } from '@/components/chat/QuickReplies';
+import { DemoCards, DemoNext } from '@/components/chat/DemoCards';
 import React, { useEffect, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import { Image } from 'expo-image';
@@ -19,7 +20,10 @@ import { pickPhoto } from '@/lib/photo';
 import { uid } from '@/lib/uid';
 import { replyDelayMs, typeStep } from '@/lib/chatPace';
 import { toast } from '@/store/useToast';
-import type { ChatMessage, Conversation } from '@/data/types';
+import { router } from '@/hooks/useLeaveGuard';
+import { demoAction, demoConfigOf, demoMeta, nextOptions } from '@/lib/demoMessages';
+import { trackDemoClick } from '@/lib/demoApi';
+import type { ChatMessage, Conversation, DemoMessage, ReplyMeta } from '@/data/types';
 
 function Dot({ d }: { d: number }) {
   const v = useSharedValue(0.3);
@@ -30,7 +34,7 @@ function Dot({ d }: { d: number }) {
 
 /** AI chat: persisted conversations, image attach, free-provider replies (Darija / Arabic / French aware) paced like a person. */
 export function ChatView({ conversationId, onCreated, header }: { conversationId?: string; onCreated?: (id: string) => void; header?: React.ReactNode }) {
-  const { t } = useT();
+  const { t, lang } = useT();
   const L = useL();
   const config = useStore((s) => s.doc.assistant);
   const userId = useUserSession(s => s.user?.id) || VISITOR;
@@ -38,6 +42,7 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
   const [text, setText] = useViewState(`chat:${conversationId ?? 'new'}:text`, '');
   const [image, setImage] = useViewState(`chat:${conversationId ?? 'new'}:image`, '');
   const [busy, setBusy] = useState(false);
+  const [activeDemo, setActiveDemo] = useState<string | undefined>();
   // The assistant message currently being "typed" (cosmetic: the full text is already saved) and how much of it shows.
   const [typing, setTyping] = useState<{ id: string; shown: number } | null>(null);
   const alive = useRef(true);
@@ -80,10 +85,11 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
   const [buttons, setButtons] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => { let on = true; services.chat.buttons().then((list) => { if (on) setButtons(list); }); return () => { on = false; }; }, []);
 
-  const send = async (button?: { id: string; label: string }) => {
+  const send = async (button?: { id: string; label: string }, canned?: { text: string; meta: ReplyMeta }) => {
     const msg = button ? button.label : text.trim();
     const buttonId = button?.id;
     if ((!msg && !image) || busy) return;
+    if (!canned && !button?.id.startsWith('demo:')) setActiveDemo(undefined);
     const um: ChatMessage = { id: uid('m'), role: 'user', text: msg, image: button ? undefined : image || undefined, createdAt: Date.now() };
     if (!button) setText('');
     setImage(''); setBusy(true);
@@ -101,8 +107,10 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
     const started = Date.now();
     let answer = '';
     let meta: ChatMessage['meta'];
-    try { const out = await services.chat.reply({ messages: next, config, ...(buttonId ? { buttonId } : {}) }); answer = out.text; meta = out.meta; } catch { answer = t('assistant.error'); }
-    const wait = replyDelayMs(config, answer) - (Date.now() - started);
+    if (canned) { answer = canned.text; meta = canned.meta; }
+    else { try { const out = await services.chat.reply({ messages: next, config, ...(buttonId && !buttonId.startsWith('demo:') ? { buttonId } : {}) }); answer = out.text; meta = out.meta; } catch { answer = t('assistant.error'); } }
+    // The owner's written answer needs no AI: a short pause (typing dots) is all that is kept.
+    const wait = (canned ? Math.min(replyDelayMs(config, answer), 900) : replyDelayMs(config, answer)) - (Date.now() - started);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     const am: ChatMessage = { id: uid('m'), role: 'assistant', text: answer, createdAt: Date.now(), ...(meta ? { meta } : {}) };
     const animate = config.typewriter !== false && config.replyDelayMode !== 'off' && alive.current && answer.length > 0;
@@ -119,6 +127,17 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
     if (alive.current) setTyping(null);
   };
 
+  const demo = React.useMemo(() => demoConfigOf(config), [config]);
+  /** A tap on a demo message: count it, then fill the box / show the owner's answer at once / let the assistant answer. */
+  const pickDemo = async (item: DemoMessage) => {
+    if (busy) return;
+    trackDemoClick(item.id);
+    const action = demoAction(item, lang);
+    if (action.kind === 'fill') { setText(action.text); return; }
+    setActiveDemo(item.id);
+    await send({ id: `demo:${item.id}`.slice(0, 40), label: action.question }, action.kind === 'answer' ? { text: action.answer, meta: demoMeta(item, lang) } : undefined);
+  };
+  const next = React.useMemo(() => nextOptions(demo, lang, messages, activeDemo), [demo, lang, messages, activeDemo]);
   const data = messages;
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
@@ -137,6 +156,8 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
             <Icon name="star-four-points" size={34} tone="primary" />
             <Txt className="text-[22px] font-extrabold text-center mt-3">{t('assistant.hello')}</Txt>
             {L(config.welcome) ? <Txt className="text-muted text-center mt-2 px-6">{L(config.welcome)}</Txt> : null}
+            <View style={{ height: 22 }} />
+            <DemoCards config={demo} onPick={pickDemo} disabled={busy} />
           </Animated.View>
         }
         renderItem={({ item: m }) => (
@@ -149,7 +170,7 @@ export function ChatView({ conversationId, onCreated, header }: { conversationId
             </View>
           </Animated.View>
         )}
-        ListFooterComponent={busy ? <View testID="chat-typing" accessibilityLabel={t('assistant.typing')} className="self-start bg-surface2 rounded-2xl px-4 py-3.5 flex-row gap-1.5 items-center"><Dot d={0} /><Dot d={150} /><Dot d={300} /></View> : null}
+        ListFooterComponent={busy ? <View testID="chat-typing" accessibilityLabel={t('assistant.typing')} className="self-start bg-surface2 rounded-2xl px-4 py-3.5 flex-row gap-1.5 items-center"><Dot d={0} /><Dot d={150} /><Dot d={300} /></View> : next.item && !typing ? <DemoNext item={next.item} options={next.options} onPick={pickDemo} onCta={(href) => router.push(href as never)} /> : null}
       />
       {buttons.length && !image && !text.trim() ? <QuickReplies items={buttons} busy={busy} onPick={send} /> : null}
       {image ? (

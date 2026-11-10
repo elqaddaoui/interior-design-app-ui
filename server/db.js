@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS campaign_deliveries (
 CREATE INDEX IF NOT EXISTS campaign_deliveries_due ON campaign_deliveries(status, next_at);
 CREATE INDEX IF NOT EXISTS campaign_deliveries_campaign ON campaign_deliveries(campaign_id, status);
 CREATE INDEX IF NOT EXISTS campaign_deliveries_client ON campaign_deliveries(client_id, sent_at);
+-- Admin accounts: the profile of each administrator (id = the stable admin identity used by sessions and preferences). pw_hash is only set once the
+-- password was changed in the panel (scrypt, salt:hex); until then the built-in / environment credentials apply. credits NULL = unlimited.
+CREATE TABLE IF NOT EXISTS admin_accounts (
+  admin_id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+  avatar TEXT NOT NULL DEFAULT '', pw_hash TEXT, pw_changed_at BIGINT, credits INTEGER, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_login_at BIGINT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS admin_accounts_email ON admin_accounts(lower(email)) WHERE email <> '';
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS created_at BIGINT;
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS ua TEXT;
 `;
 
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
