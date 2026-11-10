@@ -75,6 +75,37 @@ ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS created_at BIGINT;
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS ua TEXT;
 `;
 
+/**
+ * Super Admin schema. Kept apart from SCHEMA on purpose: it has its own version marker and a failure here (for example a table with the same name
+ * created by something else in a shared database) must never stop the public app, so it is applied best-effort and retried on the next start.
+ */
+const SCHEMA_SA = `
+-- Super Admin (platform owner): ONE account (id 1) with its own sessions, separate from the administrators above. pw_hash is only set once the
+-- default credentials were changed from the dashboard (scrypt, salt:hex).
+CREATE TABLE IF NOT EXISTS superadmin_account (
+  id INTEGER PRIMARY KEY, username TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', pw_hash TEXT, pw_changed_at BIGINT,
+  created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_login_at BIGINT
+);
+CREATE TABLE IF NOT EXISTS superadmin_sessions (token_hash TEXT PRIMARY KEY, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, ua TEXT, ip TEXT);
+-- Roles of the administrators (permissions per area + the menu pages they may open) and tenants (the organisations the administrators belong to).
+CREATE TABLE IF NOT EXISTS sa_roles (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', permissions TEXT NOT NULL DEFAULT '{}', ui TEXT NOT NULL DEFAULT '[]',
+  system INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sa_tenants (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, plan TEXT NOT NULL DEFAULT 'free', status TEXT NOT NULL DEFAULT 'active', contact_email TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '', max_admins INTEGER, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+);
+ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS role_id TEXT;
+ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS perm_override TEXT;
+ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+-- Everything the Super Admin changes (and failed sign-in attempts, which also drive the brute-force lock).
+CREATE TABLE IF NOT EXISTS sa_audit (id TEXT PRIMARY KEY, at BIGINT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '{}', ip TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS sa_audit_at ON sa_audit(at DESC);
+CREATE INDEX IF NOT EXISTS sa_audit_ip ON sa_audit(ip, action, at);
+`;
+
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 /** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */
 const poolMax = env => Math.max(1, Math.min(20, Number(env.DB_POOL_MAX) || (env.VERCEL ? 3 : 5)));
@@ -122,34 +153,46 @@ async function openLite(dataDir) {
  * (each of which takes a lock on a database that may have just woken up).
  */
 const SCHEMA_VERSION = crypto.createHash('sha1').update(SCHEMA).digest('hex').slice(0, 12);
+const SCHEMA_SA_VERSION = crypto.createHash('sha1').update(SCHEMA_SA).digest('hex').slice(0, 12);
+const mark = (key, value) => ["INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [key, value]];
 /**
  * `migrationUrl` (DATABASE_URL_UNPOOLED, optional): the schema DDL then runs once over a short-lived direct connection, which
  * is what Neon recommends for migrations (its pooler runs PgBouncer in transaction mode). Normal queries stay on the pooled URL.
  */
-async function ensureSchema(db, migrationUrl) {
-  try {
-    const marker = (await db.query("SELECT value FROM settings WHERE key='schema_version'"))[0];
-    if (marker?.value === SCHEMA_VERSION) return;
-  } catch { /* no settings table yet: fresh database */ }
+async function applySchema(db, migrationUrl, sql, key, version) {
   if (migrationUrl) {
     const { Client } = require('pg');
     const direct = new Client({ connectionString: migrationUrl, connectionTimeoutMillis: 10000, ssl: isLocal(migrationUrl) ? false : { rejectUnauthorized: false } });
     direct.on('error', () => {});
     await direct.connect();
     try {
-      await direct.query(SCHEMA);
-      await direct.query("INSERT INTO settings(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+      await direct.query(sql);
+      await direct.query(...mark(key, version));
     } finally { await direct.end().catch(() => {}); }
     return;
   }
-  await db.exec(SCHEMA);
-  await db.query("INSERT INTO settings(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+  await db.exec(sql);
+  await db.query(...mark(key, version));
+}
+async function ensureSchema(db, migrationUrl, status = {}) {
+  let markers = {};
+  try {
+    markers = Object.fromEntries((await db.query("SELECT key, value FROM settings WHERE key IN ('schema_version','schema_sa_version')")).map(r => [r.key, r.value]));
+  } catch { /* no settings table yet: fresh database */ }
+  if (markers.schema_version !== SCHEMA_VERSION) await applySchema(db, migrationUrl, SCHEMA, 'schema_version', SCHEMA_VERSION);
+  // The Super Admin tables are an add-on: if they cannot be created (permissions, a clashing object in a shared database) the public app,
+  // its content and the administrators' panel must still start. Only the Super Admin / roles features are unavailable until it succeeds.
+  if (markers.schema_sa_version !== SCHEMA_SA_VERSION) {
+    try { await applySchema(db, migrationUrl, SCHEMA_SA, 'schema_sa_version', SCHEMA_SA_VERSION); }
+    catch (error) { status.superAdmin = String(error?.code || 'error'); console.warn('[dwira] Super Admin schema not applied:', status.superAdmin); }
+  }
 }
 
 /** Lazily opened and schema-initialised once per process (one cold start on Vercel). */
 function createDb(env = process.env) {
   const url = connectionString(env);
   let ready;
+  const status = { superAdmin: 'ok' };
   const open = () => ready ||= (async () => {
     // PGlite is a dev/test dependency only. Production on Vercel must provide a real database,
     // because serverless instances have no durable disk.
@@ -157,7 +200,7 @@ function createDb(env = process.env) {
     const db = url ? await openPg(url, env) : await openLite(env.PGLITE_DIR === ':memory:' ? undefined : env.PGLITE_DIR || (env.NODE_ENV === 'test' ? undefined : require('node:path').join(__dirname, 'data', 'pglite')));
     const migrationUrl = url && env.DATABASE_URL_UNPOOLED && env.DATABASE_URL_UNPOOLED !== url ? env.DATABASE_URL_UNPOOLED : '';
     // A failed attempt must not leave its pool (and connections) behind: the caller may retry.
-    try { await ensureSchema(db, migrationUrl); } catch (error) { await db.close().catch(() => {}); throw error; }
+    try { await ensureSchema(db, migrationUrl, status); } catch (error) { await db.close().catch(() => {}); throw error; }
     return db;
   })().catch(error => { ready = undefined; throw error; });
   return {
@@ -166,6 +209,8 @@ function createDb(env = process.env) {
     tx: async work => (await open()).tx(work),
     close: async () => { if (ready) { const db = await ready.catch(() => null); ready = undefined; await db?.close(); } },
     info: async () => (await open()).kind,
+    /** 'ok', or the error code when the (optional) Super Admin tables could not be created. */
+    status: () => status.superAdmin,
   };
 }
 module.exports = { createDb, connectionString };

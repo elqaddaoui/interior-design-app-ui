@@ -8,6 +8,7 @@ import { reloadUserSpace, useStore } from '@/store/useStore';
 import { useLocal } from '@/store/useLocal';
 import { usePrefs } from '@/store/usePrefs';
 import { useUserSession } from '@/store/useUserSession';
+import type { AdminAccess } from '@/lib/access';
 import { useAdminProfile, type AdminProfile } from '@/store/useAdminProfile';
 import { useAdminChats } from '@/store/useAdminChats';
 import { useAdminCampaigns } from '@/store/useAdminCampaigns';
@@ -30,9 +31,10 @@ export async function refreshAdminSession() {
   const local = useLocal.getState();
   if (!backendEnabled || !local.adminSession || local.adminOffline) return;
   try {
-    const result = await api<{ ok: true; prefs?: UserPrefs; profile?: AdminProfile }>('/admin/session');
+    const result = await api<{ ok: true; prefs?: UserPrefs; profile?: AdminProfile; access?: AdminAccess }>('/admin/session');
     usePrefs.getState().hydrate('admin', result.prefs ?? {});
     if (result.profile) useAdminProfile.getState().hydrate(result.profile);
+    useAdminProfile.getState().setAccess(result.access);
   } catch (error) {
     if (error instanceof BackendError && error.status === 401) { useLocal.getState().set({ adminSession: false }); usePrefs.getState().clear('admin'); useAdminProfile.getState().clear(); }
   }

@@ -10,7 +10,9 @@ import { AdminLoading } from '@/components/admin/AdminLoading';
 import { AudienceBadge, AudienceFilter, AudienceSection } from '@/components/admin/AudienceBadge';
 import { useT } from '@/i18n';
 import { useRouter } from '@/hooks/useLeaveGuard';
+import { canOpen } from '@/lib/access';
 import { ADMIN_NAV } from '@/lib/adminNav';
+import { useAdminProfile } from '@/store/useAdminProfile';
 import { SETTINGS_MAP, filterSettings, matchesAudience, sectionOf, stateOf, type Audience, type SettingEntry } from '@/lib/settingsMap';
 import { useStore } from '@/store/useStore';
 
@@ -61,6 +63,7 @@ export default function SettingsMap() {
   const where = useWhere();
   const contentReady = useStore((s) => s.contentReady);
   const settings = useStore((s) => s.doc.settings) as unknown as Record<string, unknown>;
+  const access = useAdminProfile((a) => a.access);
   const [filter, setFilter] = useState<Audience | 'all'>('all');
   const [query, setQuery] = useState('');
   const text = (e: SettingEntry) => `${t(`sm.${e.id}`)} ${t(`sm.${e.id}_d`)} ${where(e.href)} ${t(`sm.aud_${e.audience}`)}`;
@@ -72,7 +75,7 @@ export default function SettingsMap() {
     personal: SETTINGS_MAP.filter((e) => e.audience === 'personal').length,
   }), []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const shown = useMemo(() => filterSettings(filter, query, text), [filter, query, t]);
+  const shown = useMemo(() => filterSettings(filter, query, text).filter((e) => { const nav = ADMIN_NAV.find((n) => n.href === e.href); return !nav || canOpen(access, nav.key); }), [filter, query, t, access]);
   const open = (e: SettingEntry) => router.push((e.href === '/settings' ? e.href : `${e.href}?target=set-${e.id}`) as Href);
   if (!contentReady) return <AdminPage title={t('sm.title')}><AdminLoading /></AdminPage>;
   const groups: ('clients' | 'admins' | 'personal')[] = ['clients', 'admins', 'personal'];

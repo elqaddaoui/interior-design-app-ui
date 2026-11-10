@@ -16,10 +16,10 @@ import { refreshAdminSession } from '@/lib/sync';
 import { useIsAdmin, useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
 
-const LANG_SHORT: Record<string, string> = { dar: 'الدارجة', ar: 'العربية', fr: 'Français' };
+export const LANG_SHORT: Record<string, string> = { dar: 'الدارجة', ar: 'العربية', fr: 'Français' };
 
 /** One dark field: label above, optional trailing control (the eye). */
-function DarkField({ label, icon, trailing, testID, inputRef, ...p }: React.ComponentProps<typeof TextInput> & { label: string; icon: string; trailing?: React.ReactNode; testID: string; inputRef?: React.Ref<TextInput> }) {
+export function DarkField({ label, icon, trailing, testID, inputRef, ...p }: React.ComponentProps<typeof TextInput> & { label: string; icon: string; trailing?: React.ReactNode; testID: string; inputRef?: React.Ref<TextInput> }) {
   const { colors } = useTheme();
   const fontFamily = useAppFont();
   const [focus, setFocus] = useState(false);

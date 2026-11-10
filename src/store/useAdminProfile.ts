@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, backendEnabled } from '@/lib/backend';
+import type { AdminAccess } from '@/lib/access';
 
 /** The signed-in administrator's own account (see server/admins.js). `credits: null` = unlimited. */
 export interface AdminProfile {
@@ -10,14 +11,19 @@ export interface AdminDevice { id: string; current: boolean; createdAt?: number 
 
 interface State {
   profile: AdminProfile | null;
+  /** What the Super Admin allows this administrator (role + page access); null until the session answered. */
+  access: AdminAccess | null;
+  setAccess(a: AdminAccess | null | undefined): void;
   hydrate(p: AdminProfile | null | undefined): void;
   clear(): void;
   save(patch: Partial<Pick<AdminProfile, 'name' | 'email' | 'phone' | 'title' | 'avatar' | 'credits'>>): Promise<AdminProfile>;
 }
 export const useAdminProfile = create<State>((set) => ({
   profile: null,
+  access: null,
+  setAccess: (access) => set({ access: access ?? null }),
   hydrate: (profile) => set({ profile: profile ?? null }),
-  clear: () => set({ profile: null }),
+  clear: () => set({ profile: null, access: null }),
   async save(patch) {
     const profile = await api<AdminProfile>('/admin/account', { method: 'PATCH', body: patch });
     set({ profile });

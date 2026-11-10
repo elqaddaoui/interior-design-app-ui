@@ -6,7 +6,9 @@ import { Icon } from '@/components/ui/Icon';
 import { Input } from '@/components/ui/Field';
 import { Sheet } from '@/components/ui/Sheet';
 import { Txt } from '@/components/ui/Txt';
+import { canOpen } from '@/lib/access';
 import { ADMIN_NAV } from '@/lib/adminNav';
+import { useAdminProfile } from '@/store/useAdminProfile';
 import { SETTINGS_MAP } from '@/lib/settingsMap';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSearchInset } from '@/hooks/useSearchInset';
@@ -15,6 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { requestLeave, router } from '@/hooks/useLeaveGuard';
 import { useIsAdmin, useStore } from '@/store/useStore';
 import { useLocal } from '@/store/useLocal';
+import { inSuperArea } from '@/lib/superRoutes';
 import { useL, useT } from '@/i18n';
 
 const EMPTY = [] as never[];
@@ -23,10 +26,11 @@ const EMPTY = [] as never[];
 export function GlobalSearch() {
   const path = usePathname();
   const admin = path === '/admin' || path.startsWith('/admin/');
+  const superArea = inSuperArea(path);
   const session = useLocal((s) => s.adminSession);
   const isAdmin = useIsAdmin();
   const enabled = useStore((s) => admin ? s.doc.settings.adminSearchEnabled !== false : s.doc.settings.appSearchEnabled !== false);
-  if (!enabled || (admin && (!session || !isAdmin))) return null;
+  if (superArea || !enabled || (admin && (!session || !isAdmin))) return null;
   return <SearchControl key={admin ? 'admin' : 'app'} admin={admin} />;
 }
 function SearchControl({ admin }: { admin: boolean }) {
@@ -47,6 +51,7 @@ function SearchControl({ admin }: { admin: boolean }) {
 function SearchDialog({ admin, onClose }: { admin: boolean; onClose: () => void }) {
   const s = useStore(useShallow((s) => ({ tools: s.tools, tabs: s.tabs, styles: s.styles, sections: s.sections, categories: s.categories, roomTypes: s.roomTypes, palettes: s.palettes, inspirations: s.inspirations, models: admin ? s.models : EMPTY, users: admin ? s.users : EMPTY, requests: admin ? s.requests : EMPTY })));
   const L = useL();
+  const access = useAdminProfile((a) => a.access);
   const { t, lang } = useT();
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(50);
@@ -68,7 +73,7 @@ function SearchDialog({ admin, onClose }: { admin: boolean; onClose: () => void 
     for (const item of s.users) add(item.id, item.name || item.whatsapp, t('admin.nav.users'), '/admin/users', [item.id, item.name, item.whatsapp], 'account-outline');
     for (const item of s.requests) add(item.id, item.name, t('admin.nav.requests'), '/admin/requests', [item.id, item.name, item.whatsapp], 'inbox-outline');
     for (const e of SETTINGS_MAP) add(`set-${e.id}`, t(`sm.${e.id}`), `${t('sm.title')} · ${t(`sm.aud_${e.audience}`)}`, e.href, [t(`sm.${e.id}`), t(`sm.${e.id}_d`)], e.icon);
-    for (const item of ADMIN_NAV) add(`menu-${item.key}`, t(`admin.nav.${item.key}`), t('admin.title'), item.href, t(`admin.nav.${item.key}`), item.icon);
+    for (const item of ADMIN_NAV.filter((n) => canOpen(access, n.key))) add(`menu-${item.key}`, t(`admin.nav.${item.key}`), t('admin.title'), item.href, t(`admin.nav.${item.key}`), item.icon);
   } else {
     for (const item of s.tools.filter((x) => x.visible)) add(item.id, L(item.title), t('home.all'), '/', [item.id, item.title], 'toolbox-outline');
     for (const item of s.sections.filter((x) => x.visible)) add(item.id, L(item.title), t('tabs.explore'), '/explore', [item.id, item.title], 'view-carousel-outline');
@@ -78,7 +83,7 @@ function SearchDialog({ admin, onClose }: { admin: boolean; onClose: () => void 
   return results;
   // L and translated grouping follow the active language, not function identity.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s, needle, admin, lang]);
+  }, [s, needle, admin, lang, access]);
   const pick = (result: Result) => requestLeave(() => {
     onClose();
     router.push(`${result.href}?target=${encodeURIComponent(result.id)}&focus=${Date.now()}` as Href);

@@ -50,7 +50,7 @@ export function Delta({ v, testID }: { v: number; testID?: string }) {
 }
 
 /** Headline metric: icon, rolling number, change vs previous period, sparkline. `hot` = dark call-to-action variant. */
-export function Kpi({ id, icon, label, value, suffix, delta, spark, sub, active, hot, basis = 200, onPress }: { id: string; icon: string; label: string; value: number; suffix?: string; delta?: number; spark?: number[]; sub?: string; active?: boolean; hot?: boolean; basis?: number; onPress: () => void }) {
+export function Kpi({ id, icon, label, value, suffix, delta, spark, sub, active, hot, basis = 200, onPress }: { id: string; icon: string; label: string; value: number; suffix?: string; delta?: number; spark?: number[]; sub?: string; active?: boolean; hot?: boolean; basis?: number; onPress?: () => void }) {
   const { colors } = useTheme();
   const n = useCountUp(value);
   const [hov, hp] = useHover();

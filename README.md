@@ -195,3 +195,17 @@ Phone-only login is the existing behavior (no OTP verification); do not treat kn
 - **Admin account** (`/admin/account`, "Compte"): name, title, phone, e-mail, credits, profile photo, password change (scrypt hash stored in `admin_accounts`, overrides the built-in `admin/admin`), and signed-in devices. Set `DISABLE_DEFAULT_ADMIN=true` in production.
 - **Account menu** (admin sidebar): credits chip, language fast-select (DAR / AR / FR), Compte, Carte des réglages, Ouvrir l'app, Déconnexion.
 - **Demo messages**: shown by default in the empty `/assistant` chat. Managed in **Admin > Assistant > Messages démo**: toggle, cards/chips layout, title, drag-reorder, per-message click or write mode, instant owner answer or AI answer, follow-ups, CTA button, tap counters, "most asked by customers" suggestions and a live preview. Checks: `npm run check:demo`.
+
+## Super Admin panel (`/superadmin`)
+
+The platform owner's control panel, separate from `/admin`: its own account, login page and session (cookie `dwira_super`, HttpOnly, SameSite=Strict; `X-Super-Token` on native).
+
+- **URL**: `<your-origin>/superadmin`. Signed out it shows the dedicated login; signed in it redirects to `/superadmin/dashboard`.
+- **Default login**: `superadmin` / `superadmin`. After the first sign-in a dialog asks for a new password; it can also be changed (and the username) at any time in **Security**. The new credentials are stored as a scrypt hash in `superadmin_account`, replace the default for good, and sign out every other device. Rules: 10+ characters, a letter, a digit, not the username or the word "superadmin". Five wrong attempts in 15 minutes from one address lock sign-in for that address (HTTP 429).
+- **Production**: set `SUPERADMIN_USERNAME` + `SUPERADMIN_PASSWORD_HASH` (`ADMIN_PASSWORD='...' node server/password.js`) for a fixed credential, and/or `DISABLE_DEFAULT_SUPERADMIN=true` to refuse the default login.
+- **Dashboard**: users, 7-day activity vs the week before, 30-day chart (users / requests / designs), requests by status, top tools, platform health, tenants, roles, recent audit events and security alerts (default passwords still active).
+- **Administrators**: create, edit, assign a role and a tenant, per-person permission/page override, generate or reset a password, sign out their sessions, disable/enable, delete (the built-in `admin` cannot be deleted).
+- **Roles and permissions**: a level (none / view / manage) per area (requests, clients, chats, notifications, content, AI, appearance, settings) enforced by the API for every admin request (403 `FORBIDDEN`), plus the list of `/admin` pages shown in the menu, search and settings map (UI access). An administrator without a role keeps full access, so existing installs are unchanged.
+- **Tenants**: companies with a plan (free / starter / pro / enterprise), status (active / trial / suspended) and an administrator seat limit. Suspending a tenant signs its administrators out and blocks their login.
+- **Users**: search, block/unblock, set credits, delete. **Platform**: maintenance mode + message, open/closed signup, new requests on/off, free credits at signup, notification switches. **Audit**: every Super Admin action (who, what, when, from where).
+- Tests: `node --test scripts/check-superadmin-server.js` (part of `npm run test:server`).

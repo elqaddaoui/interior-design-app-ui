@@ -85,7 +85,7 @@ export default function RootLayout() {
       })();
       const settings = useStore.getState().doc.settings;
       const family = useLang.getState().lang === 'fr' ? settings.frenchFont || 'Inter' : settings.arabicFont || 'Tajawal';
-      await withTimeout(Promise.all([ensureFont(family), ensureFont(useStore.getState().doc.branding.logoFont || 'Inter'), ...(initialPath.startsWith('/admin') ? [ensureFont(settings.arabicFont || 'Tajawal'), ensureFont(settings.frenchFont || 'Inter')] : [])]), FONT_WAIT_MS);
+      await withTimeout(Promise.all([ensureFont(family), ensureFont(useStore.getState().doc.branding.logoFont || 'Inter'), ...(initialPath.startsWith('/admin') || initialPath.startsWith('/superadmin') ? [ensureFont(settings.arabicFont || 'Tajawal'), ensureFont(settings.frenchFont || 'Inter')] : [])]), FONT_WAIT_MS);
       setShown(true);
       SplashScreen.hideAsync().catch(() => {});
     })();

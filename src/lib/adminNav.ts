@@ -41,3 +41,14 @@ export const ADMIN_GROUPS: NavGroup[] = [
 ];
 export const ADMIN_NAV = ADMIN_GROUPS.flatMap((g) => g.items);
 
+
+/** The menu groups an administrator may see (pages outside their access are removed; empty groups disappear). No access info = everything. */
+export function visibleGroups(access: { full: boolean; ui: string[] } | null | undefined): NavGroup[] {
+  if (!access || access.full) return ADMIN_GROUPS;
+  return ADMIN_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.key === 'dashboard' || access.ui.includes(i.key)) })).filter((g) => g.items.length > 0);
+}
+/** The page key an /admin path belongs to (`/admin/prompt-cards/xyz` -> promptCards), or undefined for the account page, login, etc. */
+export function pageKeyOf(path: string): string | undefined {
+  const p = path.replace(/\/$/, '') || '/';
+  return ADMIN_NAV.find((n) => (n.href === '/admin' ? p === '/admin' : p === n.href || p.startsWith(`${n.href}/`)))?.key;
+}

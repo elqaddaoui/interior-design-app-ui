@@ -10,7 +10,7 @@ import { AdminAvatar } from '@/components/admin/AdminAvatar';
 import { AccountMenu, type Anchor } from '@/components/admin/AccountMenu';
 import { RightClick, type MenuItem } from '@/components/admin/ContextMenu';
 import { useAdminProfile } from '@/store/useAdminProfile';
-import { ADMIN_GROUPS, ADMIN_NAV, type NavItem } from '@/lib/adminNav';
+import { ADMIN_NAV, visibleGroups, type NavItem } from '@/lib/adminNav';
 import { MENU_GEO, activeKey, menuPositions } from '@/lib/menuLayout';
 import { useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
@@ -39,11 +39,10 @@ const SPR = {
 /** Moves a shared value: spring when animation is on, a plain jump otherwise. */
 const move = (sv: SharedValue<number>, to: number, cfg: (typeof SPR)[keyof typeof SPR], motion: boolean) => { sv.value = motion ? withSpring(to, cfg) : to; };
 
-const POS = menuPositions(ADMIN_GROUPS);
 const ROW = MENU_GEO.row;
 
 /** The layers that slide under the rows. */
-function Layers({ design, active, hover, motion, rtl }: { design: AdminMenuDesign; active?: string; hover?: string; motion: boolean; rtl: boolean }) {
+function Layers({ design, active, hover, motion, rtl, POS }: { POS: ReturnType<typeof menuPositions>; design: AdminMenuDesign; active?: string; hover?: string; motion: boolean; rtl: boolean }) {
   const { colors } = useTheme();
   const ay = useSharedValue(active ? POS.y[active] : 0), av = useSharedValue(active ? 1 : 0);
   const by = useSharedValue(active ? POS.y[active] : 0);
@@ -127,6 +126,9 @@ export function AdminMenu({ collapsed, design, anim, fill, insetTop = 0, onNavig
   const { colors } = useTheme();
   const router = useRouter();
   const path = usePathname();
+  const access = useAdminProfile((s) => s.access);
+  const groups = useMemo(() => visibleGroups(access), [access]);
+  const POS = useMemo(() => menuPositions(groups), [groups]);
   const active = activeKey(ADMIN_NAV, path);
   const name = useStore((s) => s.doc.branding.appName);
   const pending = useStore((s) => s.requests.filter((r) => r.status === 'pending').length);
@@ -162,9 +164,9 @@ export function AdminMenu({ collapsed, design, anim, fill, insetTop = 0, onNavig
       {/* entries */}
       <RememberScroll stateKey="shared:admin-menu" style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
         <View style={{ position: 'relative' }}>
-          <Layers design={design} active={active} hover={hover} motion={anim} rtl={rtl} />
-          {ADMIN_GROUPS.map((g, gi) => (
-            <View key={g.key} style={{ marginBottom: gi < ADMIN_GROUPS.length - 1 ? MENU_GEO.groupGap : 0 }}>
+          <Layers design={design} active={active} hover={hover} motion={anim} rtl={rtl} POS={POS} />
+          {groups.map((g, gi) => (
+            <View key={g.key} style={{ marginBottom: gi < groups.length - 1 ? MENU_GEO.groupGap : 0 }}>
               <View style={{ height: MENU_GEO.head, justifyContent: 'flex-end', paddingBottom: 6, paddingHorizontal: 10 }}>
                 <Animated.View style={fade}><Txt numberOfLines={1} className="text-muted text-[10px] font-extrabold uppercase" style={{ letterSpacing: 1.2 }}>{t(`admin.group.${g.key}`)}</Txt></Animated.View>
                 {gi > 0 ? <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 14, right: 14, top: MENU_GEO.head / 2 - 4, height: 1, backgroundColor: colors.line }, rail]} /> : null}

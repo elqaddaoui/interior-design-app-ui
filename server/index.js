@@ -4,7 +4,7 @@ const { isIP } = require('node:net');
 const crypto = require('node:crypto');
 const { createDb } = require('./db');
 const { sendBuffer } = require('./compress');
-const { createClients } = require('./clients');
+const { createClients, canonicalPhone } = require('./clients');
 const { createAdmins, passwordMatches } = require('./admins');
 const { createSync } = require('./sync');
 const { createContent } = require('./content');
@@ -18,6 +18,9 @@ const knowledge = require('./assistant/knowledge');
 const { createImageGen } = require('./imagegen');
 const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
+const { createSuperAdmin } = require('./superadmin');
+const { createSuperRoutes } = require('./superadmin-routes');
+const access = require('./access');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => Object.assign(new Error(message), { status });
 async function readBody(req) {
@@ -109,6 +112,10 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   const content = createContent(db, sync, { env, ...mediaOptions });
   const media = content.media;
   const admins = createAdmins(db, { env, sync, media });
+  // Super Admin (platform owner): own account, sessions, roles, tenants, audit log. Routes live in superadmin-routes.js.
+  const superadmin = createSuperAdmin(db, { env, sync, clients, notifier, content });
+  superadmin.bindAdmins(admins);
+  const superRoutes = createSuperRoutes({ superadmin, readBody });
   // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
   const campaigns = createCampaigns(db, notifier, { sync, settings: () => content.getDoc('settings') });
   const imagegen = createImageGen(db, { env, media, content, sync, ...(imageFetch ? { fetch: imageFetch } : {}) });
@@ -175,6 +182,21 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
     } catch { console.warn('Notification queue temporarily unavailable'); }
   }
 
+  /** The admin session with the account (disabled?), tenant (suspended?) and role, in one query. A disabled administrator or a suspended tenant has no session. */
+  async function loadSession(token, now = Date.now()) {
+    let row;
+    try {
+      row = (await db.query(`SELECT s.token_hash, s.admin_id, a.disabled, a.role_id, a.perm_override, r.name AS role_name, r.permissions AS role_perms, r.ui AS role_ui, t.status AS tenant_status
+        FROM admin_sessions s LEFT JOIN admin_accounts a ON a.admin_id=s.admin_id LEFT JOIN sa_roles r ON r.id=a.role_id LEFT JOIN sa_tenants t ON t.id=a.tenant_id
+        WHERE s.token_hash=$1 AND s.expires_at>$2`, [hash(token), now]))[0];
+    } catch {
+      // The Super Admin tables are missing (their schema could not be applied): administrators keep working with full access, as before roles existed.
+      row = (await db.query('SELECT token_hash, admin_id FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(token), now]))[0];
+    }
+    if (!row || row.disabled || row.tenant_status === 'suspended') return null;
+    return row;
+  }
+
   async function handle(req, res) {
     const origin = req.headers.origin;
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -189,7 +211,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         const sameOrigin = origin && /^https?:\/\//.test(origin) && new URL(origin).host === req.headers.host;
         if (origin && !sameOrigin && !allowedOrigins.includes(origin)) throw fail(403, 'Origin not allowed');
         if (origin) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Access-Control-Allow-Credentials', 'true'); res.setHeader('Vary', 'Origin'); }
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-User-Token, If-None-Match');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-User-Token, X-Super-Token, If-None-Match');
         res.setHeader('Access-Control-Expose-Headers', 'ETag');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -228,7 +250,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           }
           return sendBuffer(req, res, 200, headers, file.body);
         }
-        const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
+        const bucketName = url.pathname === '/api/admin/login' || url.pathname === '/api/superadmin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
         const key = `${address(req)}:${bucketName}`;
         const now = Date.now();
         if (buckets.size > 10000) for (const [id, bucket] of buckets) if (bucket.until < now) buckets.delete(id);
@@ -250,7 +272,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           } catch { database = 'error'; }
           const ok = database !== 'error' && database !== 'missing';
           // media: 'r2' | 'database' (no R2 variables) | 'incomplete' (some missing). Only the mode, never a value.
-          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
+          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()), ...(database !== 'error' && database !== 'missing' && db.status && db.status() !== 'ok' ? { superAdmin: db.status() } : {}) });
         }
         if (!db.configured()) throw fail(503, 'DATABASE_NOT_CONFIGURED');
 
@@ -261,7 +283,9 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         // admin panel request with ?a=1) pays for the session query, because only admins may see provider API keys.
         if (url.pathname === '/api/content' && req.method === 'GET') {
           const adminAsked = !!sessionToken || url.searchParams.has('a');
-          const admin = !!sessionToken && !!(await db.query('SELECT 1 FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
+          // The admin copy carries the AI provider keys: only an administrator who may see the AI area gets it.
+          const asked = sessionToken ? await loadSession(sessionToken, now) : null;
+          const admin = !!asked && access.allows(access.resolveAccess(asked), 'ai', 'view');
           // The ETag is the content version (one tiny sync_state read): an unchanged app gets a bodyless 304 and the database is never asked for the snapshot.
           const etag = await content.etag(admin);
           const matches = (req.headers['if-none-match'] || '').split(',').map(value => value.trim()).includes(etag);
@@ -277,9 +301,16 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           return json(200, snapshot, { 'Cache-Control': cacheControl, ETag: etag });
         }
 
-        const session = sessionToken && (await db.query('SELECT token_hash,admin_id FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
+        const session = sessionToken ? await loadSession(sessionToken, now) : null;
         const adminId = session?.admin_id;
         const admin = () => { if (!session) throw fail(401, 'Admin login required'); };
+        // Roles and permissions: what this administrator may do is decided here, for every admin route, from the method and the path.
+        const adminAccess = session ? access.resolveAccess(session) : null;
+        if (session) {
+          const need = access.requiredAccess(url.pathname, req.method);
+          if (need && !access.allows(adminAccess, need.areas, need.level)) throw fail(403, 'FORBIDDEN');
+        }
+        const platform = await superadmin.getPlatform();
         const clientToken = req.headers['x-demand-token'];
         const clientHash = typeof clientToken === 'string' && /^[a-f0-9]{64}$/.test(clientToken) ? hash(clientToken) : null;
         const userCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_user='))?.slice(11);
@@ -291,9 +322,19 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         const requireUser = () => { if (!client) throw fail(401, 'USER_LOGIN_REQUIRED'); if (client.blocked) throw fail(403, 'ACCOUNT_BLOCKED'); return client; };
         const cookie = (name, token, age) => `${name}=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${age}${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
 
+        // ---- Super Admin (platform owner): separate account and session; see server/superadmin-routes.js ----
+        const superCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_super='))?.slice(12);
+        const superToken = req.headers['x-super-token'] || superCookie;
+        if (await superRoutes({ url, req, res, json, cookie, token: typeof superToken === 'string' ? superToken : '', ip: address(req) })) return;
+        // Public platform status (maintenance banner, closed sign-up): never any secret.
+        if (url.pathname === '/api/platform' && req.method === 'GET') return json(200, { maintenance: platform.maintenance, message: platform.maintenance ? platform.maintenanceMessage : '', allowClientSignup: platform.allowClientSignup, allowRequests: platform.allowRequests }, { 'Cache-Control': 'private, max-age=10' });
+        // Maintenance mode pauses what clients write (sign-in, requests, chat); administrators and the Super Admin keep working.
+        if (platform.maintenance && req.method !== 'GET' && !session && ['/api/user/login', '/api/requests', '/api/chat/reply', '/api/ai/render'].includes(url.pathname)) throw fail(503, 'MAINTENANCE');
+
         // ---- Client accounts ----
         if (url.pathname === '/api/user/login' && req.method === 'POST') {
           const body = await readBody(req);
+          if (!platform.allowClientSignup && !(await db.query('SELECT 1 FROM clients WHERE phone=$1', [canonicalPhone(body?.phone)]))[0]) throw fail(403, 'SIGNUP_CLOSED');
           const result = await clients.login(body.name, body.phone, (await content.getDoc('settings')).defaultFreeCredits);
           res.setHeader('Set-Cookie', cookie('dwira_user', result.token, 365 * 86400));
           // Chats this device held as a visitor now belong to the person who just signed in.
@@ -631,6 +672,10 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const body = await readBody(req);
           const identity = typeof body.email === 'string' && typeof body.password === 'string' ? await admins.verify(body.email, body.password) : null;
           if (!identity) throw fail(401, 'Invalid credentials');
+          // A disabled administrator, or one whose tenant is suspended, cannot start a session (the message is the same as a wrong password's only for the first case's privacy: here the owner needs to know why).
+          const standing = (await db.query('SELECT a.disabled, t.status AS tenant_status FROM admin_accounts a LEFT JOIN sa_tenants t ON t.id=a.tenant_id WHERE a.admin_id=$1', [identity]).catch(() => []))[0];
+          if (standing?.disabled) throw fail(403, 'ACCOUNT_DISABLED');
+          if (standing?.tenant_status === 'suspended') throw fail(403, 'TENANT_SUSPENDED');
           const token = crypto.randomBytes(32).toString('hex');
           await db.query('DELETE FROM admin_sessions WHERE expires_at<=$1', [now]);
           await db.query('INSERT INTO admin_sessions(token_hash,expires_at,admin_id,created_at,ua) VALUES($1,$2,$3,$4,$5)', [hash(token), now + 7 * 86400000, identity, now, String(req.headers['user-agent'] || '').slice(0, 300)]);
@@ -639,7 +684,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const profile = await admins.get(identity);
           return json(200, { ok: true, user: { id: 'usr_admin', name: profile.name || 'Admin' }, ...(req.headers['x-dwira-native'] === '1' ? { token } : {}) });
         }
-        if (req.method === 'GET' && url.pathname === '/api/admin/session') { admin(); return json(200, { ok: true, prefs: await content.adminPrefs(adminId), profile: await admins.get(adminId) }); }
+        if (req.method === 'GET' && url.pathname === '/api/admin/session') { admin(); return json(200, { ok: true, prefs: await content.adminPrefs(adminId), profile: await admins.get(adminId), access: access.publicAccess(adminAccess) }); }
         // ---- Administrator account (profile, password, signed-in devices) ----
         if (url.pathname === '/api/admin/account') {
           admin();
