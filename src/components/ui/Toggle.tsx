@@ -3,6 +3,7 @@ import { Pressable } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useTheme } from '@/theme/ThemeProvider';
 import { useT } from '@/i18n';
+import { useReadOnly } from './ReadOnly';
 
 const W = 48, H = 28, PAD = 3, KNOB = H - PAD * 2;
 
@@ -11,7 +12,8 @@ const W = 48, H = 28, PAD = 3, KNOB = H - PAD * 2;
  * (thumb on the wrong side, track colour not matching the state). This one always renders LTR geometry
  * and mirrors the "on" side explicitly, so ON is unmistakable (coloured track + thumb at the end side).
  */
-export function Toggle({ value, onValueChange, disabled, testID, label }: { value: boolean; onValueChange?: (v: boolean) => void; disabled?: boolean; testID?: string; label?: string }) {
+export function Toggle({ value, onValueChange, disabled: off, testID, label, safe }: { value: boolean; onValueChange?: (v: boolean) => void; disabled?: boolean; testID?: string; label?: string; safe?: boolean }) {
+  const disabled = off || (useReadOnly() && !safe);
   const { colors } = useTheme();
   const { rtl } = useT();
   const p = useSharedValue(value ? 1 : 0);

@@ -79,7 +79,7 @@ export default function SettingsMap() {
   return (
     <AdminPage title={t('sm.title')} max={900}>
       <Txt className="text-muted text-[13px] leading-[20px] mb-3">{t('sm.intro')}</Txt>
-      <Input testID="sm-search" value={query} onChangeText={setQuery} placeholder={t('sm.search')} accessibilityLabel={t('sm.search')} />
+      <Input safe testID="sm-search" value={query} onChangeText={setQuery} placeholder={t('sm.search')} accessibilityLabel={t('sm.search')} />
       <View className="mt-3 mb-1"><AudienceFilter value={filter} onChange={setFilter} counts={counts} /></View>
       {filter !== 'all' ? <Txt testID="sm-filter-desc" className="text-muted text-[12.5px] mt-2">{t(`sm.aud_${filter}_d`)}</Txt> : null}
       {!shown.length ? <Txt testID="sm-none" className="text-muted text-center py-10">{t('sm.none')}</Txt> : null}

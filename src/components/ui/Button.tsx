@@ -3,6 +3,7 @@ import { Pressable } from 'react-native';
 import { Spinner } from './Spinner';
 import { Txt } from './Txt';
 import { Icon } from './Icon';
+import { useReadOnly } from './ReadOnly';
 
 type Variant = 'primary' | 'ink' | 'soft' | 'outline' | 'ghost' | 'danger';
 const BG: Record<Variant, string> = {
@@ -13,10 +14,13 @@ const FG: Record<Variant, string> = {
 };
 const SIZE = { sm: 'px-4 h-9', md: 'px-5 h-12', lg: 'px-6 h-14' };
 
-export function Button({ title, onPress, variant = 'primary', size = 'md', disabled, loading, icon, className = '', full, testID, accessibilityLabel }: {
+export function Button({ title, onPress, variant = 'primary', size = 'md', disabled, loading, icon, className = '', full, testID, accessibilityLabel, safe }: {
   title: string; onPress?: () => void; variant?: Variant; size?: keyof typeof SIZE; disabled?: boolean; loading?: boolean; icon?: string; className?: string; full?: boolean; testID?: string; accessibilityLabel?: string;
+  /** Changes nothing (open WhatsApp, cancel, close, paging ...): stays usable on a view-only page. */
+  safe?: boolean;
 }) {
-  const off = disabled || loading;
+  const readOnly = useReadOnly() && !safe;
+  const off = disabled || loading || readOnly;
   return (
     <Pressable
       testID={testID}

@@ -228,7 +228,7 @@ export function SlideshowModal({ title, subtitle, media, onChange, onClose }: {
             </View>
 
             <View className="px-3 pt-2.5 pb-3 border-t border-line bg-bg">
-              <Button testID="slideshow-done" title={t('common.done')} onPress={done} full />
+              <Button safe testID="slideshow-done" title={t('common.done')} onPress={done} full />
             </View>
           </Pressable>
         </Pressable>

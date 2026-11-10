@@ -62,7 +62,7 @@ export function AdminLogin() {
     if (!id.trim() || !pw) { setErr(t('ac.adminInvalid')); return; }
     setBusy(true); setErr('');
     const r = await services.auth.loginAdmin(id, pw);
-    if (!r.ok) { setBusy(false); setErr(t(r.reason === 'limited' ? 'ac.adminLimited' : r.reason === 'unreachable' ? 'ac.adminOfflineErr' : 'ac.adminInvalid')); return; }
+    if (!r.ok) { setBusy(false); setErr(t(r.reason === 'limited' ? 'ac.adminLimited' : r.reason === 'unreachable' ? 'ac.adminOfflineErr' : r.reason === 'maintenance' ? 'sx.bn.maintenance' : r.reason === 'suspended' ? 'sx.bn.suspended' : r.reason === 'disabled' ? 'sx.bn.disabled' : 'ac.adminInvalid')); return; }
     useLocal.getState().set({ adminSession: true });
     if (backendEnabled) { useStore.setState({ adminLoaded: false }); await Promise.all([refreshAdminSession(), useStore.getState().loadAdminData()]); }
     setBusy(false);
@@ -108,7 +108,7 @@ export function AdminLogin() {
           </View>
           <View style={{ gap: 14 }}>
             <DarkField testID="admin-email" label={t('ac.adminId')} icon="account-outline" placeholder={t('ac.adminIdPh')} value={id} onChangeText={(v) => { setId(v); setErr(''); }}
-              autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="username" returnKeyType="next" onSubmitEditing={() => pwRef.current?.focus()} />
+              autoCapitalize="none" autoCorrect={false} keyboardType="default" autoComplete="username" returnKeyType="next" onSubmitEditing={() => pwRef.current?.focus()} />
             <DarkField testID="admin-password" inputRef={pwRef} label={t('admin.password')} icon="lock-outline" value={pw} onChangeText={(v) => { setPw(v); setErr(''); }} secureTextEntry={!shown}
               autoCapitalize="none" autoComplete="current-password" returnKeyType="go" onSubmitEditing={submit}
               {...(Platform.OS === 'web' ? ({ onKeyUp: (e: any) => setCaps(!!e.getModifierState?.('CapsLock')) } as object) : {})}

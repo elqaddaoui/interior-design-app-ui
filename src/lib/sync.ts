@@ -6,6 +6,7 @@ import { onLangChosen, useLang } from '@/i18n';
 import { reconcileDevice, syncLanguage } from '@/lib/notifications';
 import { reloadUserSpace, useStore } from '@/store/useStore';
 import { useLocal } from '@/store/useLocal';
+import { useAccess, type AccessInfo } from '@/store/useAccess';
 import { usePrefs } from '@/store/usePrefs';
 import { useUserSession } from '@/store/useUserSession';
 import { useAdminProfile, type AdminProfile } from '@/store/useAdminProfile';
@@ -13,14 +14,14 @@ import { useAdminChats } from '@/store/useAdminChats';
 import { useAdminCampaigns } from '@/store/useAdminCampaigns';
 
 /** What `GET /api/sync` returns: one monotonically increasing version per kind of data (null = not visible to this session). */
-interface SyncState { content: number; requests: number | null; clients: number | null; chats?: number | null; campaigns?: number | null; admin: number | null; client: number | null; parts?: Partial<Record<UserPart, number>> | null; guest?: number | null; user: { id: string; blocked: boolean } | null; isAdmin: boolean }
+interface SyncState { content: number; requests: number | null; clients: number | null; chats?: number | null; campaigns?: number | null; admin: number | null; client: number | null; parts?: Partial<Record<UserPart, number>> | null; guest?: number | null; user: { id: string; blocked: boolean } | null; isAdmin: boolean; platform?: number | null }
 const POLL_MS = 4000;
 /** The parts of a client's own space the server versions separately (`parts` in the sync answer). */
 type UserPart = 'conversations' | 'history' | 'requests';
 const USER_PARTS: UserPart[] = ['conversations', 'history', 'requests'];
 let seenParts: Partial<Record<UserPart, number>> | null = null;
 
-type Seen = Partial<Record<'content' | 'requests' | 'clients' | 'chats' | 'campaigns' | 'admin' | 'client' | 'guest', number | null>>;
+type Seen = Partial<Record<'content' | 'requests' | 'clients' | 'chats' | 'campaigns' | 'admin' | 'client' | 'guest' | 'platform', number | null>>;
 let seen: Seen = {};
 let identity = '';
 let running = false;
@@ -30,11 +31,12 @@ export async function refreshAdminSession() {
   const local = useLocal.getState();
   if (!backendEnabled || !local.adminSession || local.adminOffline) return;
   try {
-    const result = await api<{ ok: true; prefs?: UserPrefs; profile?: AdminProfile }>('/admin/session');
+    const result = await api<{ ok: true; prefs?: UserPrefs; profile?: AdminProfile; access?: AccessInfo; impersonated?: boolean }>('/admin/session');
+    useAccess.getState().set(result.access ?? null, !!result.impersonated);
     usePrefs.getState().hydrate('admin', result.prefs ?? {});
     if (result.profile) useAdminProfile.getState().hydrate(result.profile);
   } catch (error) {
-    if (error instanceof BackendError && error.status === 401) { useLocal.getState().set({ adminSession: false }); usePrefs.getState().clear('admin'); useAdminProfile.getState().clear(); }
+    if (error instanceof BackendError && error.status === 401) { useLocal.getState().set({ adminSession: false }); usePrefs.getState().clear('admin'); useAdminProfile.getState().clear(); useAccess.getState().clear(); }
   }
 }
 
@@ -63,7 +65,7 @@ export async function syncOnce() {
       if (changed('clients')) jobs.push(store.reload('users'));
       if (changed('chats')) jobs.push(useAdminChats.getState().load());
       if (changed('campaigns') && useAdminCampaigns.getState().loaded) jobs.push(useAdminCampaigns.getState().load());
-      if (changed('admin')) jobs.push(refreshAdminSession());
+      if (changed('admin') || changed('platform')) jobs.push(refreshAdminSession());
     }
     if (session.user) {
       if (state.user?.blocked) jobs.push(session.refresh()); // signs this device out

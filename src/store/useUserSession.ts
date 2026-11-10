@@ -6,6 +6,7 @@ import { api, backendEnabled, BackendError } from '@/lib/backend';
 import { toast } from '@/store/useToast';
 import { usePrefs } from '@/store/usePrefs';
 import { inAdminArea } from '@/lib/route';
+import { clientTenant } from '@/lib/tenantLink';
 
 /** User authentication never touches useLocal.adminSession or its secure-store key. */
 export const useUserSession = create<{
@@ -35,7 +36,8 @@ export const useUserSession = create<{
     }
   },
   async login(name, phone) {
-    const result = await api<{ user: AppUser; prefs?: UserPrefs; token?: string }>('/user/login', { method: 'POST', body: { name, phone }, client: true }); // the device token lets the server move this device's visitor chats into the account
+    const tenant = await clientTenant(); // the company whose link opened the app (null = default workspace)
+    const result = await api<{ user: AppUser; prefs?: UserPrefs; token?: string }>('/user/login', { method: 'POST', body: { name, phone, ...(tenant ? { tenant } : {}) }, client: true }); // the device token lets the server move this device's visitor chats into the account
     if (Platform.OS !== 'web' && result.token) await (await import('expo-secure-store')).setItemAsync('dwira-user-session', result.token);
     set({ user: result.user });
     usePrefs.getState().hydrate('client', result.prefs ?? {});

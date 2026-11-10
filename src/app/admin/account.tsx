@@ -202,7 +202,7 @@ function PasswordSection() {
           <StrengthBar value={next} />
           <PasswordInput testID="pw-confirm" label={t('ac.confirm')} value={again} onChangeText={(v) => { setAgain(v); setErrors((x) => ({ ...x, again: '' })); }} error={errors.again} onSubmitEditing={submit} />
           <View className="flex-row justify-end" style={{ gap: 8 }}>
-            <Button testID="pw-cancel" title={t('common.cancel')} variant="soft" onPress={reset} />
+            <Button safe testID="pw-cancel" title={t('common.cancel')} variant="soft" onPress={reset} />
             <Button testID="pw-submit" title={t('ac.save')} icon="check" onPress={submit} loading={busy} />
           </View>
         </View>

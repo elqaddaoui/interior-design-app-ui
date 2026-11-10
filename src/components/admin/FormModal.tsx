@@ -154,7 +154,7 @@ function SlideshowSummary({ m, onChange, record }: { m: any; onChange: (v: any) 
       {images.length > 6 ? <View className="rounded-lg bg-surface2 items-center justify-center" style={{ width: 56, height: 56 }}><Txt className="text-muted font-bold">+{images.length - 6}</Txt></View> : null}
     </View>
     <Txt className="text-muted text-[12px] mb-2">{t('tc.imagesCount', { n: images.length })}</Txt>
-    <View className="flex-row"><Button testID="slideshow-open" size="sm" variant="soft" icon="image-multiple-outline" title={t('tc.configure')} onPress={() => setOpen(true)} /></View>
+    <View className="flex-row"><Button safe testID="slideshow-open" size="sm" variant="soft" icon="image-multiple-outline" title={t('tc.configure')} onPress={() => setOpen(true)} /></View>
     {open ? <SlideshowModal title={record?.title} subtitle={record?.subtitle} media={m} onChange={onChange} onClose={() => setOpen(false)} /> : null}
   </View>;
 }
@@ -257,7 +257,7 @@ function FormDialog({ visible, title, fields, initial, onClose, onSubmit, onDraf
   const close = () => { if (!busy) requestLeave(onClose); };
   return (
     <Sheet visible={visible} onClose={close} title={title} wide headerRight={visible ? <PopupHistoryButtons api={hist} prefix="form" /> : undefined} footer={<View className="flex-row gap-2.5">
-      <Button title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" />
+      <Button safe title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" />
       <Button testID="form-save" title={t('improve.submit')} onPress={submit} loading={busy || uploading} className="flex-1" />
     </View>}>
       {visible ? <View testID="form-preview" className="bg-soft rounded-xl px-3 py-2 mb-2 flex-row items-center gap-3">
@@ -356,7 +356,7 @@ function BatchFormDialog({ mode, title, fields, initial, initialKeys = [], blank
   const [originalValues] = useState(() => ({ text, shared, drafts, keys }));
   useLeaveGuard(!!mode && snapshot !== original, submit, onClose, { before: originalValues, after: { text, shared, drafts, keys }, labels: { text: t('improve.pasteText'), keys: t('improve.selectedFields'), ...Object.fromEntries(fields.flatMap(f => [[`shared.${f.key}`, f.label], [`drafts.0.${f.key}`, f.label]])) }, secrets: fields.filter(f => f.kind === 'secret').flatMap(f => [`shared.${f.key}`, ...drafts.map((_, i) => `drafts.${i}.${f.key}`)]) });
   const close = () => { if (!busy) requestLeave(onClose); };
-  return <Sheet visible={!!mode} title={title} wide={mode === 'add'} onClose={close} footer={<View className="flex-row gap-2.5"><Button title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" /><Button testID="batch-save" title={pasted ? t('improve.createCount', { count: lines.length }) : t('common.save')} onPress={submit} loading={busy || uploading} disabled={mode === 'edit' && !keys.length || pasted && (!lines.length || lines.length > 50)} className="flex-1" /></View>}>
+  return <Sheet visible={!!mode} title={title} wide={mode === 'add'} onClose={close} footer={<View className="flex-row gap-2.5"><Button safe title={t('common.cancel')} variant="soft" onPress={close} disabled={busy} className="flex-1" /><Button testID="batch-save" title={pasted ? t('improve.createCount', { count: lines.length }) : t('common.save')} onPress={submit} loading={busy || uploading} disabled={mode === 'edit' && !keys.length || pasted && (!lines.length || lines.length > 50)} className="flex-1" /></View>}>
     {mode === 'edit' ? <>
       <Txt className="text-muted text-[12px] leading-[18px] mb-2">{t('improve.batchHelp')}</Txt>
       {fields.filter((f) => !f.show || f.show(drafts[0] ?? {})).map((f) => <View key={f.key} className="rounded-xl border border-line px-3 pt-2.5 pb-1.5 mb-2 bg-surface">

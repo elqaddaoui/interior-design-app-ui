@@ -73,6 +73,38 @@ CREATE TABLE IF NOT EXISTS admin_accounts (
 CREATE UNIQUE INDEX IF NOT EXISTS admin_accounts_email ON admin_accounts(lower(email)) WHERE email <> '';
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS created_at BIGINT;
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS ua TEXT;
+-- Platform layer (Super Admin). A tenant is one business that uses the platform: it has its own admin accounts, clients, campaigns and
+-- notification devices. 'default' is the original workspace (the legacy admin login and every client created before this layer existed).
+-- plan_id points at a plan stored in settings ('platform_plans'); data holds contact, notes, per-tenant feature overrides and limits.
+CREATE TABLE IF NOT EXISTS tenants (
+  id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, plan_id TEXT NOT NULL DEFAULT 'starter', status TEXT NOT NULL DEFAULT 'active',
+  data TEXT NOT NULL DEFAULT '{}', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+);
+-- Custom roles. tenant_id NULL = available to every tenant (created by the super admin); otherwise private to that tenant. Built-in roles live in code.
+CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS tenant_accounts (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, username TEXT NOT NULL UNIQUE, name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL, role_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', data TEXT NOT NULL DEFAULT '{}', last_login BIGINT,
+  created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tenant_accounts_tenant ON tenant_accounts(tenant_id);
+CREATE TABLE IF NOT EXISTS super_sessions (token_hash TEXT PRIMARY KEY, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY, at BIGINT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, target_type TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '',
+  tenant_id TEXT, detail TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at DESC);
+CREATE INDEX IF NOT EXISTS audit_log_tenant ON audit_log(tenant_id, at DESC);
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS account_id TEXT;
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+-- A phone number is unique inside a tenant, not across the platform (the same person can be a client of two businesses).
+ALTER TABLE clients DROP CONSTRAINT IF EXISTS clients_phone_key;
+CREATE UNIQUE INDEX IF NOT EXISTS clients_tenant_phone ON clients(tenant_id, phone);
+CREATE INDEX IF NOT EXISTS clients_tenant_created ON clients(tenant_id, created_at DESC);
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS campaigns_tenant ON campaigns(tenant_id);
 `;
 
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);

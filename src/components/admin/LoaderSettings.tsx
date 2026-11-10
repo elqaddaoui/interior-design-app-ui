@@ -92,7 +92,7 @@ export function LoaderSettings({ settings, set }: { settings: AppSettings; set: 
           </View>
         </View>
 
-        <View className="flex-row mt-4"><Button testID="loader-preview" title={t('improve.loaderPreview')} icon="play" variant="soft" size="sm" onPress={() => setPreview(true)} /></View>
+        <View className="flex-row mt-4"><Button safe testID="loader-preview" title={t('improve.loaderPreview')} icon="play" variant="soft" size="sm" onPress={() => setPreview(true)} /></View>
       </> : null}
 
       <Modal visible={preview} transparent animationType="fade" onRequestClose={() => setPreview(false)}>

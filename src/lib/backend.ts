@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { storage } from '@/data/mock/storage';
 import { useLocal } from '@/store/useLocal';
+import { useAccess, type AccessInfo } from '@/store/useAccess';
 
 // This is a public URL, never an admin credential or VAPID private key.
 // Web deployments use the backend on the same host without build-time configuration.
@@ -83,24 +84,28 @@ export async function apiBlob(path: string, timeoutMs = 30000): Promise<Blob> {
 }
 /** Built-in default admin login. It must always open the admin panel, even if the API is unreachable or outdated. */
 export const isDefaultAdmin = (email: string, password: string) => email.trim().toLowerCase() === 'admin' && password === 'admin';
-export type LoginResult = { ok: true; user: { id: string; name: string } } | { ok: false; reason: 'invalid' | 'limited' | 'unreachable' };
+export type LoginResult = { ok: true; user: { id: string; name: string } } | { ok: false; reason: 'invalid' | 'limited' | 'unreachable' | 'maintenance' | 'suspended' | 'disabled' };
 export async function backendLogin(email: string, password: string): Promise<LoginResult> {
   try {
-    const result = await api<{ ok: true; user: { id: string; name: string }; token?: string }>('/admin/login', { method: 'POST', body: { email, password } });
+    const result = await api<{ ok: true; user: { id: string; name: string }; token?: string; access?: AccessInfo }>('/admin/login', { method: 'POST', body: { email, password } });
     if (Platform.OS !== 'web' && result.token) {
       const { setItemAsync } = await import('expo-secure-store');
       await setItemAsync('dwira-backend-session', result.token);
     }
     useLocal.getState().set({ adminOffline: false });
+    useAccess.getState().set(result.access ?? null, false);
     return { ok: true, user: result.user };
   } catch (error) {
     // The server answered: wrong credentials (401) or too many tries (429). Never fall back to the built-in login then,
     // because the password may have been changed on the server.
     if (error instanceof BackendError && (error.status === 401 || error.status === 429)) return { ok: false, reason: error.status === 429 ? 'limited' : 'invalid' };
+    // The credentials were right but the workspace or account is switched off by the platform operator.
+    if (error instanceof BackendError && error.status === 403) return { ok: false, reason: error.code === 'MAINTENANCE' ? 'maintenance' : error.code === 'TENANT_SUSPENDED' ? 'suspended' : error.code === 'ACCOUNT_DISABLED' ? 'disabled' : 'invalid' };
     // Server missing (static hosting, /api not proxied) or running an older build without the default login:
     // still accept admin/admin locally. Server-protected data stays protected by the server itself.
     if (isDefaultAdmin(email, password)) {
       useLocal.getState().set({ adminOffline: true });
+      useAccess.getState().clear();
       return { ok: true, user: { id: 'usr_admin', name: 'Admin' } };
     }
     return { ok: false, reason: 'unreachable' };
@@ -108,6 +113,7 @@ export async function backendLogin(email: string, password: string): Promise<Log
 }
 export async function backendLogout() {
   useLocal.getState().set({ adminOffline: false });
+  useAccess.getState().clear();
   if (!backendEnabled) return;
   try { await api('/admin/logout', { method: 'POST', body: {} }); }
   finally { if (Platform.OS !== 'web') await (await import('expo-secure-store')).deleteItemAsync('dwira-backend-session'); }

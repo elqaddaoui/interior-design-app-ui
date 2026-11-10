@@ -23,6 +23,7 @@ import { applyBulk, isProtected, MAX_CREDITS, nextCredits, type BulkOp, type Cre
 import type { AppUser } from '@/data/types';
 import { holdPress, PRESS_HOLD } from '@/lib/noSelect';
 import { useLocalSearchParams } from 'expo-router';
+import { useReadOnly } from '@/components/ui/ReadOnly';
 
 type Filter = 'all' | 'active' | 'blocked' | 'admin';
 const FILTERS: Filter[] = ['all', 'active', 'blocked', 'admin'];
@@ -62,6 +63,7 @@ function BarAction({ icon, label, onPress, disabled, danger, testID }: { icon: s
 /** The users screen: search, filter, select one or many, then edit credits / block / unblock / delete. */
 export function UserManager() {
   const { t, lang } = useT();
+  const readOnly = useReadOnly();
   const { desktop } = useBp();
   const { target } = useLocalSearchParams<{ target?: string }>();
   const users = useStore((s) => s.users);
@@ -127,6 +129,7 @@ export function UserManager() {
     try { void (globalThis as any).navigator?.clipboard?.writeText(text); toast(t('ax.copied')); } catch { /* clipboard unavailable */ }
   };
   const menuOf = (u: AppUser): MenuItem[] => {
+    if (readOnly) return u.whatsapp ? [{ key: 'copy', label: t('ax.copyNumber'), icon: 'content-copy', onPress: () => copyText(u.whatsapp) } as MenuItem] : [];
     const group = selected.includes(u.id) && selected.length > 1;
     const ids = group ? chosenOk.map((x) => x.id) : isProtected(u) ? [] : [u.id];
     const skipped = group ? chosen.length - chosenOk.length : 0;
@@ -143,12 +146,12 @@ export function UserManager() {
 
   const filterLabel: Record<Filter, string> = { all: t('common.all'), active: t('admin.um.active'), blocked: t('admin.um.blocked'), admin: t('admin.enums.admin') };
 
-  const bar = selected.length ? (
+  const bar = selected.length && !readOnly ? (
     <Card testID="um-bulk-bar" className="p-3 rounded-3xl" style={{ boxShadow: '0 8px 36px rgba(0,0,0,0.2)' } as any}>
       <View className="flex-row items-center gap-2 mb-2">
         <View className="bg-primary rounded-full px-3 py-1"><Txt testID="um-selected-count" className="text-onprimary font-bold">{selected.length}</Txt></View>
         <Txt className="font-bold flex-1">{t('admin.um.selected')}</Txt>
-        <Button testID="um-clear" size="sm" variant="ghost" icon="close" title={t('admin.um.clear')} disabled={busy} onPress={() => setSelected([])} />
+        <Button safe testID="um-clear" size="sm" variant="ghost" icon="close" title={t('admin.um.clear')} disabled={busy} onPress={() => setSelected([])} />
       </View>
       <View className="flex-row gap-2">
         <BarAction testID="um-bulk-credits" icon="star-four-points-outline" label={t('admin.um.credits')} disabled={busy} onPress={() => setCreditsOpen(true)} />
@@ -161,7 +164,7 @@ export function UserManager() {
 
   return (
     <AdminPage title={t('admin.nav.users')} floating={bar}>
-      <Input testID="users-filter" value={query} onChangeText={setQuery} placeholder={t('admin.um.search')} />
+      <Input safe testID="users-filter" value={query} onChangeText={setQuery} placeholder={t('admin.um.search')} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 12 }}>
         {FILTERS.map((f) => <Chip key={f} testID={`users-role-${f}`} label={filterLabel[f]} count={counts[f]} on={filter === f} onPress={() => { setFilter(f); setShown(PAGE); }} />)}
       </ScrollView>
@@ -207,7 +210,7 @@ export function UserManager() {
         </Card>
       ) : !adminLoaded ? <AdminLoading /> : <EmptyState icon="account-search-outline" title={t('admin.um.none')} />}
 
-      {rows.length > shown ? <View className="items-center py-3"><Button testID="um-more" variant="soft" size="sm" title={`${t('admin.um.more')} (${rows.length - shown})`} onPress={() => setShown(shown + PAGE)} /></View> : null}
+      {rows.length > shown ? <View className="items-center py-3"><Button safe testID="um-more" variant="soft" size="sm" title={`${t('admin.um.more')} (${rows.length - shown})`} onPress={() => setShown(shown + PAGE)} /></View> : null}
       <View className="h-3" />
 
       <EditUser user={editing} busy={busy} onClose={() => setEditing(null)} onSave={save}
@@ -238,7 +241,7 @@ function EditUser({ user, busy, onClose, onSave, onDelete }: { user: AppUser | n
   const hist = usePopupHistory({ credits, blocked }, (f) => { setCredits(f.credits); setBlocked(f.blocked); }, { active: !!user, resetKey: user?.id });
   return (
     <Sheet visible={!!user} onClose={onClose} title={t('admin.um.editUser')} headerRight={user && !locked ? <PopupHistoryButtons api={hist} prefix="um-edit" /> : undefined}
-      footer={user ? <View className="flex-row gap-2.5"><Button testID="um-edit-cancel" variant="soft" className="flex-1" title={t('common.cancel')} onPress={onClose} /><Button testID="um-edit-save" className="flex-1" title={t('common.save')} disabled={!dirty} loading={busy} onPress={() => onSave(user, { credits: amount, blocked })} /></View> : undefined}>
+      footer={user ? <View className="flex-row gap-2.5"><Button safe testID="um-edit-cancel" variant="soft" className="flex-1" title={t('common.cancel')} onPress={onClose} /><Button testID="um-edit-save" className="flex-1" title={t('common.save')} disabled={!dirty} loading={busy} onPress={() => onSave(user, { credits: amount, blocked })} /></View> : undefined}>
       {user ? (
         <View>
           <View className="flex-row items-center gap-3 mb-3">
@@ -275,7 +278,7 @@ function BulkCredits({ visible, users, busy, onClose, onApply }: { visible: bool
   const hist = usePopupHistory({ mode, value }, (f) => { setMode(f.mode); setValue(f.value); }, { active: visible });
   return (
     <Sheet visible={visible} onClose={onClose} title={`${t('admin.um.editCredits')} · ${users.length}`} headerRight={visible ? <PopupHistoryButtons api={hist} prefix="um-credits" /> : undefined}
-      footer={<View className="flex-row gap-2.5"><Button testID="um-credits-cancel" variant="soft" className="flex-1" title={t('common.cancel')} onPress={onClose} /><Button testID="um-credits-apply" className="flex-1" title={t('admin.um.apply', { count: users.length })} loading={busy} disabled={!users.length || (mode !== 'set' && amount === 0)} onPress={() => onApply(mode, amount)} /></View>}>
+      footer={<View className="flex-row gap-2.5"><Button safe testID="um-credits-cancel" variant="soft" className="flex-1" title={t('common.cancel')} onPress={onClose} /><Button testID="um-credits-apply" className="flex-1" title={t('admin.um.apply', { count: users.length })} loading={busy} disabled={!users.length || (mode !== 'set' && amount === 0)} onPress={() => onApply(mode, amount)} /></View>}>
       <Segmented compact testID="um-mode" value={mode} onChange={setMode} options={[{ key: 'add', label: t('admin.um.modeAdd') }, { key: 'subtract', label: t('admin.um.modeSubtract') }, { key: 'set', label: t('admin.um.modeSet') }]} />
       <View className="mt-3"><Input testID="um-amount" label={t('admin.credits.amount')} value={value} onChangeText={(v) => setValue(digits(v))} keyboardType="number-pad" /></View>
       <View className="flex-row flex-wrap gap-2 mb-3">

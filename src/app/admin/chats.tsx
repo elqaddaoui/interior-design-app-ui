@@ -56,7 +56,7 @@ function Thread({ id, onClose }: { id: string | null; onClose: () => void }) {
         onVoice={sendVoice} ids={{ input: 'admin-chat-input', send: 'admin-chat-send', mic: 'admin-chat-mic' }} />}>
       {chat.guest ? null : <View className="flex-row items-center justify-between mb-2 gap-3">
         <Txt className="text-muted flex-1">{chat.whatsapp}</Txt>
-        <Button testID="admin-chat-wa" icon="whatsapp" size="sm" variant="soft" title={t('inbox.openWa')} onPress={() => Linking.openURL(waLink(chat.whatsapp, ''))} />
+        <Button safe testID="admin-chat-wa" icon="whatsapp" size="sm" variant="soft" title={t('inbox.openWa')} onPress={() => Linking.openURL(waLink(chat.whatsapp, ''))} />
       </View>}
       {chat.messages.map(m => (
         <View key={m.id} testID={`admin-msg-${m.role}`} className={`mb-2 max-w-[86%] ${m.role === 'user' ? 'self-start' : 'self-end'}`}>

@@ -25,10 +25,12 @@ import { toast } from '@/store/useToast';
 import { PartialSaveError, revealAdded } from '@/hooks/useReveal';
 import { mergeStates, LANG_ORDER } from '@/lib/langStatus';
 import { LANGS } from '@/i18n';
+import { useReadOnly } from '@/components/ui/ReadOnly';
 
 /** The one generic CRUD screen: every admin entity is described by a config in `admin/entities.tsx`. */
 export function CrudScreen({ entity }: { entity: string }) {
   const cfg = ENTITIES[entity];
+  const readOnly = useReadOnly();
   const staged = useCollectionDraft(cfg?.name ?? 'tools');
   const { t } = useT();
   const L = useL();
@@ -44,7 +46,7 @@ export function CrudScreen({ entity }: { entity: string }) {
   const [batch, setBatch] = useState<'add' | 'edit' | null>(null);
   const [bulkDelete, setBulkDelete] = useState(false);
   const [busy, setBusy] = useState(false);
-  const bulkEnabled = s.doc.settings.bulkPanels?.includes(entity) ?? false;
+  const bulkEnabled = !readOnly && (s.doc.settings.bulkPanels?.includes(entity) ?? false);
   const [del, setDel] = useState<any | null>(null);
   /** Rows stored by earlier attempts of the same bulk dialog (a retry skips them but they still belong to the group). */
   const stored = useRef<string[]>([]);
@@ -101,6 +103,7 @@ export function CrudScreen({ entity }: { entity: string }) {
     } catch { if (made.length) showAdded(made); toast(t('improve.saveError')); } finally { setBusy(false); }
   };
   const itemMenu = (r: any): MenuItem[] => {
+    if (readOnly) return [];
     const group = bulkEnabled && selected.includes(r.id) && selected.length > 1;
     const targets = group ? rows.filter((x) => selected.includes(x.id)) : [r];
     const menu: MenuItem[] = [
@@ -117,7 +120,7 @@ export function CrudScreen({ entity }: { entity: string }) {
     menu.push(sep('s3'), { key: 'delete', label: group ? t('ax.deleteSelected', { count: targets.length }) : t('common.delete'), icon: 'trash-can-outline', danger: true, onPress: () => group ? setBulkDelete(true) : setDel(r) });
     return menu;
   };
-  const pageMenu = (): MenuItem[] => [
+  const pageMenu = (): MenuItem[] => readOnly ? [] : [
     { key: 'add', label: t('common.add'), icon: 'plus', onPress: () => open() },
     ...(bulkEnabled ? [{ key: 'addmany', label: t('improve.addMultiple'), icon: 'playlist-plus', onPress: () => setBatch('add') } as MenuItem, { key: 'all', label: t('common.all'), icon: 'select-all', onPress: () => setSelected(rows.map((x) => x.id)) } as MenuItem] : []),
     ...(selected.length ? [{ key: 'clear', label: t('ax.deselect'), icon: 'select-off', onPress: () => setSelected([]) } as MenuItem] : []),
@@ -187,7 +190,7 @@ export function CrudScreen({ entity }: { entity: string }) {
   };
 
   return (
-    <AdminPage title={t(`admin.nav.${cfg.navKey}`)} right={<View className="flex-row items-center gap-2"><Button testID="crud-add" icon="plus" size="sm" title={t('common.add')} onPress={() => open()} />{bulkEnabled ? <Pressable testID="crud-batch-add" accessibilityRole="button" accessibilityLabel={t('improve.addMultiple')} onPress={() => setBatch('add')} className="w-10 h-10 rounded-full border border-line bg-surface2 items-center justify-center"><Icon name="playlist-plus" size={23} /></Pressable> : null}</View>}
+    <AdminPage title={t(`admin.nav.${cfg.navKey}`)} right={<View className="flex-row items-center gap-2">{readOnly ? null : <Button testID="crud-add" icon="plus" size="sm" title={t('common.add')} onPress={() => open()} />}{bulkEnabled ? <Pressable testID="crud-batch-add" accessibilityRole="button" accessibilityLabel={t('improve.addMultiple')} onPress={() => setBatch('add')} className="w-10 h-10 rounded-full border border-line bg-surface2 items-center justify-center"><Icon name="playlist-plus" size={23} /></Pressable> : null}</View>}
       floating={bulkEnabled && selected.length ? <Card testID="bulk-panel" className="p-3 rounded-3xl" style={{ boxShadow: '0 8px 36px rgba(0,0,0,0.2)' } as any}>
         <View className="flex-row items-center gap-2 mb-2"><View className="bg-primary rounded-full px-3 py-1"><Txt className="text-onprimary font-bold">{selected.length}</Txt></View><Txt className="font-bold flex-1">{t('improve.selectedShort')}</Txt><Button testID="bulk-done" size="sm" variant="ghost" icon="close" title={t('common.done')} disabled={busy} onPress={() => setSelected([])} /></View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 4 }}>
@@ -198,14 +201,14 @@ export function CrudScreen({ entity }: { entity: string }) {
           <Button testID="crud-batch-delete" size="sm" icon="trash-can-outline" variant="ghost" title={t('common.delete')} disabled={busy} onPress={() => setBulkDelete(true)} />
         </ScrollView>
       </Card> : undefined}>
-      <View className="flex-row items-center gap-3 mb-2"><View className="flex-1"><Input testID="crud-filter" placeholder={t('admin.dash.searchPh')} value={query} onChangeText={setQuery} /></View>{hasLangs && (todoCount > 0 || onlyTodo) ? <Pressable testID="crud-untranslated" accessibilityRole="button" accessibilityState={{ selected: onlyTodo }} accessibilityLabel={t('improve.langFilter')} onPress={() => setOnlyTodo(!onlyTodo)} className={`flex-row items-center gap-1.5 rounded-full px-3 h-9 border ${onlyTodo ? 'bg-primary border-primary' : 'bg-surface border-line'}`}><Icon name="translate" size={15} tone={onlyTodo ? 'onprimary' : 'muted'} /><Txt className={`text-[12.5px] font-bold ${onlyTodo ? 'text-onprimary' : ''}`}>{t('improve.langFilterShort', { count: todoCount })}</Txt></Pressable> : null}<Txt className="text-muted text-[12px]">{filtered.length} / {rows.length}</Txt></View>
+      <View className="flex-row items-center gap-3 mb-2"><View className="flex-1"><Input safe testID="crud-filter" placeholder={t('admin.dash.searchPh')} value={query} onChangeText={setQuery} /></View>{hasLangs && (todoCount > 0 || onlyTodo) ? <Pressable testID="crud-untranslated" accessibilityRole="button" accessibilityState={{ selected: onlyTodo }} accessibilityLabel={t('improve.langFilter')} onPress={() => setOnlyTodo(!onlyTodo)} className={`flex-row items-center gap-1.5 rounded-full px-3 h-9 border ${onlyTodo ? 'bg-primary border-primary' : 'bg-surface border-line'}`}><Icon name="translate" size={15} tone={onlyTodo ? 'onprimary' : 'muted'} /><Txt className={`text-[12.5px] font-bold ${onlyTodo ? 'text-onprimary' : ''}`}>{t('improve.langFilterShort', { count: todoCount })}</Txt></Pressable> : null}<Txt className="text-muted text-[12px]">{filtered.length} / {rows.length}</Txt></View>
       {entity === 'tabs' ? <HomeTabsOption /> : null}
       {entity === 'models' ? <AiEnginePanel /> : null}
       {!s.contentReady && !rows.length ? <AdminLoading /> : <RightClick items={pageMenu}><CrudTable langs={hasLangs ? langsOf : undefined} visual={!!cfg.visual} onLongPress={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old : [...old, id]); } : undefined} selected={selected} onSelect={bulkEnabled ? (id) => { if (!busy) setSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id]); } : undefined} rows={shown} view={cfg.view(ctx)} rowTestID="row"
-        onEdit={open} onDelete={setDel} onDuplicate={(r) => duplicate([r])} itemMenu={itemMenu}
+        onEdit={open} onDelete={readOnly ? undefined : setDel} onDuplicate={readOnly ? undefined : (r) => duplicate([r])} itemMenu={itemMenu}
         onReorder={cfg.ordered && bulkEnabled && !query.trim() ? staged.drop : undefined}
         onMove={cfg.ordered && bulkEnabled && !query.trim() ? (r, d) => staged.move([r.id], d) : undefined}
-        onToggle={(r) => staged.update(r.id, { visible: r.visible === false } as any)} /></RightClick>}
+        onToggle={readOnly ? undefined : (r) => staged.update(r.id, { visible: r.visible === false } as any)} /></RightClick>}
       {staged.dirty ? <Card className="p-2 mt-3 flex-row items-center gap-2"><Txt className="flex-1 text-[12px]">{t('improve.previewLabel')}</Txt><HistoryButtons prefix="crud" /><Button testID="crud-discard" size="sm" variant="soft" title={t('improve.discard')} onPress={staged.discard} /><Button testID="crud-submit" size="sm" title={t('improve.submit')} onPress={staged.save} /></Card> : null}
       <View className="h-3" />
       <FormModal visible={!!editing} title={`${isNew ? t('admin.crud.addNew') : t('admin.crud.editItem')} · ${t(`admin.nav.${cfg.navKey}`)}`}

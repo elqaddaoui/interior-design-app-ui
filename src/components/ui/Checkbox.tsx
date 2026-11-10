@@ -2,12 +2,14 @@ import React from 'react';
 import { Pressable, View } from 'react-native';
 import { Icon } from './Icon';
 import { useTheme } from '@/theme/ThemeProvider';
+import { useReadOnly } from './ReadOnly';
 
 /**
  * Clean checkbox with a third "mixed" state (a dash: some children are on). Direction-safe, 44px touch target around a 22px box.
  * `state` = true / false / 'mixed'. The parent decides what a tap does (a parent checkbox usually turns every child on or off).
  */
-export function Checkbox({ state, onPress, label, testID, disabled }: { state: boolean | 'mixed'; onPress?: () => void; label: string; testID?: string; disabled?: boolean }) {
+export function Checkbox({ state, onPress, label, testID, disabled: off, safe }: { state: boolean | 'mixed'; onPress?: () => void; label: string; testID?: string; disabled?: boolean; safe?: boolean }) {
+  const disabled = off || (useReadOnly() && !safe);
   const { colors } = useTheme();
   const on = state !== false;
   return (

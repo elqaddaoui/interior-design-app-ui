@@ -2,10 +2,13 @@ import React from 'react';
 import { TextInput, View, type TextInputProps } from 'react-native';
 import { Txt, useAppFont } from './Txt';
 import { useTheme } from '@/theme/ThemeProvider';
+import { useReadOnly } from './ReadOnly';
 
 /** `tight` drops the bottom margin (rows managed by a parent); `invalid` only paints the border (the parent shows the message once). */
-export function Input({ label, error, className = '', language, tight, invalid, ...p }: TextInputProps & { label?: string; error?: string; className?: string; language?: string; tight?: boolean; invalid?: boolean }) {
+export function Input({ label, error, className = '', language, tight, invalid, safe, ...p }: TextInputProps & { label?: string; error?: string; className?: string; language?: string; tight?: boolean; invalid?: boolean; safe?: boolean }) {
   const { colors } = useTheme();
+  // A view-only page shows the values but does not let them be typed over (search / filter boxes pass `safe`).
+  const locked = useReadOnly() && !safe;
   const fontFamily = useAppFont(language);
   // Browsers' password managers fill a text box that sits before a password box with the saved login (the "admin" in the
   // search field, the dots in an API-key field). Every field says what it is: secrets are "new-password" (never filled with
@@ -17,6 +20,7 @@ export function Input({ label, error, className = '', language, tight, invalid, 
       <TextInput
         placeholderTextColor={colors.muted}
         {...p}
+        editable={locked ? false : p.editable}
         autoComplete={autoComplete}
         className={`bg-surface2 text-fg rounded-xl px-4 min-h-[44px] text-[16px] border ${error || invalid ? 'border-danger' : 'border-transparent'} ${className}`}
         style={[{ fontFamily, color: colors.fg, minWidth: 0, width: '100%', flexGrow: 0, flexShrink: 0, height: p.multiline ? undefined : 44, paddingVertical: 10, textAlign: undefined, outlineStyle: 'none' } as any, p.style]}

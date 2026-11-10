@@ -24,7 +24,7 @@ const destinationOf = (href: unknown) => {
 };
 const exitAware = (href: unknown, action: () => void) => {
   const value = typeof href === 'string' ? href : (href as { pathname?: string })?.pathname;
-  if (value?.startsWith('/admin') || /^(https?:|mailto:|tel:)/.test(value ?? '')) requestAppExit(action); else action();
+  if (value?.startsWith('/admin') || value?.startsWith('/super') || /^(https?:|mailto:|tel:)/.test(value ?? '')) requestAppExit(action); else action();
 };
 const guards = new Map<symbol, Guard>();
 const dialog = create<{ pending: (() => void) | null; resolving: boolean }>(() => ({ pending: null, resolving: false }));

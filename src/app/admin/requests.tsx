@@ -77,7 +77,7 @@ function Shots({ r, onOpen }: { r: RenderRequest; onOpen: (index: number) => voi
         <Shot testID="req-shot-ai" uri={r.aiResult} label={t('md.viewer.after')} onOpen={() => onOpen(at(r.aiResult))} />
         {r.finalResult ? <Shot testID="req-shot-final" uri={r.finalResult} label={t('md.viewer.final')} onOpen={() => onOpen(at(r.finalResult))} /> : null}
       </View>
-      {r.photoUri && r.aiResult ? <Button testID="req-compare" icon="compare" title={t('md.viewer.compare')} variant="soft" size="sm" className="self-start mt-2.5" onPress={() => onOpen(at(r.photoUri))} /> : null}
+      {r.photoUri && r.aiResult ? <Button safe testID="req-compare" icon="compare" title={t('md.viewer.compare')} variant="soft" size="sm" className="self-start mt-2.5" onPress={() => onOpen(at(r.photoUri))} /> : null}
     </View>
   );
 }
@@ -119,8 +119,8 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
       <RequestInfo r={r} onOpenShot={setShot} />
       <View className="mt-4"><ImageField label={t('admin.req.uploadFinal')} value={final} onChange={setFinal} /></View>
       <Button title={t('common.save')} variant="soft" size="sm" onPress={saveFinal} className="self-start mb-3" />
-      <Button testID="req-call" icon="phone" title={t('push.call')} variant="soft" onPress={() => Linking.openURL(`tel:${r.whatsapp.replace(/[^\d+]/g, '')}`)} className="mb-2" />
-      <Button testID="req-wa" icon="whatsapp" title={t('admin.req.openWa')} variant="ink" onPress={open} className="mb-2" />
+      <Button safe testID="req-call" icon="phone" title={t('push.call')} variant="soft" onPress={() => Linking.openURL(`tel:${r.whatsapp.replace(/[^\d+]/g, '')}`)} className="mb-2" />
+      <Button safe testID="req-wa" icon="whatsapp" title={t('admin.req.openWa')} variant="ink" onPress={open} className="mb-2" />
       <View className="flex-row gap-2.5">
         <Button testID="req-processing" title={t('admin.req.markProcessing')} variant="soft" className="flex-1" disabled={r.status === 'processing'} onPress={() => set('processing')} />
         <Button testID="req-delivered" title={t('admin.req.markDelivered')} className="flex-1" disabled={r.status === 'delivered'} onPress={() => set('delivered', final ? { finalResult: final } : {})} />
@@ -168,7 +168,7 @@ export default function Requests() {
   return (
     <AdminPage title={t('admin.req.title')}>
       <PushNotifications />
-      {typeof call === 'string' && /^\+?\d{6,20}$/.test(call) ? <Button testID="push-call-fallback" title={t('push.call')} icon="phone" onPress={() => Linking.openURL(`tel:${call}`)} className="mb-3" /> : null}
+      {typeof call === 'string' && /^\+?\d{6,20}$/.test(call) ? <Button safe testID="push-call-fallback" title={t('push.call')} icon="phone" onPress={() => Linking.openURL(`tel:${call}`)} className="mb-3" /> : null}
       <SettingAnchor id="autoWhatsApp"><Card className="p-4 mb-4 flex-row items-center gap-3">
         <View className="flex-1"><Txt className="font-bold text-[14px]">{t('admin.req.autoSend')}</Txt><Txt className="text-muted text-[12px] leading-[20px] mt-2">{t('admin.req.autoSendNote')}</Txt></View>
         <Toggle testID="req-auto" label={t('admin.req.autoSend')} value={auto} onValueChange={(v) => patch({ autoSendWhatsApp: v })} />

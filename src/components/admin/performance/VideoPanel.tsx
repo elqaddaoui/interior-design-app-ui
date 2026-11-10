@@ -261,7 +261,7 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
         <View className="flex-row flex-wrap gap-2 mb-1">
           <Button testID="video-render-selected" size="sm" icon="movie-open-outline" title={t('ax.vid.renderSelected', { n: chosen.length })} disabled={!chosen.length || !!unsupported || busy || !support} onPress={() => run(chosen)} />
           <Button testID="video-render-missing" size="sm" variant="soft" title={t('ax.vid.renderMissing', { n: outdated.length })} disabled={!outdated.length || !!unsupported || busy || !support} onPress={() => run(outdated)} />
-          {busy ? <Button testID="video-cancel" size="sm" variant="outline" title={t('ax.vid.cancel')} onPress={() => abort.current?.abort()} /> : null}
+          {busy ? <Button safe testID="video-cancel" size="sm" variant="outline" title={t('ax.vid.cancel')} onPress={() => abort.current?.abort()} /> : null}
         </View>
         {!cards.length ? <Txt testID="video-empty" className="text-muted text-[13px] py-6 text-center">{t('ax.vid.empty')}</Txt> : null}
         {cards.map((c) => {
@@ -291,7 +291,7 @@ export function VideoPanel({ videoMode, onMode, extras, onExtras, quality, onQua
               {job?.state === 'error' ? <Txt className="text-danger text-[12px] mt-1">{job.error}</Txt> : null}
               {c.tool.media.video ? (
                 <View className="flex-row gap-2 mt-2">
-                  <Button testID={`video-preview-${c.tool.id}`} size="sm" variant="ghost" icon="play" title={preview === c.tool.media.video ? t('ax.vid.hide') : t('ax.vid.preview')} onPress={() => setPreview(preview === c.tool.media.video ? null : c.tool.media.video!)} />
+                  <Button safe testID={`video-preview-${c.tool.id}`} size="sm" variant="ghost" icon="play" title={preview === c.tool.media.video ? t('ax.vid.hide') : t('ax.vid.preview')} onPress={() => setPreview(preview === c.tool.media.video ? null : c.tool.media.video!)} />
                   <Button testID={`video-delete-${c.tool.id}`} size="sm" variant="ghost" icon="delete-outline" title={t('ax.vid.delete')} disabled={busy} onPress={() => remove(c.tool)} />
                 </View>
               ) : null}

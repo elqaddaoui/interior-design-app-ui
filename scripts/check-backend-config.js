@@ -15,6 +15,7 @@ function load({ os = 'web', env = {}, transport = async () => new Response('{}',
       if (name === 'react-native') return { Platform: { OS: os } };
       if (name.includes('storage')) return { storage: {} };
       if (name.includes('useLocal')) return { useLocal: { getState: () => ({ set() {} }) } };
+      if (name.includes('useAccess')) return { useAccess: { getState: () => ({ set() {}, clear() {} }) } };
       throw new Error(`Unexpected dependency: ${name}`);
     },
   };

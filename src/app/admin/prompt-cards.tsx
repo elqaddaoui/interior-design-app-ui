@@ -152,7 +152,7 @@ export default function PromptCards() {
       </ScrollView>
       <View className="flex-row items-center gap-2 mt-2 mb-3 flex-wrap">
         <Txt testID="pc-scope-hint" className="text-[12px] text-muted flex-1" style={{ minWidth: 160 }}>{t(hint)}</Txt>
-        {tool ? <Button testID="pc-copy" size="sm" variant="soft" icon="content-copy" title={t('pc.copyFrom')} onPress={() => setCopyOpen(true)} /> : null}
+        {tool ? <Button safe testID="pc-copy" size="sm" variant="soft" icon="content-copy" title={t('pc.copyFrom')} onPress={() => setCopyOpen(true)} /> : null}
       </View>
 
       <View className={desktop ? 'flex-row gap-4 items-start' : ''}>

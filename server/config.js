@@ -64,6 +64,7 @@ function validateEnv(env = process.env) {
   if (env.UV_THREADPOOL_SIZE !== undefined && !(Number(env.UV_THREADPOOL_SIZE) >= 1 && Number(env.UV_THREADPOOL_SIZE) <= 64)) problems.push('UV_THREADPOOL_SIZE must be a number between 1 and 64.');
   try { resolvePort(env); } catch (error) { problems.push(...error.problems); }
   if (env.DISABLE_DEFAULT_ADMIN !== 'true' && !(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH)) warnings.push('Custom admin credentials are not configured: the default login admin / admin is active. Set ADMIN_EMAIL + ADMIN_PASSWORD_HASH, then DISABLE_DEFAULT_ADMIN=true.');
+  if (env.DISABLE_DEFAULT_SUPERADMIN !== 'true' && !env.SUPER_ADMIN_PASSWORD_HASH) warnings.push('Super Admin credentials are not configured: the default login superadmin / superadmin is active at /super. Set SUPER_ADMIN_PASSWORD_HASH (and SUPER_ADMIN_USER), or change the password from the Super Admin panel, then DISABLE_DEFAULT_SUPERADMIN=true.');
   if (problems.length) throw configError(problems);
   return { warnings };
 }

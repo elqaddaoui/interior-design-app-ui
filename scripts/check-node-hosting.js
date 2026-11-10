@@ -27,17 +27,20 @@ const NEON = `postgresql://neondb_owner:${SECRET}@ep-cool-name-a1b2c3-pooler.eu-
 
 test('validateEnv: DATABASE_URL is required (readable message), PGLITE_DIR is the explicit local alternative', () => {
   assert.throws(() => validateEnv({}), error => error.code === 'CONFIG_INVALID' && /DATABASE_URL is not set/.test(error.message) && /pooled/.test(error.message));
-  assert.deepEqual(validateEnv({ PGLITE_DIR: ':memory:', DISABLE_DEFAULT_ADMIN: 'true' }).warnings, []);
-  assert.deepEqual(validateEnv({ DATABASE_URL: NEON, DISABLE_DEFAULT_ADMIN: 'true' }).warnings, []);
+  assert.deepEqual(validateEnv({ PGLITE_DIR: ':memory:', DISABLE_DEFAULT_ADMIN: 'true', DISABLE_DEFAULT_SUPERADMIN: 'true' }).warnings, []);
+  assert.deepEqual(validateEnv({ DATABASE_URL: NEON, DISABLE_DEFAULT_ADMIN: 'true', DISABLE_DEFAULT_SUPERADMIN: 'true' }).warnings, []);
   // Vercel/Neon integration names still work.
   assert.doesNotThrow(() => validateEnv({ POSTGRES_URL: NEON }));
   assert.throws(() => validateEnv({ DATABASE_URL: `mysql://u:${SECRET}@h/db` }), error => /not a valid postgres/.test(error.message) && !error.message.includes(SECRET));
   assert.throws(() => validateEnv({ DATABASE_URL: NEON, DATABASE_URL_UNPOOLED: 'nope' }), /DATABASE_URL_UNPOOLED/);
   assert.throws(() => validateEnv({ DATABASE_URL: NEON, PORT: 'abc' }), /PORT must be/);
-  const direct = validateEnv({ DATABASE_URL: NEON.replace('-pooler', ''), DISABLE_DEFAULT_ADMIN: 'true' }).warnings;
+  const direct = validateEnv({ DATABASE_URL: NEON.replace('-pooler', ''), DISABLE_DEFAULT_ADMIN: 'true', DISABLE_DEFAULT_SUPERADMIN: 'true' }).warnings;
   assert.equal(direct.length, 1);
   assert.match(direct[0], /pooled/);
   assert.match(validateEnv({ DATABASE_URL: NEON }).warnings.join(' '), /admin \/ admin/);
+  // The Super Admin panel has the same kind of default login: warned about until it is replaced (or switched off).
+  assert.match(validateEnv({ DATABASE_URL: NEON }).warnings.join(' '), /superadmin \/ superadmin/);
+  assert.doesNotMatch(validateEnv({ DATABASE_URL: NEON, SUPER_ADMIN_PASSWORD_HASH: 'salt:hash' }).warnings.join(' '), /superadmin/);
 });
 
 test('describeDatabase and redact never expose the connection string or its password', () => {
@@ -181,7 +184,7 @@ test('start.js: one process serves /api/health and dist/ with the SPA fallback o
   fs.mkdirSync(path.join(dist, 'assets'), { recursive: true });
   fs.writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>shell</title>');
   const port = await freePort();
-  const { child, out, exited, ready } = run(baseEnv({ PORT: String(port), PGLITE_DIR: ':memory:', STATIC_DIR: dist, DISABLE_DEFAULT_ADMIN: 'true' }), { untilLog: 'Database connected' });
+  const { child, out, exited, ready } = run(baseEnv({ PORT: String(port), PGLITE_DIR: ':memory:', STATIC_DIR: dist, DISABLE_DEFAULT_ADMIN: 'true', DISABLE_DEFAULT_SUPERADMIN: 'true' }), { untilLog: 'Database connected' });
   try {
     await ready;
     assert.match(out.stdout, new RegExp(`Server ready on http://0\\.0\\.0\\.0:${port}`));
@@ -220,7 +223,7 @@ test('start.js has no require.main guard (Hostinger loads the entry file through
 
 test('loading start.js with require() (not as the main module) still starts the server immediately, before the database', async () => {
   const port = await freePort();
-  const child = spawn(process.execPath, ['-e', `require(${JSON.stringify(path.join(root, 'server/start.js'))})`], { env: baseEnv({ PORT: String(port), PGLITE_DIR: ':memory:', DISABLE_DEFAULT_ADMIN: 'true' }), stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['-e', `require(${JSON.stringify(path.join(root, 'server/start.js'))})`], { env: baseEnv({ PORT: String(port), PGLITE_DIR: ':memory:', DISABLE_DEFAULT_ADMIN: 'true', DISABLE_DEFAULT_SUPERADMIN: 'true' }), stdio: ['ignore', 'pipe', 'pipe'] });
   const startedAt = Date.now();
   let stdout = '';
   child.stdout.on('data', d => { stdout += d; });

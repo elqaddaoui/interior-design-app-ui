@@ -260,7 +260,7 @@ export function Composer({ visible, onClose, mode, campaign }: { visible: boolea
               </Pressable>
               {pick ? (
                 <View className="rounded-xl border border-line overflow-hidden">
-                  <View className="p-2 border-b border-line"><Input tight testID="camp-people-search" placeholder={t('camp.searchPeople')} value={query} onChangeText={setQuery} /></View>
+                  <View className="p-2 border-b border-line"><Input tight safe testID="camp-people-search" placeholder={t('camp.searchPeople')} value={query} onChangeText={setQuery} /></View>
                   {list.length ? list.map((p, i) => (
                     <Pressable key={p.id} testID={`camp-person-${p.id}`} accessibilityRole="checkbox" accessibilityState={{ checked: clientIds.includes(p.id) }} onPress={() => togglePerson(p.id)} className={`flex-row items-center gap-3 px-3 py-2.5 ${i ? 'border-t border-line' : ''}`}>
                       <Icon name={clientIds.includes(p.id) ? 'checkbox-marked' : 'checkbox-blank-outline'} size={20} tone={clientIds.includes(p.id) ? 'primary' : 'muted'} />

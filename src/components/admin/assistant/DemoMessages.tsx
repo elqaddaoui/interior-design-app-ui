@@ -258,7 +258,7 @@ export function DemoMessages({ c, setC }: { c: AssistantConfig; setC: (v: Assist
       </View>
 
       <Sheet visible={!!editing} onClose={() => setEditing(null)} wide title={editing ? t(editing.isNew ? 'da.newTitle' : 'da.editTitle') : ''} headerRight={editing ? <PopupHistoryButtons api={hist} prefix="da" /> : undefined}
-        footer={editing ? <View className="flex-row gap-2 justify-end"><Button testID="da-editor-close" variant="ghost" title={t('da.close')} onPress={() => setEditing(null)} /><Button testID="da-editor-save" icon="check" title={t('da.saveItem')} onPress={commit} /></View> : undefined}>
+        footer={editing ? <View className="flex-row gap-2 justify-end"><Button safe testID="da-editor-close" variant="ghost" title={t('da.close')} onPress={() => setEditing(null)} /><Button testID="da-editor-save" icon="check" title={t('da.saveItem')} onPress={commit} /></View> : undefined}>
         {editing ? <Editor key={editing.item.id} value={editing.item} all={items} showErrors={tried} onChange={(item) => setEditing({ ...editing, item })} /> : null}
       </Sheet>
       <ConfirmSheet visible={!!del} onClose={() => setDel(null)} onConfirm={() => { if (del) setItems((l) => removeDemoItem(l, del.id)); setDel(null); }} message={t('da.deleteConfirm')} confirmLabel={t('da.delete')} cancelLabel={t('da.close')} />

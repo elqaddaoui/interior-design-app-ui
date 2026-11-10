@@ -89,8 +89,8 @@ function Contact({ phone, message, id }: { phone: string; message?: string; id: 
   if (!phoneOf(phone)) return null;
   return (
     <View className="flex-row gap-2.5 mt-4">
-      <Button testID={`qv-wa-${id}`} icon="whatsapp" title={t('admin.req.openWa')} variant="ink" size="sm" className="flex-1" onPress={() => Linking.openURL(waLink(phone, message))} />
-      <Button testID={`qv-call-${id}`} icon="phone" title={t('push.call')} variant="soft" size="sm" className="flex-1" onPress={() => call(phone)} />
+      <Button safe testID={`qv-wa-${id}`} icon="whatsapp" title={t('admin.req.openWa')} variant="ink" size="sm" className="flex-1" onPress={() => Linking.openURL(waLink(phone, message))} />
+      <Button safe testID={`qv-call-${id}`} icon="phone" title={t('push.call')} variant="soft" size="sm" className="flex-1" onPress={() => call(phone)} />
     </View>
   );
 }
@@ -148,7 +148,7 @@ function RequestView({ r, push }: { r: RenderRequest; push: (v: QV) => void }) {
         </View>
       ) : null}
       <Contact id={r.id} phone={r.whatsapp} message={t('admin.req.waMsg', { name: r.name })} />
-      {r.userId ? <Button testID="qv-to-client" icon="account-outline" title={t('dx.qv.client')} variant="outline" size="sm" className="mt-2.5" onPress={() => push({ kind: 'client', id: r.userId })} /> : null}
+      {r.userId ? <Button safe testID="qv-to-client" icon="account-outline" title={t('dx.qv.client')} variant="outline" size="sm" className="mt-2.5" onPress={() => push({ kind: 'client', id: r.userId })} /> : null}
       <RequestViewer r={r} index={shot} onIndex={setShot} onClose={() => setShot(null)} />
     </View>
   );
@@ -176,7 +176,7 @@ function DesignView({ h, push }: { h: HistoryItem; push: (v: QV) => void }) {
         {d.prompt ? <Txt numberOfLines={3} className="text-muted text-[12px] leading-[18px]">{d.prompt}</Txt> : null}
         <Txt className="text-muted text-[11px]">{f.agoText(h.createdAt)} · {f.date(h.createdAt)}</Txt>
       </View>
-      {user ? <Button testID="qv-to-client" icon="account-outline" title={user.name || t('dx.qv.client')} variant="outline" size="sm" className="mt-3" onPress={() => push({ kind: 'client', id: user.id })} /> : null}
+      {user ? <Button safe testID="qv-to-client" icon="account-outline" title={user.name || t('dx.qv.client')} variant="outline" size="sm" className="mt-3" onPress={() => push({ kind: 'client', id: user.id })} /> : null}
       <ImageViewer items={items} index={shot} onIndexChange={setShot} onClose={() => setShot(null)} />
     </View>
   );
@@ -372,7 +372,7 @@ export function QuickView({ stack, push, back, close, inp, range, go }: {
 
   return (
     <Sheet visible={!!top} onClose={close} title={title} onBack={stack.length > 1 ? back : undefined}
-      footer={href ? <Button testID="qv-open-page" title={hrefLabel} icon="open-in-new" variant="soft" size="sm" full onPress={() => open(href!)} /> : undefined}>
+      footer={href ? <Button safe testID="qv-open-page" title={hrefLabel} icon="open-in-new" variant="soft" size="sm" full onPress={() => open(href!)} /> : undefined}>
       {body}
     </Sheet>
   );

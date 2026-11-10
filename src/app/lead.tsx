@@ -48,7 +48,7 @@ export default function Lead() {
       if (!user.freeUsed) w.setLead({ name: user.name, whatsapp: user.whatsapp });
       if (needsPro(user)) router.replace({ pathname: '/pro', params: { generation: '1' } });
       else router.replace('/render');
-    } catch (error) { toast(t(error instanceof BackendError && error.code === 'ACCOUNT_BLOCKED' ? 'account.blocked' : isBackendUnavailable(error) ? 'account.unavailable' : 'account.loginError')); }
+    } catch (error) { toast(t(error instanceof BackendError && error.code === 'ACCOUNT_BLOCKED' ? 'account.blocked' : error instanceof BackendError && ['TENANT_SUSPENDED', 'TENANT_NOT_FOUND', 'SIGNUP_CLOSED', 'CLIENT_LIMIT'].includes(error.code) ? `account.${error.code}` : isBackendUnavailable(error) ? 'account.unavailable' : 'account.loginError')); }
     finally { setBusy(false); }
   };
 

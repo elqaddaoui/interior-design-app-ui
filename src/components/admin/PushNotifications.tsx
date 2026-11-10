@@ -64,9 +64,9 @@ export function PushNotifications() {
     {paused ? <Txt testID="push-paused" className="text-danger text-[13px]">{t('inbox.offByAdmin')}</Txt> : null}
     {offline ? <Txt testID="push-offline" className="text-danger text-[13px]">{t('push.login')}</Txt> : null}
     <View className="flex-row flex-wrap items-center gap-2">
-      <Button testID="push-enable" title={t(status === 'enabled' ? 'push.renew' : 'push.enable')} icon={status === 'enabled' ? 'refresh' : 'bell-outline'} loading={busy} disabled={blockedInfo} onPress={() => { void enable(); }} />
-      {status === 'enabled' ? <Button testID="push-test" title={t('push.test')} icon="bell-ring-outline" variant="outline" disabled={busy} onPress={() => { void test(); }} /> : null}
-      {status === 'enabled' ? <Button testID="push-disable" title={t('push.disable')} icon="bell-off-outline" variant="ghost" disabled={busy} onPress={() => { void disable(); }} /> : null}
+      <Button safe testID="push-enable" title={t(status === 'enabled' ? 'push.renew' : 'push.enable')} icon={status === 'enabled' ? 'refresh' : 'bell-outline'} loading={busy} disabled={blockedInfo} onPress={() => { void enable(); }} />
+      {status === 'enabled' ? <Button safe testID="push-test" title={t('push.test')} icon="bell-ring-outline" variant="outline" disabled={busy} onPress={() => { void test(); }} /> : null}
+      {status === 'enabled' ? <Button safe testID="push-disable" title={t('push.disable')} icon="bell-off-outline" variant="ghost" disabled={busy} onPress={() => { void disable(); }} /> : null}
     </View>
     <View className="flex-row items-start gap-2 pt-3 border-t border-line">
       <View className="pt-0.5"><Icon name="lock-outline" size={14} tone="muted" /></View>

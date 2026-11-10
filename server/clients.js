@@ -7,7 +7,7 @@ const canonicalPhone = input => {
 };
 const MAX_CREDITS = 1000000;
 /** Only the columns toUser() needs: `prefs` (notification settings, can be large) is never read to authenticate, list or charge a client. */
-const COLS = 'id,phone,name,free_used,credits,created_at,blocked,last_seen';
+const COLS = 'id,phone,name,free_used,credits,created_at,blocked,last_seen,tenant_id';
 const CCOLS = COLS.split(',').map(c => 'c.' + c).join(',');
 /**
  * A client who has not used the free design is shown `credits + 1`. To make the balance an admin types equal the balance
@@ -15,19 +15,19 @@ const CCOLS = COLS.split(',').map(c => 'c.' + c).join(',');
  */
 const balance = (row, shown) => (!row.free_used && shown <= 0 ? { credits: 0, freeUsed: 1 } : { credits: Math.max(0, shown - (row.free_used ? 0 : 1)), freeUsed: row.free_used });
 const fail = (status, code) => Object.assign(new Error(code), { status });
-const toUser = row => row && ({ id: row.id, name: row.name, whatsapp: row.phone, credits: row.credits + (row.free_used ? 0 : 1), freeUsed: row.free_used, leadDone: true, role: 'user', blocked: !!row.blocked, createdAt: row.created_at });
+const toUser = row => row && ({ id: row.id, name: row.name, whatsapp: row.phone, credits: row.credits + (row.free_used ? 0 : 1), freeUsed: row.free_used, leadDone: true, role: 'user', blocked: !!row.blocked, createdAt: row.created_at, tenantId: row.tenant_id || 'default' });
 
 /** Phone-based client profiles, sessions, free/paid entitlement claims and per-client history/chat space. */
 function createClients(db) {
   const byId = async (id, q = db.query) => (await q('SELECT ' + COLS + ' FROM clients WHERE id=$1', [id]))[0];
-  async function login(name, input, defaultCredits = 1) {
+  async function login(name, input, defaultCredits = 1, tenantId = 'default') {
     const canonical = canonicalPhone(input);
     if (!/^\+[1-9]\d{5,14}$/.test(canonical) || typeof name !== 'string' || name.trim().length < 2 || name.length > 120) throw fail(400, 'INVALID_PROFILE');
     // Atomic upsert: two simultaneous first logins for one phone cannot create two profiles.
     // The admin's "default credits" setting is the balance a new client starts with (free design included).
     const start = balance({ free_used: 0 }, Number.isSafeInteger(defaultCredits) && defaultCredits >= 0 ? Math.min(defaultCredits, MAX_CREDITS) : 1);
-    const created = (await db.query('INSERT INTO clients(id,phone,name,created_at,credits,free_used) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (phone) DO NOTHING RETURNING id', [crypto.randomUUID(), canonical, name.trim(), Date.now(), start.credits, start.freeUsed])).length > 0;
-    const row = (await db.query('SELECT ' + COLS + ' FROM clients WHERE phone=$1', [canonical]))[0];
+    const created = (await db.query('INSERT INTO clients(id,phone,name,created_at,credits,free_used,tenant_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (tenant_id, phone) DO NOTHING RETURNING id', [crypto.randomUUID(), canonical, name.trim(), Date.now(), start.credits, start.freeUsed, tenantId])).length > 0;
+    const row = (await db.query('SELECT ' + COLS + ' FROM clients WHERE tenant_id=$1 AND phone=$2', [tenantId, canonical]))[0];
     if (row.blocked) throw fail(403, 'ACCOUNT_BLOCKED');
     const token = crypto.randomBytes(32).toString('hex');
     await db.query('DELETE FROM user_sessions WHERE expires_at<=$1', [Date.now()]);
@@ -77,10 +77,12 @@ function createClients(db) {
    * changed after it, plus `ids` (the current top-300 set) so the app can drop deleted ones: `{ chats, ids }`.
    */
   const UPDATED = "CASE WHEN (s.value::jsonb->>'updatedAt') ~ '^[0-9]{1,15}$' THEN (s.value::jsonb->>'updatedAt')::bigint ELSE 0 END";
-  async function adminConversations({ since = null } = {}) {
+  async function adminConversations({ since = null, tenantId } = {}) {
+    const scoped = tenantId !== undefined, T = scoped ? [tenantId] : [];
     const top = [
-      ...(await db.query(`SELECT s.id, ${UPDATED} AS at FROM space s WHERE s.kind='conversations' AND CASE WHEN jsonb_typeof(s.value::jsonb->'messages')='array' THEN jsonb_array_length(s.value::jsonb->'messages') ELSE 0 END > 0 ORDER BY at DESC LIMIT 300`)).map(row => ({ id: row.id, at: Number(row.at), guest: false })),
-      ...(await db.query('SELECT s.id, s.updated_at AS at FROM guest_chats s ORDER BY s.updated_at DESC LIMIT 300')).map(row => ({ id: row.id, at: Number(row.at), guest: true })),
+      ...(await db.query(`SELECT s.id, ${UPDATED} AS at FROM space s ${scoped ? 'JOIN clients c ON c.id=s.client_id' : ''} WHERE s.kind='conversations' ${scoped ? 'AND c.tenant_id=$1' : ''} AND CASE WHEN jsonb_typeof(s.value::jsonb->'messages')='array' THEN jsonb_array_length(s.value::jsonb->'messages') ELSE 0 END > 0 ORDER BY at DESC LIMIT 300`, T)).map(row => ({ id: row.id, at: Number(row.at), guest: false })),
+      // Visitors who never signed in belong to no tenant: only the legacy workspace (and the platform) sees them.
+      ...(!scoped || tenantId === 'default' ? await db.query('SELECT s.id, s.updated_at AS at FROM guest_chats s ORDER BY s.updated_at DESC LIMIT 300') : []).map(row => ({ id: row.id, at: Number(row.at), guest: true })),
     ].sort((a, b) => b.at - a.at).slice(0, 300);
     const pick = top.filter(item => since == null || item.at > since);
     const clientIds = pick.filter(item => !item.guest).map(item => item.id), guestIds = pick.filter(item => item.guest).map(item => item.id);
@@ -91,9 +93,12 @@ function createClients(db) {
     return { chats: rows, ids: top.map(item => item.id) };
   }
   /** An admin answers inside the conversation: the thread stays in its owner's space (or the visitor's device chat) only. */
-  async function adminReply(id, text, message) {
-    const row = (await db.query("SELECT s.client_id, s.value, c.name, c.phone FROM space s JOIN clients c ON c.id=s.client_id WHERE s.id=$1 AND s.kind='conversations'", [id]))[0];
+  async function adminReply(id, text, message, tenantId) {
+    const scoped = tenantId !== undefined;
+    const row = (await db.query("SELECT s.client_id, s.value, c.name, c.phone, c.tenant_id FROM space s JOIN clients c ON c.id=s.client_id WHERE s.id=$1 AND s.kind='conversations'", [id]))[0];
+    if (row && scoped && row.tenant_id !== tenantId) throw fail(404, 'NOT_FOUND');
     if (!row) {
+      if (scoped && tenantId !== 'default') throw fail(404, 'NOT_FOUND');
       const guest = (await db.query('SELECT device_hash, value FROM guest_chats WHERE id=$1', [id]))[0];
       if (!guest) throw fail(404, 'NOT_FOUND');
       const value = JSON.parse(guest.value);
@@ -144,22 +149,26 @@ function createClients(db) {
     hasClaim: async (id, clientId) => !!(await db.query('SELECT 1 FROM claims WHERE id=$1 AND client_id=$2', [id, clientId]))[0],
     user: async id => toUser(await byId(id)),
     logout: async token => { if (token) await db.query('DELETE FROM user_sessions WHERE token_hash=$1', [digest(token)]); },
-    users: async () => (await db.query('SELECT ' + COLS + ' FROM clients ORDER BY created_at DESC')).map(toUser),
-    grant: async (id, credits) => {
+    users: async tenantId => (await (tenantId === undefined ? db.query('SELECT ' + COLS + ' FROM clients ORDER BY created_at DESC') : db.query('SELECT ' + COLS + ' FROM clients WHERE tenant_id=$1 ORDER BY created_at DESC', [tenantId]))).map(toUser),
+    /** Does this phone already have a profile in the tenant? (a new signup is subject to the plan's client limit and the signup switch) */
+    exists: async (tenantId, input) => !!(await db.query('SELECT 1 FROM clients WHERE tenant_id=$1 AND phone=$2', [tenantId, canonicalPhone(input)]))[0],
+    count: async tenantId => Number((await (tenantId === undefined ? db.query('SELECT COUNT(*) AS n FROM clients') : db.query('SELECT COUNT(*) AS n FROM clients WHERE tenant_id=$1', [tenantId])))[0].n),
+    tenantOf: async id => (await db.query('SELECT tenant_id FROM clients WHERE id=$1', [id]))[0]?.tenant_id || null,
+    grant: async (id, credits, tenantId) => {
       const row = await byId(id);
-      if (!row) throw fail(404, 'NOT_FOUND');
+      if (!row || (tenantId !== undefined && (await db.query('SELECT tenant_id FROM clients WHERE id=$1', [id]))[0].tenant_id !== tenantId)) throw fail(404, 'NOT_FOUND');
       if (!Number.isSafeInteger(credits) || credits < 0 || credits > MAX_CREDITS) throw fail(400, 'INVALID_CREDITS');
       const next = balance(row, credits);
       await db.query('UPDATE clients SET credits=$1, free_used=$2 WHERE id=$3', [next.credits, next.freeUsed, id]);
       return toUser(await byId(id));
     },
     /** Admin edit of one client. Only whitelisted fields; credits are the displayed balance (free design included). */
-    update: async (id, patch) => {
+    update: async (id, patch, tenantId) => {
       if (patch.credits !== undefined && (!Number.isSafeInteger(patch.credits) || patch.credits < 0 || patch.credits > MAX_CREDITS)) throw fail(400, 'INVALID_CREDITS');
       if (patch.blocked !== undefined && typeof patch.blocked !== 'boolean') throw fail(400, 'INVALID_BLOCKED');
       return db.tx(async q => {
-        const row = (await q('SELECT ' + COLS + ' FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
-        if (!row) throw fail(404, 'NOT_FOUND');
+        const row = (await q('SELECT ' + COLS + ',tenant_id FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
+        if (!row || (tenantId !== undefined && row.tenant_id !== tenantId)) throw fail(404, 'NOT_FOUND');
         if (patch.credits !== undefined) { const next = balance(row, patch.credits); await q('UPDATE clients SET credits=$1, free_used=$2 WHERE id=$3', [next.credits, next.freeUsed, id]); }
         if (patch.blocked !== undefined) await q('UPDATE clients SET blocked=$1 WHERE id=$2', [patch.blocked ? 1 : 0, id]);
         return toUser(await byId(id, q));
@@ -169,7 +178,7 @@ function createClients(db) {
      * Admin bulk action on many clients in ONE transaction (all or nothing).
      * action: block | unblock | delete | credits(mode: set | add | subtract, amount).
      */
-    bulk: async ({ ids, action, mode, amount }) => {
+    bulk: async ({ ids, action, mode, amount }, tenantId) => {
       if (!Array.isArray(ids) || !ids.length || ids.length > 500 || ids.some(id => typeof id !== 'string' || !/^[a-f0-9-]{8,64}$/.test(id))) throw fail(400, 'INVALID_IDS');
       if (!['block', 'unblock', 'delete', 'credits'].includes(action)) throw fail(400, 'INVALID_ACTION');
       if (action === 'credits') {
@@ -179,8 +188,8 @@ function createClients(db) {
       return db.tx(async q => {
         const rows = [];
         for (const id of unique.sort()) { // stable lock order avoids deadlocks between concurrent bulk calls
-          const row = (await q('SELECT ' + COLS + ' FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
-          if (row) rows.push(row);
+          const row = (await q('SELECT ' + COLS + ',tenant_id FROM clients WHERE id=$1 FOR UPDATE', [id]))[0];
+          if (row && (tenantId === undefined || row.tenant_id === tenantId)) rows.push(row);
         }
         for (const row of rows) {
           if (action === 'delete') await q('DELETE FROM clients WHERE id=$1', [row.id]);
@@ -197,8 +206,8 @@ function createClients(db) {
         return { affected: rows.length, users };
       });
     },
-    remove: async id => {
-      const rows = await db.query('DELETE FROM clients WHERE id=$1 RETURNING id', [id]);
+    remove: async (id, tenantId) => {
+      const rows = tenantId === undefined ? await db.query('DELETE FROM clients WHERE id=$1 RETURNING id', [id]) : await db.query('DELETE FROM clients WHERE id=$1 AND tenant_id=$2 RETURNING id', [id, tenantId]);
       if (!rows.length) throw fail(404, 'NOT_FOUND');
     },
     removeSpace: (client, kind, id) => db.query('DELETE FROM space WHERE id=$1 AND client_id=$2 AND kind=$3', [id, client.id, kind]),

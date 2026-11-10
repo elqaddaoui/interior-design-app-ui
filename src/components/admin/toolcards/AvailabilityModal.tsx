@@ -154,7 +154,7 @@ export function AvailabilityModal({ images, onClose }: { images: string[]; onClo
               ))}
             </ScrollView>
             <View className="px-3 pt-2.5 pb-3 border-t border-line bg-bg">
-              <Button testID="avail-done" title={t('common.done')} onPress={done} full />
+              <Button safe testID="avail-done" title={t('common.done')} onPress={done} full />
             </View>
           </Pressable>
         </Pressable>

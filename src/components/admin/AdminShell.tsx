@@ -20,6 +20,7 @@ import { useSearchObstacle } from '@/hooks/useSearchInset';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
 import { useHistoryShortcuts } from '@/hooks/useHistoryShortcuts';
 import { AdminMenu } from '@/components/admin/AdminMenu';
+import { AccessBanners } from '@/components/admin/AccessBanners';
 import { AudienceBadge } from '@/components/admin/AudienceBadge';
 import type { Audience } from '@/lib/settingsMap';
 import { HistoryButtons } from '@/components/admin/HistoryButtons';
@@ -99,6 +100,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <View className="flex-1" />
             {Bell()}
           </View>
+          <AccessBanners />
           {children}{draftBar}
         </View>
       </View>
@@ -112,6 +114,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <Txt numberOfLines={1} className="font-black text-[17px] flex-1" style={{ letterSpacing: -0.3 }}>{name} · {t('admin.title')}</Txt>
         {Bell()}
       </View>
+      <AccessBanners />
       <View className="flex-1">{children}{draftBar}</View>
       {open ? (
         <View testID="admin-drawer" className="absolute inset-0 flex-row" style={{ zIndex: 50 }}>

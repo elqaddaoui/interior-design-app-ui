@@ -6,6 +6,7 @@ import { Txt, useAppFont } from '@/components/ui/Txt';
 import { useT } from '@/i18n';
 import { useTheme } from '@/theme/ThemeProvider';
 import { toast } from '@/store/useToast';
+import { useReadOnly } from '@/components/ui/ReadOnly';
 import { MAX_VOICE_MS, formatVoiceTime, useVoiceRecorder, type Recorded } from './voice';
 
 /**
@@ -59,6 +60,7 @@ export function ChatComposer({ value, onChange, onSend, canSend, placeholder, bu
   const { t } = useT();
   const { colors } = useTheme();
   const fontFamily = useAppFont();
+  const locked = useReadOnly();
   const voice = useVoiceRecorder();
   const id = { input: 'chat-input', send: 'chat-send', mic: 'chat-mic', attach: 'chat-attach', camera: 'chat-camera', ...ids };
   const typed = !!value.trim();
@@ -101,16 +103,16 @@ export function ChatComposer({ value, onChange, onSend, canSend, placeholder, bu
     <View className="flex-row items-end gap-2 px-3 py-2.5">
       <View className="flex-1 flex-row items-end bg-surface2 rounded-3xl border border-line" style={{ minHeight: 48, paddingStart: onAttach ? 4 : 16, paddingEnd: 8 }}>
         {onAttach ? <Pressable testID={id.attach} accessibilityRole="button" accessibilityLabel={t('assistant.attach')} onPress={onAttach} className="h-12 w-10 items-center justify-center"><Icon name={attachOpen ? 'close' : 'paperclip'} size={22} tone="muted" /></Pressable> : null}
-        <TextInput testID={id.input} value={value} onChangeText={onChange} onFocus={onFocus} placeholder={placeholder} placeholderTextColor={colors.muted} multiline maxLength={maxLength}
-          onKeyPress={(e: any) => { if (enterSends(e.nativeEvent)) { e.preventDefault?.(); onSend(); } }}
+        <TextInput testID={id.input} editable={!locked} value={value} onChangeText={onChange} onFocus={onFocus} placeholder={placeholder} placeholderTextColor={colors.muted} multiline maxLength={maxLength}
+          onKeyPress={(e: any) => { if (enterSends(e.nativeEvent)) { e.preventDefault?.(); if (!locked) onSend(); } }}
           style={{ fontFamily, flex: 1, color: colors.fg, fontSize: 16, maxHeight: 110, paddingVertical: 13, outlineStyle: 'none' } as any} />
         {onCamera && !typed && !canSend ? <Pressable testID={id.camera} accessibilityRole="button" accessibilityLabel={t('md.chat.camera')} onPress={onCamera} className="h-12 w-9 items-center justify-center"><Icon name="camera-outline" size={22} tone="muted" /></Pressable> : null}
       </View>
       {showMic ? (
-        <Pressable testID={id.mic} accessibilityRole="button" accessibilityLabel={t('md.chat.voice')} disabled={busy} onPress={start} className={`${ROUND} bg-primary active:opacity-80`} style={{ opacity: busy ? 0.5 : 1 }}><Icon name="microphone" size={22} tone="onprimary" /></Pressable>
+        <Pressable testID={id.mic} accessibilityRole="button" accessibilityLabel={t('md.chat.voice')} disabled={busy || locked} onPress={start} className={`${ROUND} bg-primary active:opacity-80`} style={{ opacity: busy || locked ? 0.5 : 1 }}><Icon name="microphone" size={22} tone="onprimary" /></Pressable>
       ) : (
         <View>
-          <Pressable testID={id.send} accessibilityRole="button" accessibilityLabel={t('md.chat.send')} accessibilityState={{ disabled: !canSend || !!busy }} disabled={!canSend || !!busy} onPress={onSend} className={`${ROUND} active:opacity-80 ${canSend ? 'bg-primary' : 'bg-surface2 border border-line'}`}>
+          <Pressable testID={id.send} accessibilityRole="button" accessibilityLabel={t('md.chat.send')} accessibilityState={{ disabled: !canSend || !!busy || locked }} disabled={!canSend || !!busy || locked} onPress={onSend} className={`${ROUND} active:opacity-80 ${canSend ? 'bg-primary' : 'bg-surface2 border border-line'}`}>
             <Icon name="send" size={20} tone={canSend ? 'onprimary' : 'muted'} flip />
           </Pressable>
           {badge > 1 ? <View testID="wa-count" className="absolute -top-1 -end-1 min-w-[22px] h-[22px] px-1 rounded-full bg-ink items-center justify-center border-2 border-bg"><Txt className="text-onink text-[11px] leading-[14px] font-black">{badge}</Txt></View> : null}

@@ -301,7 +301,7 @@ export function Automations({ api: au }: { api: AutomationsApi }) {
       <TestBox idPrefix="asx-all" />
 
       <Sheet visible={!!editing} onClose={() => setEditing(null)} wide title={editing ? t(editing.isNew ? 'asx.a.newTitle' : 'asx.a.editTitle') : ''} headerRight={editing ? <PopupHistoryButtons api={hist} prefix="asx" /> : undefined}
-        footer={editing ? <View className="flex-row gap-2 justify-end"><Button testID="asx-editor-close" variant="ghost" title={t('asx.a.close')} onPress={() => setEditing(null)} /><Button testID="asx-editor-save" icon="check" title={t('asx.a.saveItem')} onPress={commit} /></View> : undefined}>
+        footer={editing ? <View className="flex-row gap-2 justify-end"><Button safe testID="asx-editor-close" variant="ghost" title={t('asx.a.close')} onPress={() => setEditing(null)} /><Button testID="asx-editor-save" icon="check" title={t('asx.a.saveItem')} onPress={commit} /></View> : undefined}>
         {editing ? <Editor key={editing.item.id} value={editing.item} reveal={tried} onChange={(item) => setEditing({ ...editing, item })} /> : null}
       </Sheet>
       <ConfirmSheet visible={!!del} onClose={() => setDel(null)} onConfirm={() => { if (del) setList((l) => l.filter((x) => x.id !== del.id)); setDel(null); }} message={t('asx.a.deleteConfirm')} confirmLabel={t('asx.a.delete')} cancelLabel={t('asx.discard')} />

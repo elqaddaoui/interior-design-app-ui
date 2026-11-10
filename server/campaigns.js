@@ -167,12 +167,12 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
   const toCampaign = row => ({ ...JSON.parse(row.data), id: row.id, kind: row.kind, status: row.status, nextAt: row.next_at ?? null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) });
   const bump = () => sync.bump('campaigns').catch(() => {});
 
-  async function loadClients() {
+  async function loadClients(tenantId) {
     const rows = await db.query(`SELECT c.id, c.name, c.created_at, c.last_seen, c.prefs,
       (SELECT COUNT(*) FROM claims k WHERE k.client_id=c.id)::int AS designs,
       (SELECT MIN(k.created_at) FROM claims k WHERE k.client_id=c.id) AS first_design,
       (SELECT COUNT(*) FROM subscriptions s WHERE s.owner_type='client' AND s.owner_id=c.id)::int AS devices
-      FROM clients c WHERE c.blocked=0`);
+      FROM clients c WHERE c.blocked=0 ${tenantId === undefined ? '' : 'AND c.tenant_id=$1'}`, tenantId === undefined ? [] : [tenantId]);
     return rows.map(row => ({ ...row, created_at: Number(row.created_at), last_seen: row.last_seen == null ? null : Number(row.last_seen), first_design: row.first_design == null ? null : Number(row.first_design), designs: Number(row.designs), devices: Number(row.devices) }));
   }
   async function statsFor(ids) {
@@ -199,30 +199,31 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     return inserted;
   }
   const getRow = async id => (await db.query('SELECT * FROM campaigns WHERE id=$1', [id]))[0];
-  const mustGet = async id => { const row = await getRow(id); if (!row) throw fail(404, 'NOT_FOUND'); return row; };
+  /** `tenantId` (admin calls): a campaign of another tenant is simply not found. Omitted = the scheduler / internal use. */
+  const mustGet = async (id, tenantId) => { const row = await getRow(id); if (!row || (tenantId !== undefined && row.tenant_id !== tenantId)) throw fail(404, 'NOT_FOUND'); return row; };
   const save = (row, data, patch = {}) => db.query('UPDATE campaigns SET data=$1, status=$2, next_at=$3, updated_at=$4 WHERE id=$5', [JSON.stringify(data), patch.status ?? row.status, patch.nextAt === undefined ? row.next_at : patch.nextAt, clock(), row.id]);
 
   /* ---------------- admin operations */
-  async function list() {
-    const rows = await db.query('SELECT * FROM campaigns ORDER BY updated_at DESC LIMIT 300');
+  async function list(tenantId) {
+    const rows = tenantId === undefined ? await db.query('SELECT * FROM campaigns ORDER BY updated_at DESC LIMIT 300') : await db.query('SELECT * FROM campaigns WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT 300', [tenantId]);
     const stats = await statsFor(rows.map(row => row.id));
     return rows.map(row => ({ ...toCampaign(row), stats: stats.get(row.id) }));
   }
-  async function get(id) {
-    const row = await mustGet(id);
+  async function get(id, tenantId) {
+    const row = await mustGet(id, tenantId);
     const recent = await db.query(`SELECT d.status, d.devices, d.sent_at, d.reason, d.occurrence, c.name FROM campaign_deliveries d JOIN clients c ON c.id=d.client_id WHERE d.campaign_id=$1 ORDER BY COALESCE(d.sent_at, d.created_at) DESC LIMIT 30`, [id]);
     return { ...toCampaign(row), stats: (await statsFor([id])).get(id), recent: recent.map(r => ({ status: r.status, devices: Number(r.devices), sentAt: r.sent_at == null ? null : Number(r.sent_at), reason: r.reason, name: r.name })) };
   }
-  async function create(body) {
+  async function create(body, tenantId = 'default') {
     const kind = body?.kind;
     if (!['once', 'recurring', 'trigger'].includes(kind)) throw fail(400, 'INVALID_KIND');
     const data = cleanCampaign(body, kind), id = crypto.randomUUID(), now = clock();
-    await db.query('INSERT INTO campaigns(id,kind,data,status,next_at,created_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5,$5)', [id, kind, JSON.stringify(data), 'draft', now]);
+    await db.query('INSERT INTO campaigns(id,kind,data,status,next_at,created_at,updated_at,tenant_id) VALUES($1,$2,$3,$4,NULL,$5,$5,$6)', [id, kind, JSON.stringify(data), 'draft', now, tenantId]);
     await bump();
-    return body.live === true ? activate(id) : get(id);
+    return body.live === true ? activate(id, tenantId) : get(id, tenantId);
   }
-  async function update(id, body) {
-    const row = await mustGet(id);
+  async function update(id, body, tenantId) {
+    const row = await mustGet(id, tenantId);
     if (row.kind === 'once' && ['sending', 'sent'].includes(row.status)) throw fail(409, 'CAMPAIGN_LOCKED');
     const old = JSON.parse(row.data), data = { ...old, ...cleanCampaign(body, row.kind) };
     const live = ['scheduled', 'active'].includes(row.status);
@@ -234,8 +235,8 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     await bump();
     return get(id);
   }
-  async function activate(id) {
-    const row = await mustGet(id), data = JSON.parse(row.data), now = clock();
+  async function activate(id, tenantId) {
+    const row = await mustGet(id, tenantId), data = JSON.parse(row.data), now = clock();
     if (['scheduled', 'active', 'sending'].includes(row.status)) return get(id);
     if (row.status === 'sent') throw fail(409, 'CAMPAIGN_LOCKED');
     ready(data, row.kind);
@@ -246,8 +247,8 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     await bump();
     return get(id);
   }
-  async function pause(id) {
-    const row = await mustGet(id), now = clock();
+  async function pause(id, tenantId) {
+    const row = await mustGet(id, tenantId), now = clock();
     if (row.status === 'sent' || row.status === 'draft' || row.status === 'paused' || row.status === 'ended') return get(id);
     // Anything not yet delivered is cancelled: resuming never fires a backlog of stale messages.
     await db.query("UPDATE campaign_deliveries SET status='skipped', reason='cancelled' WHERE campaign_id=$1 AND status='pending'", [id]);
@@ -256,32 +257,32 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     await bump();
     return get(id);
   }
-  async function remove(id) {
-    const rows = await db.query('DELETE FROM campaigns WHERE id=$1 RETURNING id', [id]);
+  async function remove(id, tenantId) {
+    const rows = tenantId === undefined ? await db.query('DELETE FROM campaigns WHERE id=$1 RETURNING id', [id]) : await db.query('DELETE FROM campaigns WHERE id=$1 AND tenant_id=$2 RETURNING id', [id, tenantId]);
     if (!rows.length) throw fail(404, 'NOT_FOUND');
     await bump();
   }
-  async function duplicate(id) {
-    const row = await mustGet(id), data = JSON.parse(row.data), now = clock(), copy = crypto.randomUUID();
+  async function duplicate(id, tenantId) {
+    const row = await mustGet(id, tenantId), data = JSON.parse(row.data), now = clock(), copy = crypto.randomUUID();
     const { activatedAt, lastRunAt, lastRunCount, ...rest } = data;
-    await db.query('INSERT INTO campaigns(id,kind,data,status,next_at,created_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5,$5)', [copy, row.kind, JSON.stringify({ ...rest, name: text(`${data.name} (copy)`, 80), ...(row.kind === 'once' ? { schedule: { at: null, tz: TZ_DEFAULT } } : {}) }), 'draft', now]);
+    await db.query('INSERT INTO campaigns(id,kind,data,status,next_at,created_at,updated_at,tenant_id) VALUES($1,$2,$3,$4,NULL,$5,$5,$6)', [copy, row.kind, JSON.stringify({ ...rest, name: text(`${data.name} (copy)`, 80), ...(row.kind === 'once' ? { schedule: { at: null, tz: TZ_DEFAULT } } : {}) }), 'draft', now, row.tenant_id]);
     await bump();
-    return get(copy);
+    return get(copy, tenantId);
   }
   /** Audience size for the composer: how many match, how many of those can actually receive a push. */
-  async function preview(input) {
-    const audience = cleanAudience(input), clients = await loadClients(), now = clock();
+  async function preview(input, tenantId) {
+    const audience = cleanAudience(input), clients = await loadClients(tenantId), now = clock();
     const matched = pick(clients, audience, now);
     return { matched: matched.length, reachable: matched.filter(reachable).length, total: clients.length, reachableTotal: clients.filter(reachable).length };
   }
-  async function segments(input = {}) {
-    const o = cleanAudience({ segments: [], newDays: input.newDays, inactiveDays: input.inactiveDays }), clients = await loadClients(), now = clock();
+  async function segments(input = {}, tenantId) {
+    const o = cleanAudience({ segments: [], newDays: input.newDays, inactiveDays: input.inactiveDays }), clients = await loadClients(tenantId), now = clock();
     const out = {};
     for (const segment of SEGMENTS) { const members = clients.filter(c => inSegment(c, segment, now, o)); out[segment] = { matched: members.length, reachable: members.filter(reachable).length }; }
     return out;
   }
   /** Clients (name, phone, reachability) for the hand-picked audience. */
-  const people = async () => (await db.query('SELECT id,name,phone FROM clients WHERE blocked=0 ORDER BY name LIMIT 500')).map(row => ({ id: row.id, name: row.name, whatsapp: row.phone }));
+  const people = async tenantId => (await (tenantId === undefined ? db.query('SELECT id,name,phone FROM clients WHERE blocked=0 ORDER BY name LIMIT 500') : db.query('SELECT id,name,phone FROM clients WHERE blocked=0 AND tenant_id=$1 ORDER BY name LIMIT 500', [tenantId]))).map(row => ({ id: row.id, name: row.name, whatsapp: row.phone }));
 
   /* ---------------- scheduler */
   /** One-time and recurring campaigns whose moment has come: claim + create the delivery rows atomically. */
@@ -292,7 +293,7 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
       const c = toCampaign(row), occurrence = row.kind === 'once' ? 'once' : `r${row.next_at}`;
       const recurring = row.kind === 'recurring', next = recurring ? nextRun(c.schedule, now) : null;
       const skipped = recurring && now - row.next_at > CATCH_UP;
-      const audience = skipped ? [] : pick(await loadClients(), c.audience, now).filter(reachable);
+      const audience = skipped ? [] : pick(await loadClients(row.tenant_id), c.audience, now).filter(reachable);
       const data = { ...JSON.parse(row.data), lastRunAt: now, lastRunCount: audience.length, ...(skipped ? { lastRunSkipped: true } : { lastRunSkipped: false }) };
       const status = recurring ? (next ? 'active' : 'ended') : 'sending';
       const claimed = await db.tx(async q => {
@@ -309,9 +310,11 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
   async function automations(now) {
     const rows = await db.query("SELECT * FROM campaigns WHERE kind='trigger' AND status='active'");
     if (!rows.length) return false;
-    const clients = (await loadClients()).filter(reachable);
+    const byTenant = new Map(); // an automation only ever reaches the clients of its own tenant
+    const tenantClients = async id => { if (!byTenant.has(id)) byTenant.set(id, (await loadClients(id)).filter(reachable)); return byTenant.get(id); };
     let changed = false;
     for (const row of rows) {
+      const clients = await tenantClients(row.tenant_id);
       const c = toCampaign(row), t = c.trigger, since = Math.max(c.activatedAt || 0, now - 7 * DAY), items = [];
       const recent = t.event === 'inactive' ? new Map((await db.query('SELECT client_id, MAX(created_at) AS at FROM campaign_deliveries WHERE campaign_id=$1 GROUP BY client_id', [row.id])).map(r => [r.client_id, Number(r.at)])) : null;
       for (const client of clients) {

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Pressable, View, type GestureResponderEvent } from 'react-native';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Icon } from './Icon';
+import { useReadOnly } from './ReadOnly';
 
 const KNOB = 24;
 
@@ -9,8 +10,10 @@ const KNOB = 24;
  * Continuous slider: `onChange` fires on every move while dragging (not only on release), snapped to `step`.
  * Geometry is always LTR (min on the left) so it behaves the same in RTL; the - / + buttons allow exact steps.
  */
-export function Slider({ value, min, max, step = 1, onChange, testID, label }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; testID?: string; label?: string }) {
+export function Slider({ value, min, max, step = 1, onChange: change, testID, label, safe }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; testID?: string; label?: string; safe?: boolean }) {
   const { colors } = useTheme();
+  const locked = useReadOnly() && !safe;
+  const onChange = (v: number) => { if (!locked) change(v); };
   const [width, setWidth] = useState(0);
   // Page x of the track's left edge, captured when a drag starts (only touched inside event handlers).
   const origin = useRef(0);

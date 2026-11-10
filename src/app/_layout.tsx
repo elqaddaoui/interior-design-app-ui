@@ -19,6 +19,7 @@ import { PushNavigationHost } from '@/components/PushNavigationHost';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { ToastHost } from '@/components/ui/Toast';
 import { startPreferenceBindings, startSync } from '@/lib/sync';
+import { captureTenant } from '@/lib/tenantLink';
 import { setCurrentPath } from '@/lib/route';
 import { backendEnabled } from '@/lib/backend';
 import { prefetchContent, primeContent } from '@/data/repositories/remoteContent';
@@ -63,7 +64,8 @@ export default function RootLayout() {
     void loadIcons().catch(() => {});
     (async () => {
       // Device-only reads (storage): no network.
-      await Promise.all([initLang(), useLocal.getState().load()]);
+      // `?tenant=<slug>` on the opened address = the company this client signs up under (kept on the device).
+      await Promise.all([initLang(), useLocal.getState().load(), captureTenant().catch(() => null)]);
       if (backendEnabled) {
         // Cached / HTML-shell copy of the public content, if any: real content on the very first frame.
         try { if (await primeContent()) await useStore.getState().applyContent(); } catch { /* no cached copy: placeholders */ }

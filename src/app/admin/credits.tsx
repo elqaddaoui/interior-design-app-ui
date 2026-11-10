@@ -15,6 +15,7 @@ import { router, useBackCheckpoint, useLeaveGuard } from '@/hooks/useLeaveGuard'
 import { toast, toastAction } from '@/store/useToast';
 import { QUICK_AMOUNTS, ago, canGrant, clampAmount, initialOf, monthTotal, nextBalance, parseAmount, searchUsers, stepAmount, undoneBalance, type Grant } from '@/lib/creditGrants';
 import type { AppUser } from '@/data/types';
+import { useReadOnly } from '@/components/ui/ReadOnly';
 
 /** Round avatar with the first letter of the name (theme colours only). */
 function Avatar({ user, size = 36 }: { user: Pick<AppUser, 'name' | 'whatsapp'>; size?: number }) {
@@ -28,9 +29,10 @@ function Avatar({ user, size = 36 }: { user: Pick<AppUser, 'name' | 'whatsapp'>;
 /** − / value / +. The number is typed or stepped; always left-to-right so "−" stays on the left in Arabic too. */
 function Stepper({ value, onChange, testID, minusID, plusID, step = 1, label }: { value: number; onChange: (n: number) => void; testID: string; minusID: string; plusID: string; step?: number; label: string }) {
   const { t } = useT();
+  const locked = useReadOnly();
   const btn = (id: string, dir: 1 | -1, icon: string, name: string) => (
-    <Pressable testID={id} accessibilityRole="button" accessibilityLabel={name} onPress={() => onChange(stepAmount(value, dir, step))} hitSlop={4}
-      className={`w-10 h-10 rounded-full items-center justify-center active:opacity-70 ${dir > 0 ? 'bg-primary' : 'bg-surface2'}`}>
+    <Pressable testID={id} accessibilityRole="button" accessibilityLabel={name} accessibilityState={{ disabled: locked }} disabled={locked} onPress={() => onChange(stepAmount(value, dir, step))} hitSlop={4}
+      className={`w-10 h-10 rounded-full items-center justify-center active:opacity-70 ${dir > 0 ? 'bg-primary' : 'bg-surface2'}`} style={{ opacity: locked ? 0.4 : 1 }}>
       <Icon name={icon} size={20} tone={dir > 0 ? 'onprimary' : 'fg'} />
     </Pressable>
   );
@@ -57,6 +59,7 @@ function Stat({ icon, value, label, id }: { icon: string; value: number; label: 
 
 export default function Credits() {
   const { t } = useT();
+  const locked = useReadOnly();
   const { tablet } = useBp();
   const s = useStore();
   const { log, load: loadLog, add: addLog, undone: markLogUndone } = useCreditLog();
@@ -110,7 +113,7 @@ export default function Credits() {
         <Stepper testID="credits-default" minusID="credits-default-minus" plusID="credits-default-plus" label={t('cr.defaultTitle')} value={def} onChange={setDef} />
       </View>
       {dirty ? (
-        <Pressable testID="credits-save" accessibilityRole="button" onPress={saveDef} className="self-end mt-3 bg-primary rounded-full flex-row items-center active:opacity-85" style={{ height: 36, paddingHorizontal: 16, gap: 6 }}>
+        <Pressable testID="credits-save" accessibilityRole="button" disabled={locked} onPress={saveDef} className="self-end mt-3 bg-primary rounded-full flex-row items-center active:opacity-85" style={{ height: 36, paddingHorizontal: 16, gap: 6 }}>
           <Icon name="check" size={17} tone="onprimary" />
           <Txt className="text-onprimary font-bold text-[13px]">{t('cr.apply')}</Txt>
         </Pressable>
@@ -135,7 +138,7 @@ export default function Credits() {
       ) : (
         <View style={{ gap: 8 }}>
           <View>
-            <Input tight testID="credits-search" accessibilityLabel={t('cr.searchPh')} placeholder={t('cr.searchPh')} value={query} onChangeText={setQuery} autoCapitalize="none" />
+            <Input tight safe testID="credits-search" accessibilityLabel={t('cr.searchPh')} placeholder={t('cr.searchPh')} value={query} onChangeText={setQuery} autoCapitalize="none" />
           </View>
           <View testID="credits-users" className="border border-line rounded-2xl overflow-hidden bg-bg">
             {users.length === 0 ? <Txt className="text-muted text-[13px] text-center p-4">{t('cr.noUsers')}</Txt>
@@ -165,7 +168,7 @@ export default function Credits() {
           {QUICK_AMOUNTS.map((q) => {
             const on = amount === q;
             return (
-              <Pressable key={q} testID={`credits-quick-${q}`} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={() => setAmount(on ? 0 : q)} className={`h-10 px-4 rounded-full items-center justify-center border ${on ? 'bg-ink border-ink' : 'bg-surface2 border-line'}`}>
+              <Pressable key={q} testID={`credits-quick-${q}`} accessibilityRole="button" accessibilityState={{ selected: on }} disabled={locked} onPress={() => setAmount(on ? 0 : q)} className={`h-10 px-4 rounded-full items-center justify-center border ${on ? 'bg-ink border-ink' : 'bg-surface2 border-line'}`}>
                 <Txt className={`font-extrabold text-[14px] ${on ? 'text-onink' : ''}`}>+{q}</Txt>
               </Pressable>
             );
@@ -189,7 +192,7 @@ export default function Credits() {
         ) : <Txt className="text-muted text-[13px]">{picked ? t('cr.amount') : t('cr.pickFirst')}</Txt>}
       </View>
 
-      <Pressable testID="credits-grant" accessibilityRole="button" accessibilityState={{ disabled: !ready }} disabled={!ready} onPress={() => { void grant(); }} className="bg-primary rounded-2xl flex-row items-center justify-center active:opacity-85" style={{ height: 52, gap: 8, opacity: ready ? 1 : 0.4 }}>
+      <Pressable testID="credits-grant" accessibilityRole="button" accessibilityState={{ disabled: !ready || locked }} disabled={!ready || locked} onPress={() => { void grant(); }} className="bg-primary rounded-2xl flex-row items-center justify-center active:opacity-85" style={{ height: 52, gap: 8, opacity: ready ? 1 : 0.4 }}>
         <Icon name="plus-circle-outline" size={21} tone="onprimary" />
         <Txt className="text-onprimary font-extrabold text-[16px]">{t('admin.credits.grantBtn')}</Txt>
       </Pressable>

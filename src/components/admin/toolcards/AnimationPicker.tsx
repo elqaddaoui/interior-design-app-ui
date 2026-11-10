@@ -57,7 +57,7 @@ export function AnimationPicker({ mode, effects, effect, enabled, onToggle, onAl
           );
         })}
       </ScrollView>
-      <View className="px-3 py-2 border-t border-line"><Button testID="fx-done" title={t('common.done')} onPress={onClose} full /></View>
+      <View className="px-3 py-2 border-t border-line"><Button safe testID="fx-done" title={t('common.done')} onPress={onClose} full /></View>
     </View>
   );
 }

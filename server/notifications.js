@@ -131,7 +131,8 @@ function createNotifier(db, env, adapters = {}, options = {}) {
       const prefs = JSON.parse((await db.query('SELECT prefs FROM clients WHERE id=$1', [audience.id]))[0]?.prefs || '{}');
       return prefs.notifications === false ? [] : rows.map(row => ({ ...JSON.parse(row.data), rowId: row.id }));
     }
-    const rows = await db.query("SELECT id,data,owner_id FROM subscriptions WHERE owner_type='admin'");
+    // `audience.tenantId` limits the devices to one tenant's admins; without it every admin device (single-workspace behaviour).
+    const rows = audience.tenantId == null ? await db.query("SELECT id,data,owner_id FROM subscriptions WHERE owner_type='admin'") : await db.query("SELECT id,data,owner_id FROM subscriptions WHERE owner_type='admin' AND tenant_id=$1", [audience.tenantId]);
     if (!rows.length) return [];
     const off = new Set((await db.query('SELECT admin_id,data FROM admin_prefs')).filter(row => JSON.parse(row.data || '{}').notifications === false).map(row => row.admin_id));
     return rows.filter(row => !off.has(row.owner_id)).map(row => ({ ...JSON.parse(row.data), rowId: row.id }));
@@ -168,15 +169,15 @@ function createNotifier(db, env, adapters = {}, options = {}) {
     config: async () => ({ publicKey: (await keys()).publicKey, web: true, android: !!fcmSender }),
     /** One row per (device, owner): the same browser can serve an admin and a client account at once. */
     save: async (subscriber, owner = { type: 'admin', id: 'admin' }) => {
-      await db.query('INSERT INTO subscriptions(id,data,owner_type,owner_id,device_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data', [`${subscriber.id}:${owner.type}:${owner.id}`, JSON.stringify(subscriber), owner.type, owner.id, subscriber.id]);
+      await db.query('INSERT INTO subscriptions(id,data,owner_type,owner_id,device_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data, tenant_id=EXCLUDED.tenant_id', [`${subscriber.id}:${owner.type}:${owner.id}`, JSON.stringify(subscriber), owner.type, owner.id, subscriber.id, owner.tenantId || 'default']);
     },
     remove: (deviceId, owner) => owner
       ? db.query('DELETE FROM subscriptions WHERE COALESCE(device_id,id)=$1 AND owner_type=$2 AND owner_id=$3', [deviceId, owner.type, owner.id])
       : removeDevice(deviceId),
     enabled,
     /** Clients that registered at least one device, with the state of their notifications (admin list). */
-    clientSubscribers: async () => {
-      const rows = await db.query("SELECT s.owner_id, s.data, c.name, c.phone, c.prefs FROM subscriptions s JOIN clients c ON c.id=s.owner_id WHERE s.owner_type='client'");
+    clientSubscribers: async tenantId => {
+      const rows = tenantId === undefined ? await db.query("SELECT s.owner_id, s.data, c.name, c.phone, c.prefs FROM subscriptions s JOIN clients c ON c.id=s.owner_id WHERE s.owner_type='client'") : await db.query("SELECT s.owner_id, s.data, c.name, c.phone, c.prefs FROM subscriptions s JOIN clients c ON c.id=s.owner_id WHERE s.owner_type='client' AND c.tenant_id=$1", [tenantId]);
       const byClient = new Map();
       for (const row of rows) {
         const entry = byClient.get(row.owner_id) || { id: row.owner_id, name: row.name, whatsapp: row.phone, off: JSON.parse(row.prefs || '{}').notifications === false, browsers: 0, apps: 0 };
@@ -186,7 +187,7 @@ function createNotifier(db, env, adapters = {}, options = {}) {
       const on = await enabled('client');
       return [...byClient.values()].map(({ off, ...entry }) => ({ ...entry, devices: entry.browsers + entry.apps, status: !on ? 'paused' : off ? 'off' : 'on' })).sort((a, b) => a.name.localeCompare(b.name));
     },
-    count: async () => (await db.query("SELECT COUNT(*)::int AS n FROM subscriptions WHERE owner_type='admin'"))[0].n,
+    count: async tenantId => (await (tenantId === undefined ? db.query("SELECT COUNT(*)::int AS n FROM subscriptions WHERE owner_type='admin'") : db.query("SELECT COUNT(*)::int AS n FROM subscriptions WHERE owner_type='admin' AND tenant_id=$1", [tenantId])))[0].n,
     removeOwner: (type, id) => db.query('DELETE FROM subscriptions WHERE owner_type=$1 AND owner_id=$2', [type, id]),
   };
 }

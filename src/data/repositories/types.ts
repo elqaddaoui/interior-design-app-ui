@@ -36,7 +36,7 @@ export interface ChatService {
 }
 
 export interface AuthService {
-  loginAdmin(email: string, password: string): Promise<{ ok: true; user: Pick<AppUser, 'id' | 'name'> } | { ok: false; reason?: 'invalid' | 'limited' | 'unreachable' }>;
+  loginAdmin(email: string, password: string): Promise<{ ok: true; user: Pick<AppUser, 'id' | 'name'> } | { ok: false; reason?: 'invalid' | 'limited' | 'unreachable' | 'maintenance' | 'suspended' | 'disabled' }>;
 }
 
 export interface UploadService {

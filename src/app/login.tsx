@@ -45,7 +45,7 @@ export default function UserLogin() {
       toast(t('ac.userDone', { name: user.name }));
       router.replace(next as never);
     } catch (error) {
-      setErr({ f: t(error instanceof BackendError && error.code === 'ACCOUNT_BLOCKED' ? 'account.blocked' : isBackendUnavailable(error) ? 'account.unavailable' : 'account.loginError') });
+      setErr({ f: t(error instanceof BackendError && error.code === 'ACCOUNT_BLOCKED' ? 'account.blocked' : error instanceof BackendError && ['TENANT_SUSPENDED', 'TENANT_NOT_FOUND', 'SIGNUP_CLOSED', 'CLIENT_LIMIT'].includes(error.code) ? `account.${error.code}` : isBackendUnavailable(error) ? 'account.unavailable' : 'account.loginError') });
     } finally { setBusy(false); }
   };
 
