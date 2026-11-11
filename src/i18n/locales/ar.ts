@@ -35,7 +35,7 @@ const ar: Dict = {
     noResults: 'لا توجد نتائج',
   },
   tabs: { home: 'الرئيسية', explore: 'استكشاف', history: 'السجل', assistant: 'المساعد' },
-  home: { empty: 'لا توجد أدوات في هذا التبويب حاليًا.', all: 'الكل' },
+  home: { empty: 'لا توجد أدوات في هذا التبويب حاليًا.', all: 'الكل', offline: 'تعذّر تحميل المحتوى.', offlineHint: 'تحقق من الاتصال. تتم إعادة المحاولة تلقائيًا.', retry: 'إعادة المحاولة' },
   explore: { title: 'استكشاف', photos: '{{count}} صورة', useStyle: 'استخدم هذا الأسلوب', emptyCat: 'لا توجد صور في هذه الفئة.', styleApplied: 'تم تطبيق الأسلوب' },
   wizard: {
     step: 'الخطوة {{n}}/{{total}}',

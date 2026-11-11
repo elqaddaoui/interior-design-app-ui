@@ -82,8 +82,8 @@ Without it the server does not start. The runtime log then shows:
 | `ADMIN_EMAIL` | your admin login | Replaces the default `admin` / `admin` |
 | `ADMIN_PASSWORD_HASH` | output of `ADMIN_PASSWORD='a-long-password' node server/password.js` | |
 | `DISABLE_DEFAULT_ADMIN` | `true` once your own login works | |
-| `SUPERADMIN_EMAIL` | the platform owner's e-mail | Enables `/super-admin` (tenants, demos, requests). Not set = console disabled |
-| `SUPERADMIN_PASSWORD_HASH` | same format as `ADMIN_PASSWORD_HASH` | Never reuse the tenant admin password |
+| `SUPERADMIN_EMAIL` | the platform owner's e-mail | Optional first-start seed for `/super-admin`. Without it the factory login `superadmin` / `superadmin` is used (change it in Settings) |
+| `SUPERADMIN_PASSWORD_HASH` | same format as `ADMIN_PASSWORD_HASH` | Only used when no super admin account is saved yet |
 | `CRON_SECRET` | a long random string | Protects `/api/push/pump` (see section 4) |
 
 ### Optional (same meaning as on Vercel, see `server/.env.example`)
@@ -113,6 +113,21 @@ Without it the server does not start. The runtime log then shows:
 | `BACKGROUND_IDLE_MS` | `300000` | The same when nobody used the app for 5 minutes |
 | `DB_RETRY_MS` | `1000` | First delay between database connection retries at startup (doubles up to 15 s) |
 | `TRUST_PROXY` | `true` on Hostinger | Reads the visitor address forwarded by Hostinger's local proxy (per-visitor rate limits) |
+
+## Home shows "no tools" / "Impossible de charger le contenu"
+
+The Home screen never shows the empty message ("no tool in this tab") because of a failed download any more. When
+`/api/content` cannot be read (database still waking up, `DATABASE_URL` missing or wrong, API not reachable), Home shows
+**"Impossible de charger le contenu"** with a short code in brackets and a **Retry** button, and keeps retrying by itself
+(3 s, 6 s, 9 s ... up to 30 s) until the real content arrives. Read the code:
+
+| Code | Meaning | Fix |
+|---|---|---|
+| `BACKEND_UNAVAILABLE` | `/api/*` answered with HTML or nothing (static-only hosting, wrong rewrite, Output directory filled in) | Hostinger: leave *Output directory* empty and use entry file `server/start.js`. Vercel: keep `vercel.json` unchanged. |
+| `DATABASE_NOT_CONFIGURED` | no `DATABASE_URL` / `POSTGRES_URL` in this environment | Add the Neon **pooled** URL as `DATABASE_URL` (Vercel: Production **and** Preview), then redeploy. |
+| `The database is starting up...` | Neon was suspended, the server is still connecting | Wait; it retries on its own. |
+
+Quick check from any browser: open `https://<your-domain>/api/health` (must say `"ok":true`) and `/api/content` (must be JSON with `tools`).
 
 ## 3. Check the deployment
 

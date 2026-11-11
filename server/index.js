@@ -233,7 +233,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           } catch { database = 'error'; }
           const ok = database !== 'error' && database !== 'missing';
           // media: 'r2' | 'database' (no R2 variables) | 'incomplete' (some missing). Only the mode, never a value.
-          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
+          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, ...(db.schema?.() ? { isolatedSchema: db.schema() } : {}), media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
         }
         if (!db.configured()) throw fail(503, 'DATABASE_NOT_CONFIGURED');
 

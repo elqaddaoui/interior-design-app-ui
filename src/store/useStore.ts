@@ -17,6 +17,10 @@ interface State extends Colls {
   ready: boolean;
   /** True once real content (cached copy or network) is in the store. Until then screens show placeholders, never an "empty" state. */
   contentReady: boolean;
+  /** True while the content could NOT be downloaded (database waking up, API down, misconfigured host): screens show a "cannot connect" state with retry, never a false "empty" one. */
+  contentFailed: boolean;
+  /** Short code of the last content failure (BACKEND_UNAVAILABLE, DATABASE_NOT_CONFIGURED ...), shown small under the "cannot connect" message so a misconfigured host can be diagnosed from the screen. */
+  contentError: string;
   /** True once the signed-in person's own data (designs, chats, requests) has been read once. Screens show skeletons until then, never a false "empty" state. */
   personalReady: boolean;
   /** True once the admin lists (requests, clients) have been read in this admin session. */
@@ -55,6 +59,8 @@ export const useStore = create<State>((set, get) => ({
   doc: { branding: defaultBranding(), theme: defaultTheme(), assistant: defaultAssistant(), settings: defaultSettings() },
   ready: false,
   contentReady: false,
+  contentFailed: false,
+  contentError: '',
   personalReady: false,
   adminLoaded: false,
   async applyContent() {
@@ -63,7 +69,7 @@ export const useStore = create<State>((set, get) => ({
     for (const name of CONTENT_COLLS) if (!collectionBaselines.has(name)) patch[name] = [...(snapshot.collections[name] ?? [])];
     const doc = { ...get().doc };
     for (const name of DOC_NAMES) if (!docBaselines.has(name)) (doc as any)[name] = await docs[name].get();
-    set({ ...(patch as Partial<State>), doc, contentReady: true });
+    set({ ...(patch as Partial<State>), doc, contentReady: true, contentFailed: false, contentError: '' });
   },
   async init() {
     if (get().ready) return;
@@ -77,7 +83,7 @@ export const useStore = create<State>((set, get) => ({
     const [branding, theme, assistant, settings] = await docsPromise;
     const patch: Record<string, unknown> = {};
     CONTENT_COLLS.forEach((c, i) => (patch[c] = lists[i]));
-    set({ ...(patch as Partial<Colls>), doc: { branding, theme, assistant, settings }, ready: true, contentReady: true });
+    set({ ...(patch as Partial<Colls>), doc: { branding, theme, assistant, settings }, ready: true, contentReady: true, contentFailed: false, contentError: '' });
     })().finally(() => { initializing = null; });
     return initializing;
   },
@@ -107,7 +113,7 @@ export const useStore = create<State>((set, get) => ({
     for (const name of CONTENT_COLLS) if (!collectionBaselines.has(name)) patch[name] = [...(snapshot.collections[name] ?? [])];
     const doc = { ...get().doc };
     for (const name of DOC_NAMES) if (!docBaselines.has(name)) (doc as any)[name] = await docs[name].get();
-    set({ ...(patch as Partial<State>), doc, contentReady: true });
+    set({ ...(patch as Partial<State>), doc, contentReady: true, contentFailed: false, contentError: '' });
   },
   async create(name, input) {
     const item = await (repos[name] as any).create(input);

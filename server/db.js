@@ -93,8 +93,17 @@ const rekey = (table, cols) => `DO $mt$ DECLARE c text; BEGIN
     ALTER TABLE ${table} ADD PRIMARY KEY (${cols});
   END IF;
 END $mt$;`;
+// `ADD COLUMN IF NOT EXISTS ... NOT NULL DEFAULT` is a silent no-op when the column already exists, so a column that an EARLIER, never merged
+// preview left behind as nullable / without default (e.g. admin_accounts.tenant_id of the "super admin accounts" experiment, which every
+// Vercel preview and production share through ONE Neon database) stayed nullable and the primary-key rebuild below then failed with
+// 23502 "column tenant_id contains null values": every request answered 500. So the column is normalised explicitly: existing rows ARE the
+// default tenant, whatever state the column was in.
+const tenantColumn = t => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+UPDATE ${t} SET tenant_id = 'default' WHERE tenant_id IS NULL;
+ALTER TABLE ${t} ALTER COLUMN tenant_id SET DEFAULT 'default';
+ALTER TABLE ${t} ALTER COLUMN tenant_id SET NOT NULL;`;
 const SCHEMA_MT = `
-${TENANT_TABLES.map(t => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';`).join('\n')}
+${TENANT_TABLES.map(tenantColumn).join('\n')}
 ${Object.entries(TENANT_KEYS).map(([t, cols]) => rekey(t, cols)).join('\n')}
 ALTER TABLE clients DROP CONSTRAINT IF EXISTS clients_phone_key;
 CREATE UNIQUE INDEX IF NOT EXISTS clients_tenant_phone ON clients(tenant_id, phone);
@@ -118,6 +127,7 @@ CREATE TABLE IF NOT EXISTS saas_tenants (
 CREATE TABLE IF NOT EXISTS saas_domains (domain TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, token TEXT NOT NULL, verified_at BIGINT, created_at BIGINT NOT NULL);
 CREATE INDEX IF NOT EXISTS saas_domains_tenant ON saas_domains(tenant_id);
 CREATE TABLE IF NOT EXISTS saas_super (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', pw_hash TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, last_login_at BIGINT);
+ALTER TABLE saas_super ADD COLUMN IF NOT EXISTS pw_changed_at BIGINT;
 CREATE TABLE IF NOT EXISTS saas_super_sessions (token_hash TEXT PRIMARY KEY, super_id TEXT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, ua TEXT);
 CREATE TABLE IF NOT EXISTS saas_demos (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', tenant_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'draft', version BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS saas_assignments (id TEXT PRIMARY KEY, demo_id TEXT NOT NULL, tenant_id TEXT NOT NULL UNIQUE, owner_email TEXT NOT NULL DEFAULT '', demo_version BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, created_by TEXT NOT NULL DEFAULT '');
@@ -134,10 +144,12 @@ const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 /** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */
 const poolMax = env => Math.max(1, Math.min(20, Number(env.DB_POOL_MAX) || (env.VERCEL ? 3 : 5)));
 
-async function openPg(url, env = {}) {
+async function openPg(url, env = {}, schema = '') {
   const { Pool, types } = require('pg');
   types.setTypeParser(20, value => Number(value)); // BIGINT -> number (timestamps stay far below 2^53)
-  const pool = new Pool({ connectionString: url, max: poolMax(env), idleTimeoutMillis: 10000, connectionTimeoutMillis: 8000, ssl: isLocal(url) ? false : { rejectUnauthorized: false } });
+  // Isolated preview schema (see previewSchema): the search_path is a connection STARTUP parameter, so no query can ever run before it applies.
+  // Only valid on a direct connection: Neon's pooler (PgBouncer, transaction mode) does not keep session settings. `schema` is validated (SCHEMA_NAME).
+  const pool = new Pool({ connectionString: url, max: poolMax(env), idleTimeoutMillis: 10000, connectionTimeoutMillis: 8000, ssl: isLocal(url) ? false : { rejectUnauthorized: false }, ...(schema ? { options: `-c search_path=${schema}` } : {}) });
   pool.on('error', () => {}); // idle client errors must never crash the function
   return {
     kind: 'pg',
@@ -182,42 +194,127 @@ const SCHEMA_VERSION = crypto.createHash('sha1').update(SCHEMA + SCHEMA_MT).dige
  * is what Neon recommends for migrations (its pooler runs PgBouncer in transaction mode). Normal queries stay on the pooled URL.
  */
 async function ensureSchema(db, migrationUrl) {
-  try {
-    const marker = (await db.query("SELECT value FROM saas_kv WHERE key='schema_version'"))[0];
-    if (marker?.value === SCHEMA_VERSION) return;
-  } catch { /* no saas_kv table yet: fresh database, or one created before multi-tenancy */ }
+  // to_regclass first: a failing SELECT would abort the surrounding transaction (25P02) on a database that has no saas_kv yet.
+  const current = async query => (await query("SELECT to_regclass('saas_kv') IS NOT NULL AS there"))[0]?.there
+    && (await query("SELECT value FROM saas_kv WHERE key='schema_version'"))[0]?.value === SCHEMA_VERSION;
+  if (await current((sql, params) => db.query(sql, params))) return;
+  const apply = async query => {
+    // ONE transaction under an advisory lock: concurrent cold starts (Vercel scales out) queue up instead of deadlocking each other on DDL locks
+    // (observed: 40P01), the first one migrates, the others find the marker and do nothing, and a failure leaves the database exactly as it was.
+    await query("SELECT pg_advisory_xact_lock(hashtext('dwira-schema'))");
+    if (await current(query)) return;
+    await query(SCHEMA);
+    await query(SCHEMA_MT);
+    await query("INSERT INTO saas_kv(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+  };
   if (migrationUrl) {
     const { Client } = require('pg');
     const direct = new Client({ connectionString: migrationUrl, connectionTimeoutMillis: 10000, ssl: isLocal(migrationUrl) ? false : { rejectUnauthorized: false } });
     direct.on('error', () => {});
     await direct.connect();
     try {
-      await direct.query(SCHEMA);
-      await direct.query(SCHEMA_MT);
-      await direct.query("INSERT INTO saas_kv(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+      await direct.query('BEGIN');
+      try { await apply(async (sql, params) => (await direct.query(sql, params)).rows); await direct.query('COMMIT'); }
+      catch (error) { await direct.query('ROLLBACK').catch(() => {}); throw error; }
     } finally { await direct.end().catch(() => {}); }
     return;
   }
-  await db.exec(SCHEMA);
-  await db.exec(SCHEMA_MT);
-  await db.query("INSERT INTO saas_kv(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+  if (db.kind !== 'pg' || !db.tx) { // PGlite (single process: no concurrent starters) or a minimal {query, exec} handle
+    await db.exec(SCHEMA);
+    await db.exec(SCHEMA_MT);
+    await db.query("INSERT INTO saas_kv(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+    return;
+  }
+  await db.tx(apply);
+}
+
+/**
+ * PREVIEW ISOLATION. Every Vercel preview and production share ONE Neon database. The multi-tenant migration changes primary keys
+ * (`settings(key)` -> `(tenant_id,key)`, ...), and the previous release (still serving production) writes with `ON CONFLICT (key)` / `(admin_id)` /
+ * `(phone)` ...: on a migrated database those statements fail with 42P10 and production answers 500 to every admin login, content edit and
+ * visitor sign-up. So a preview must never migrate the tables in `public` while production still runs the old code.
+ *
+ * Rule (Vercel previews only, VERCEL_ENV=preview):
+ *   1. the branch's own schema already exists            -> keep using it (its data survives new commits of the same branch);
+ *   2. `public` was already migrated (production runs the multi-tenant code) -> use `public`, shared exactly like before;
+ *   3. otherwise                                          -> create the branch schema, copy the data once, and run the migration THERE.
+ * Production, local development and every other host never isolate. DB_SCHEMA=name forces a schema, DB_SHARED_PREVIEW=1 turns the rule off.
+ */
+const SCHEMA_NAME = /^[a-z_][a-z0-9_]{0,48}$/;
+function previewSchema(env) {
+  if (env.DB_SCHEMA) {
+    if (!SCHEMA_NAME.test(env.DB_SCHEMA) || env.DB_SCHEMA === 'public') throw new Error('DB_SCHEMA must be lower-case letters, digits and _ (not "public")');
+    return { name: env.DB_SCHEMA, forced: true };
+  }
+  if (env.VERCEL_ENV !== 'preview' || env.DB_SHARED_PREVIEW === '1') return null;
+  const ref = String(env.VERCEL_GIT_COMMIT_REF || 'preview');
+  const slug = ref.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'preview';
+  return { name: `preview_${slug}_${crypto.createHash('sha1').update(ref).digest('hex').slice(0, 8)}`, forced: false };
+}
+/** Direct (unpooled) connection string: the Neon-provided one, else the pooled host without `-pooler`. */
+const directUrl = (env, url) => env.DATABASE_URL_UNPOOLED || env.POSTGRES_URL_NON_POOLING || url.replace('-pooler.', '.');
+/** Tables copied into a new preview schema. Sessions, push subscriptions, the outbox and campaigns are NOT copied: a preview must never notify real people. Parents first (foreign keys). */
+const PREVIEW_COPY = ['clients', 'claims', 'space', 'requests', 'settings', 'content_items', 'content_docs', 'admin_prefs', 'sync_state', 'media', 'guest_chats', 'admin_accounts'];
+
+async function withClient(url, work) {
+  const { Client } = require('pg');
+  const client = new Client({ connectionString: url, connectionTimeoutMillis: 10000, ssl: isLocal(url) ? false : { rejectUnauthorized: false } });
+  client.on('error', () => {});
+  await client.connect();
+  try { return await work(client); } finally { await client.end().catch(() => {}); }
+}
+/** Which schema this process must use: the preview schema's name, or '' for `public`. Read-only. */
+async function pickSchema(url, wanted) {
+  if (wanted.forced) return wanted.name;
+  return withClient(url, async client => {
+    if ((await client.query('SELECT 1 FROM information_schema.schemata WHERE schema_name=$1', [wanted.name])).rows.length) return wanted.name;
+    const migrated = await client.query("SELECT 1 FROM public.saas_kv WHERE key='schema_version'").then(r => r.rows.length > 0, () => false);
+    return migrated ? '' : wanted.name;
+  });
+}
+/** Creates the schema with the previous-release tables and a copy of the data, atomically (all or nothing) and once even if several instances start together. */
+async function prepareSchema(url, schema) {
+  await withClient(url, async client => {
+    await client.query('BEGIN');
+    try {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['dwira-schema:' + schema]);
+      const exists = (await client.query('SELECT 1 FROM information_schema.schemata WHERE schema_name=$1', [schema])).rows.length > 0;
+      if (!exists) {
+        await client.query(`CREATE SCHEMA "${schema}"`);
+        await client.query(`SET LOCAL search_path TO "${schema}"`);
+        await client.query(SCHEMA);
+        for (const table of PREVIEW_COPY) {
+          const cols = (await client.query(
+            "SELECT a.column_name FROM information_schema.columns a JOIN information_schema.columns b ON b.column_name=a.column_name AND b.table_schema=$1 AND b.table_name=$2 WHERE a.table_schema='public' AND a.table_name=$2 ORDER BY a.ordinal_position", [schema, table])).rows.map(r => `"${r.column_name}"`).join(',');
+          if (cols) await client.query(`INSERT INTO "${schema}"."${table}" (${cols}) SELECT ${cols} FROM public."${table}" ON CONFLICT DO NOTHING`);
+        }
+      }
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+  });
 }
 
 /** Lazily opened and schema-initialised once per process (one cold start on Vercel). */
 function createDb(env = process.env) {
   const url = connectionString(env);
   let ready;
+  let schema = '';
   const open = () => ready ||= (async () => {
     // PGlite is a dev/test dependency only. Production on Vercel must provide a real database,
     // because serverless instances have no durable disk.
     if (!url && env.VERCEL) throw Object.assign(new Error('DATABASE_NOT_CONFIGURED'), { status: 503 });
-    const db = url ? await openPg(url, env) : await openLite(env.PGLITE_DIR === ':memory:' ? undefined : env.PGLITE_DIR || (env.NODE_ENV === 'test' ? undefined : require('node:path').join(__dirname, 'data', 'pglite')));
-    const migrationUrl = url && env.DATABASE_URL_UNPOOLED && env.DATABASE_URL_UNPOOLED !== url ? env.DATABASE_URL_UNPOOLED : '';
+    const wanted = url ? previewSchema(env) : null;
+    schema = wanted ? await pickSchema(url, wanted) : '';
+    if (schema) await prepareSchema(directUrl(env, url), schema);
+    const db = url ? await openPg(schema ? directUrl(env, url) : url, env, schema) : await openLite(env.PGLITE_DIR === ':memory:' ? undefined : env.PGLITE_DIR || (env.NODE_ENV === 'test' ? undefined : require('node:path').join(__dirname, 'data', 'pglite')));
+    const migrationUrl = url && !schema && env.DATABASE_URL_UNPOOLED && env.DATABASE_URL_UNPOOLED !== url ? env.DATABASE_URL_UNPOOLED : '';
     // A failed attempt must not leave its pool (and connections) behind: the caller may retry.
     try { await ensureSchema(db, migrationUrl); } catch (error) { await db.close().catch(() => {}); throw error; }
     return db;
   })().catch(error => { ready = undefined; throw error; });
   return {
+    /** Name of the isolated preview schema in use ('' = the normal `public` schema). Valid after the first query. */
+    schema: () => schema,
     configured: () => !!url || !env.VERCEL,
     query: async (sql, params) => (await open()).query(sql, params),
     tx: async work => (await open()).tx(work),

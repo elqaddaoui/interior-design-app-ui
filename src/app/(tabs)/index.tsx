@@ -30,6 +30,8 @@ export default function Home() {
   const tabs = useStore((s) => s.tabs);
   const tools = useStore((s) => s.tools);
   const contentReady = useStore((s) => s.contentReady);
+  const contentFailed = useStore((s) => s.contentFailed);
+  const contentError = useStore((s) => s.contentError);
   const branding = useStore((s) => s.doc.branding);
   const visibleTabs = useMemo(() => sorted(tabs).filter((x) => x.visible), [tabs]);
   const tabsVisible = useStore((s) => s.doc.settings.homeTabsVisible) !== false;
@@ -81,6 +83,9 @@ export default function Home() {
               <View key={i} style={{ width: `${100 / cols}%`, padding: 8 }}><Skeleton h={cardHeight} r={16} /><View pointerEvents="none" style={{ position: 'absolute', top: 8, left: 8, right: 8, bottom: 8, alignItems: 'center', justifyContent: 'center' }}><Spinner size={36} /></View></View>
             ))}
           </View>
+        ) : list.length === 0 && contentFailed ? (
+          // The download failed (it keeps retrying by itself): an honest message with a manual retry, never "no tools".
+          <EmptyState icon="cloud-off-outline" title={t('home.offline')} subtitle={`${t('home.offlineHint')}${contentError ? `\n(${contentError})` : ''}`} action={t('home.retry')} onAction={() => { void useStore.getState().reloadContent().catch(() => {}); }} />
         ) : list.length === 0 ? (
           <EmptyState icon="tools" title={t('home.empty')} />
         ) : layout.id === 'grid' && !layoutsCfg ? (

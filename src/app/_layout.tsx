@@ -44,9 +44,22 @@ const FONT_WAIT_MS = 400;
 async function initWithRetry() {
   for (let attempt = 0; attempt < INIT_ATTEMPTS; attempt++) {
     try { await useStore.getState().init(); return true; }
-    catch { if (attempt < INIT_ATTEMPTS - 1) await new Promise((resolve) => setTimeout(resolve, INIT_DELAY_MS * (attempt + 1))); }
+    catch (error) { useStore.setState({ contentError: (error as { code?: string; message?: string })?.code || (error as Error)?.message || 'UNKNOWN' }); if (attempt < INIT_ATTEMPTS - 1) await new Promise((resolve) => setTimeout(resolve, INIT_DELAY_MS * (attempt + 1))); }
   }
   return false;
+}
+/** Background retries after the startup attempts gave up: 3 s, 6 s, 9 s ... up to 30 s, until the content is loaded. */
+let retrying = false;
+async function keepRetryingContent() {
+  if (retrying) return;
+  retrying = true;
+  try {
+    for (let i = 1; useStore.getState().contentFailed; i++) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(30000, 3000 * i)));
+      if (!useStore.getState().contentFailed) break;
+      try { await useStore.getState().reloadContent(); } catch { /* still down: next round */ }
+    }
+  } finally { retrying = false; }
 }
 const withTimeout = (work: Promise<unknown>, ms: number) => Promise.race([work.catch(() => {}), new Promise((resolve) => setTimeout(resolve, ms))]);
 
@@ -92,7 +105,12 @@ function TenantRoot() {
       void (async () => {
         const content = (async () => {
           const done = await initWithRetry();
-          if (!done) useStore.setState({ contentReady: true });
+          if (!done) {
+            // The API never answered: say so (Home shows "cannot connect" + Retry, not a false "no tools") and keep trying in the
+            // background with a growing pause until the real content arrives. The sync loop and the Retry button also clear it.
+            useStore.setState({ contentReady: true, contentFailed: true });
+            void keepRetryingContent();
+          }
           setSettled(true);
         })();
         // The person's own data needs the session first, but that chain no longer sits in front of the content download.

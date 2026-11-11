@@ -2,8 +2,8 @@
  * Platform back office (docs/MULTI_TENANT_PLAN.md sections 5 and 6): the ONLY code that reads and writes the `saas_*` tables and the
  * only tenant-aware code that uses the raw database on purpose (it manages tenants; it is never reachable from a tenant's own routes).
  *
- *   - Super admin identity: separate table, cookie and header from every tenant admin. No built-in password: SUPERADMIN_EMAIL +
- *     SUPERADMIN_PASSWORD_HASH (same scrypt format as ADMIN_PASSWORD_HASH) must be set, otherwise login answers 503.
+ *   - Super admin identity: separate table, cookie and header from every tenant admin. The account lives in the database (saas_super):
+ *     factory login superadmin / superadmin (or the optional SUPERADMIN_EMAIL + SUPERADMIN_PASSWORD_HASH seed), changed in the console.
  *   - Tenants: create / edit / suspend / delete, their administrators and custom domains. Everything is audited.
  *   - Demos: a demo is a TEMPLATE tenant (kind 'demo') with sample data. Assigning it makes an independent tenant instance by VALUE
  *     (one transaction, no shared row, no reference back). Later edits of either side never reach the other.
@@ -39,37 +39,64 @@ const DELETE_ORDER = ['campaign_deliveries', 'campaigns', 'space', 'claims', 'us
 const num = value => (value == null ? null : Number(value));
 const randomPassword = () => crypto.randomBytes(12).toString('base64url');
 
+const SUPER_ID = 'super';
+const DEFAULT_LOGIN = 'superadmin'; // factory e-mail AND password of the platform owner, to be changed in /super-admin/settings
+// A login id is an e-mail address or a plain user name (the factory one is "superadmin").
+const LOGIN_ID = /^[a-z0-9][a-z0-9._@+-]{2,189}$/;
+
 function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = bundles.storage }) {
-  const configured = () => !!(env.SUPERADMIN_EMAIL && env.SUPERADMIN_PASSWORD_HASH);
   const attempts = new Map(); // address -> { count, until }: 5 failed sign-ins lock that address for 15 minutes
   const cookieFlags = `HttpOnly; SameSite=Strict; Path=/api${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
+  /** The console is always available: the account lives in the database (saas_super), it is never "not configured". */
+  const configured = () => true;
 
   // ---------- Identity ----------
+  /**
+   * The single platform owner account. Created on first use, in this order of preference:
+   *   1. SUPERADMIN_EMAIL + SUPERADMIN_PASSWORD_HASH (optional deployment seed, same scrypt format as ADMIN_PASSWORD_HASH),
+   *   2. the factory login superadmin / superadmin (flagged `isDefault` until the password is changed in the console).
+   * After that the database row is the only source of truth: changing the e-mail / password in the console is permanent and the
+   * environment seed is never applied again.
+   */
+  async function account() {
+    const found = (await db.query('SELECT * FROM saas_super ORDER BY created_at, id LIMIT 1'))[0];
+    if (found) {
+      // A row written by the earlier environment-only version already holds real credentials: it is not the factory login.
+      if (found.pw_changed_at == null && found.email !== DEFAULT_LOGIN) { found.pw_changed_at = Number(found.created_at) || 1; await db.query('UPDATE saas_super SET pw_changed_at=$1 WHERE id=$2 AND pw_changed_at IS NULL', [found.pw_changed_at, found.id]); }
+      return found;
+    }
+    const seeded = !!(env.SUPERADMIN_EMAIL && env.SUPERADMIN_PASSWORD_HASH);
+    const email = (seeded ? clean(env.SUPERADMIN_EMAIL, 190) : DEFAULT_LOGIN).toLowerCase();
+    const hash = seeded ? env.SUPERADMIN_PASSWORD_HASH : hashPassword(DEFAULT_LOGIN);
+    const now = Date.now();
+    await db.query('INSERT INTO saas_super(id,email,name,pw_hash,created_at,pw_changed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING', [SUPER_ID, email, 'Super admin', hash, now, seeded ? now : null]);
+    return (await db.query('SELECT * FROM saas_super ORDER BY created_at, id LIMIT 1'))[0];
+  }
+  const accountView = row => ({ email: row.email, isDefault: row.pw_changed_at == null, passwordChangedAt: num(row.pw_changed_at), lastLoginAt: num(row.last_login_at) });
+
   async function login(ip, ua, body) {
-    if (!configured()) throw fail(503, 'SUPERADMIN_NOT_CONFIGURED');
     const now = Date.now();
     const lock = attempts.get(ip);
     if (lock && lock.until > now && lock.count >= 5) throw fail(429, 'Too many attempts');
+    const row = await account();
     const email = clean(body?.email, 190).toLowerCase();
     const password = typeof body?.password === 'string' && body.password.length <= 512 ? body.password : '';
     // The hash is always computed (same cost whatever the e-mail) so timing does not tell which part was wrong.
-    const passwordOk = passwordMatches(password, env.SUPERADMIN_PASSWORD_HASH);
-    if (!(passwordOk && email === env.SUPERADMIN_EMAIL.trim().toLowerCase())) {
+    const passwordOk = passwordMatches(password, row.pw_hash);
+    if (!(passwordOk && email === row.email)) {
       const entry = lock && lock.until > now ? lock : { count: 0, until: now + 15 * 60000 };
       entry.count++; attempts.set(ip, entry);
       if (attempts.size > 5000) for (const [key, value] of attempts) if (value.until < now) attempts.delete(key);
       throw fail(401, 'Invalid credentials');
     }
-    attempts.delete(ip);
-    const id = 'sa_' + sha(email).slice(0, 12);
-    await db.query('INSERT INTO saas_super(id,email,name,pw_hash,created_at,last_login_at) VALUES($1,$2,$3,$4,$5,$5) ON CONFLICT (id) DO UPDATE SET pw_hash=EXCLUDED.pw_hash, last_login_at=EXCLUDED.last_login_at', [id, email, 'Super admin', env.SUPERADMIN_PASSWORD_HASH, now]);
-    const row = (await db.query('SELECT disabled FROM saas_super WHERE id=$1', [id]))[0];
     if (row.disabled) throw fail(403, 'ACCOUNT_DISABLED');
+    attempts.delete(ip);
+    await db.query('UPDATE saas_super SET last_login_at=$1 WHERE id=$2', [now, row.id]);
     const token = crypto.randomBytes(32).toString('hex');
     await db.query('DELETE FROM saas_super_sessions WHERE expires_at<=$1', [now]);
-    await db.query('INSERT INTO saas_super_sessions(token_hash,super_id,expires_at,created_at,ua) VALUES($1,$2,$3,$4,$5)', [sha(token), id, now + SESSION_MS, now, String(ua || '').slice(0, 300)]);
-    await audit(email, 'super.login', null, '', '');
-    return { token, email, cookie: `dwira_super=${token}; ${cookieFlags}; Max-Age=${SESSION_MS / 1000}` };
+    await db.query('INSERT INTO saas_super_sessions(token_hash,super_id,expires_at,created_at,ua) VALUES($1,$2,$3,$4,$5)', [sha(token), row.id, now + SESSION_MS, now, String(ua || '').slice(0, 300)]);
+    await audit(row.email, 'super.login', null, '', row.pw_changed_at == null ? 'default credentials' : '');
+    return { token, email: row.email, isDefault: row.pw_changed_at == null, cookie: `dwira_super=${token}; ${cookieFlags}; Max-Age=${SESSION_MS / 1000}` };
   }
   const clearCookie = () => `dwira_super=; ${cookieFlags}; Max-Age=0`;
   const tokenOf = req => {
@@ -78,12 +105,51 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     const raw = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_super='))?.slice(12);
     return raw && /^[a-f0-9]{64}$/.test(raw) ? raw : '';
   };
-  /** The signed-in super admin or null. The e-mail must still be the configured one: rotating SUPERADMIN_EMAIL signs everybody out. */
+  /** The signed-in super admin or null. */
   async function authenticate(req) {
     const token = tokenOf(req);
-    if (!token || !configured()) return null;
-    const row = (await db.query('SELECT s.super_id, u.email FROM saas_super_sessions s JOIN saas_super u ON u.id=s.super_id WHERE s.token_hash=$1 AND s.expires_at>$2 AND u.disabled=0', [sha(token), Date.now()]))[0];
-    return row && row.email === env.SUPERADMIN_EMAIL.trim().toLowerCase() ? { id: row.super_id, email: row.email, token } : null;
+    if (!token) return null;
+    const row = (await db.query('SELECT s.super_id, u.email, u.pw_changed_at FROM saas_super_sessions s JOIN saas_super u ON u.id=s.super_id WHERE s.token_hash=$1 AND s.expires_at>$2 AND u.disabled=0', [sha(token), Date.now()]))[0];
+    return row ? { id: row.super_id, email: row.email, isDefault: row.pw_changed_at == null, token } : null;
+  }
+  /**
+   * Settings > Account: change the sign-in e-mail and / or the password. The current password is always required (a stolen session
+   * alone cannot take the account over). Every OTHER session is signed out; the current one stays.
+   */
+  async function updateAccount(me, body) {
+    const row = await account();
+    if (!passwordMatches(typeof body?.currentPassword === 'string' ? body.currentPassword.slice(0, 512) : '', row.pw_hash)) throw fail(403, 'WRONG_CURRENT_PASSWORD');
+    const wantsEmail = body?.email !== undefined && body.email !== null && String(body.email).trim() !== '';
+    const wantsPassword = body?.newPassword !== undefined && body.newPassword !== null && String(body.newPassword) !== '';
+    if (!wantsEmail && !wantsPassword) throw fail(400, 'NOTHING_TO_CHANGE');
+    const email = wantsEmail ? clean(body.email, 190).toLowerCase() : row.email;
+    if (!LOGIN_ID.test(email)) throw fail(400, 'INVALID_LOGIN');
+    let hash = row.pw_hash, changedAt = row.pw_changed_at;
+    if (wantsPassword) {
+      const next = String(body.newPassword);
+      if (next.toLowerCase() === DEFAULT_LOGIN || passwordProblem(next, { username: email, email })) throw fail(400, 'WEAK_PASSWORD');
+      if (next === body.currentPassword) throw fail(400, 'SAME_PASSWORD');
+      hash = hashPassword(next); changedAt = Date.now();
+    } else if (changedAt == null && email === DEFAULT_LOGIN) {
+      throw fail(400, 'NOTHING_TO_CHANGE');
+    }
+    // Changing only the e-mail still ends the "factory credentials" state only if the password is also changed.
+    await db.tx(async q => {
+      await q('UPDATE saas_super SET email=$1, pw_hash=$2, pw_changed_at=$3 WHERE id=$4', [email, hash, changedAt, row.id]);
+      await q('DELETE FROM saas_super_sessions WHERE super_id=$1 AND token_hash<>$2', [row.id, sha(me.token)]);
+    });
+    attempts.clear();
+    await audit(email, 'super.account.update', null, '', [wantsEmail && email !== row.email ? 'email' : '', wantsPassword ? 'password' : ''].filter(Boolean).join('+'));
+    return accountView((await db.query('SELECT * FROM saas_super WHERE id=$1', [row.id]))[0]);
+  }
+  /** Used by `node server/reset-superadmin.js` when the password was lost: back to superadmin / superadmin, every session ended. */
+  async function resetToDefault() {
+    const row = await account();
+    await db.tx(async q => {
+      await q('UPDATE saas_super SET email=$1, pw_hash=$2, pw_changed_at=NULL, disabled=0 WHERE id=$3', [DEFAULT_LOGIN, hashPassword(DEFAULT_LOGIN), row.id]);
+      await q('DELETE FROM saas_super_sessions WHERE super_id=$1', [row.id]);
+    });
+    await audit(DEFAULT_LOGIN, 'super.account.reset', null, '', 'reset to factory login from the server');
   }
 
   // ---------- Audit ----------
@@ -545,14 +611,15 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     const ok = (data, status = 200, headers) => ({ status, data, headers });
     if (path === '/login' && method === 'POST') {
       const result = await login(ip, req.headers['user-agent'], await readBody(req));
-      return ok({ ok: true, email: result.email, ...(req.headers['x-dwira-native'] === '1' ? { token: result.token } : {}) }, 200, { 'Set-Cookie': result.cookie });
+      return ok({ ok: true, email: result.email, isDefault: result.isDefault, ...(req.headers['x-dwira-native'] === '1' ? { token: result.token } : {}) }, 200, { 'Set-Cookie': result.cookie });
     }
-    if (!configured()) throw fail(503, 'SUPERADMIN_NOT_CONFIGURED');
     const me = await authenticate(req);
     if (!me) throw fail(401, 'Super admin login required');
     const actor = me.email;
     if (path === '/logout' && method === 'POST') { await db.query('DELETE FROM saas_super_sessions WHERE token_hash=$1', [sha(me.token)]); return ok({ ok: true }, 200, { 'Set-Cookie': clearCookie() }); }
-    if (path === '/session' && method === 'GET') return ok({ ok: true, email: me.email });
+    if (path === '/session' && method === 'GET') return ok({ ok: true, email: me.email, isDefault: me.isDefault });
+    if (path === '/account' && method === 'GET') return ok(accountView(await account()));
+    if (path === '/account' && method === 'PATCH') return ok(await updateAccount(me, await readBody(req)));
     if (path === '/stats' && method === 'GET') return ok(await stats());
     if (path === '/audit' && method === 'GET') return ok(await auditLog({ tenantId: url.searchParams.get('tenant') || undefined, limit: url.searchParams.get('limit') }));
 
@@ -604,7 +671,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     throw fail(404, 'API route not found');
   }
 
-  return { handle, authenticate, configured, submitRequest, requestsOfTenant, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit };
+  return { handle, authenticate, configured, account, resetToDefault, submitRequest, requestsOfTenant, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit };
 }
 
 module.exports = { createSuperAdmin, COPIED_SETTINGS };

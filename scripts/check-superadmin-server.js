@@ -60,16 +60,30 @@ const newTenant = async (api, slug, extra = {}) => {
   return r.body;
 };
 
-test('super admin login: not configured -> 503, wrong password -> 401 and locks after 5, tenant tokens never open it', async () => {
+test('super admin login: factory login superadmin / superadmin, wrong password -> 401 and locks after 5, tenant tokens never open it', async () => {
   const db = await freshDb();
-  const unconfigured = createBackend({ env: { ...ENV, SUPERADMIN_EMAIL: '', SUPERADMIN_PASSWORD_HASH: '' }, db, media: { storage: null, download: offline } });
-  await unconfigured.db.query('select 1');
-  assert.equal((await call(unconfigured, '/api/super-admin/login', { method: 'POST', body: SUPER })).status, 503);
-  assert.equal((await call(unconfigured, '/api/super-admin/tenants')).status, 503);
+  // No SUPERADMIN_* variables at all: the console still works with the factory login (it is never "not configured").
+  const factory = createBackend({ env: { ...ENV, SUPERADMIN_EMAIL: '', SUPERADMIN_PASSWORD_HASH: '' }, db, media: { storage: null, download: offline } });
+  await factory.db.query('select 1');
+  assert.equal((await call(factory, '/api/super-admin/tenants')).status, 401, 'no session');
+  const bad = await call(factory, '/api/super-admin/login', { method: 'POST', body: { email: 'superadmin', password: 'nope' } });
+  assert.equal(bad.status, 401);
+  const first = await call(factory, '/api/super-admin/login', { method: 'POST', headers: native, body: { email: 'SuperAdmin', password: 'superadmin' } });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.isDefault, true, 'flagged as factory credentials');
+  const session = await call(factory, '/api/super-admin/session', { headers: { 'x-super-token': first.body.token } });
+  assert.deepEqual([session.status, session.body.email, session.body.isDefault], [200, 'superadmin', true]);
+  assert.equal((await call(factory, '/api/super-admin/tenants', { headers: { 'x-super-token': first.body.token } })).status, 200);
+  // The row is stored in the database (so Neon keeps it across deployments).
+  const row = (await db.query('SELECT email, pw_changed_at FROM saas_super'))[0];
+  assert.deepEqual([row.email, row.pw_changed_at], ['superadmin', null]);
 
+  await db.query('TRUNCATE saas_super, saas_super_sessions');
   const backend = createBackend({ env: ENV, db, media: { storage: null, download: offline } });
   await backend.db.query('select 1');
   assert.equal((await call(backend, '/api/super-admin/tenants')).status, 401, 'no session');
+  // The optional environment seed replaces the factory login on first use.
+  assert.equal((await call(backend, '/api/super-admin/login', { method: 'POST', ip: 'x', body: { email: 'superadmin', password: 'superadmin' } })).status, 401, 'seed wins over the factory login');
   // The built-in admin / admin of the default tenant is NOT a super admin.
   const admin = await call(backend, '/api/admin/login', { method: 'POST', headers: native, body: { email: 'admin', password: 'admin' } });
   assert.equal(admin.status, 200);
@@ -79,11 +93,61 @@ test('super admin login: not configured -> 503, wrong password -> 401 and locks 
   assert.equal((await call(backend, '/api/super-admin/login', { method: 'POST', ip: 'attacker', body: SUPER })).status, 429, 'locked even with the right password');
   const ok = await call(backend, '/api/super-admin/login', { method: 'POST', ip: 'friend', body: SUPER });
   assert.equal(ok.status, 200);
+  assert.equal(ok.body.isDefault, false, 'a seeded password is a real credential');
   assert.match(ok.headers['set-cookie'], /dwira_super=[a-f0-9]{64}; HttpOnly; SameSite=Strict; Path=\/api/);
   // The super admin API is never reachable under a slug or a custom domain.
   const { api } = await setup();
   await newTenant(api, 'shopone');
   assert.equal((await call(backend, '/shopone/api/super-admin/login', { method: 'POST', body: SUPER })).status, 404);
+});
+
+test('super admin settings: change e-mail and password (stored in the database), old login stops, other sessions end, reset restores the factory login', async () => {
+  const db = await freshDb();
+  const env = { ...ENV, SUPERADMIN_EMAIL: '', SUPERADMIN_PASSWORD_HASH: '' };
+  const backend = createBackend({ env, db, media: { storage: null, download: offline } });
+  await backend.db.query('select 1');
+  const signin = async (email, password, ip = 'owner') => call(backend, '/api/super-admin/login', { method: 'POST', ip, headers: native, body: { email, password } });
+  const a = (await signin('superadmin', 'superadmin')).body.token, b = (await signin('superadmin', 'superadmin')).body.token;
+  const as = token => ({ 'x-super-token': token });
+  const patch = (token, body) => call(backend, '/api/super-admin/account', { method: 'PATCH', headers: as(token), body });
+  assert.deepEqual((await call(backend, '/api/super-admin/account', { headers: as(a) })).body.isDefault, true);
+
+  assert.equal((await patch(a, { currentPassword: 'wrong', newPassword: 'Brand-New-Pass-77' })).status, 403, 'the current password is required');
+  assert.equal((await patch(a, { currentPassword: 'superadmin' })).status, 400, 'nothing to change');
+  for (const weak of ['superadmin', 'short', 'password1', 'SUPERADMIN']) assert.equal((await patch(a, { currentPassword: 'superadmin', newPassword: weak })).status, 400, weak);
+  assert.equal((await patch(a, { currentPassword: 'superadmin', email: 'bad login!' })).status, 400);
+  assert.equal((await patch(null, { currentPassword: 'superadmin', newPassword: 'x' })).status, 401, 'needs a session');
+
+  const changed = await patch(a, { currentPassword: 'superadmin', email: 'Owner@Example.com', newPassword: 'Brand-New-Pass-77' });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.deepEqual([changed.body.email, changed.body.isDefault], ['owner@example.com', false]);
+  assert.equal((await call(backend, '/api/super-admin/tenants', { headers: as(a) })).status, 200, 'the session that changed it stays signed in');
+  assert.equal((await call(backend, '/api/super-admin/tenants', { headers: as(b) })).status, 401, 'other sessions are signed out');
+  assert.equal((await signin('superadmin', 'superadmin', 'ip2')).status, 401, 'factory login stops working');
+  assert.equal((await signin('owner@example.com', 'superadmin', 'ip3')).status, 401);
+  const again = await signin('owner@example.com', 'Brand-New-Pass-77', 'ip4');
+  assert.equal(again.status, 200);
+  assert.equal(again.body.isDefault, false);
+
+  // A password-only change keeps the e-mail; an e-mail-only change keeps the password.
+  assert.equal((await patch(again.body.token, { currentPassword: 'Brand-New-Pass-77', email: 'boss@example.com' })).status, 200);
+  assert.equal((await signin('boss@example.com', 'Brand-New-Pass-77', 'ip5')).status, 200);
+  // A new backend over the same database (= a new deployment on the same Neon): the stored account is still the source of truth.
+  const redeployed = createBackend({ env: { ...ENV, SUPERADMIN_EMAIL: 'seed@env.test', SUPERADMIN_PASSWORD_HASH: hashPassword('Seed-Pass-99') }, db, media: { storage: null, download: offline } });
+  await redeployed.db.query('select 1');
+  assert.equal((await call(redeployed, '/api/super-admin/login', { method: 'POST', ip: 'ip6', body: { email: 'seed@env.test', password: 'Seed-Pass-99' } })).status, 401, 'an environment seed never overrides a saved account');
+  assert.equal((await call(redeployed, '/api/super-admin/login', { method: 'POST', ip: 'ip7', body: { email: 'boss@example.com', password: 'Brand-New-Pass-77' } })).status, 200);
+  // The change is audited, never with the secret.
+  const audit = await call(backend, '/api/super-admin/audit', { headers: as(again.body.token) });
+  assert.ok(audit.body.some(row => row.action === 'super.account.update' && row.detail === 'email+password'));
+  assert.ok(!JSON.stringify(audit.body).includes('Brand-New-Pass-77'));
+
+  // Lost password: the server-side reset goes back to superadmin / superadmin and ends every session.
+  await backend.superAdmin.resetToDefault();
+  assert.equal((await call(backend, '/api/super-admin/tenants', { headers: as(again.body.token) })).status, 401);
+  const reset = await signin('superadmin', 'superadmin', 'ip8');
+  assert.equal(reset.status, 200);
+  assert.equal(reset.body.isDefault, true);
 });
 
 test('tenants: create (reserved / duplicate slugs refused), edit, suspend / unsuspend, delete needs the slug typed back', async () => {

@@ -13,10 +13,11 @@ const NAV: { href: string; label: string; testID: string }[] = [
   { href: '/super-admin/demos', label: 'Demos', testID: 'sa-nav-demos' },
   { href: '/super-admin/requests', label: 'Requests', testID: 'sa-nav-requests' },
   { href: '/super-admin/audit', label: 'Audit log', testID: 'sa-nav-audit' },
+  { href: '/super-admin/settings', label: 'Settings', testID: 'sa-nav-settings' },
 ];
 
 function Login() {
-  const { login, state } = useSuper();
+  const { login } = useSuper();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -31,14 +32,10 @@ function Login() {
         <T size="xs" weight="bold" color={SA.color.accent} style={{ letterSpacing: 2, textTransform: 'uppercase' }}>Platform console</T>
         <T size="xl" weight="bold" style={{ marginTop: 4, marginBottom: SA.space.xl }}>Super admin</T>
         <Card>
-          {state === 'unconfigured' ? <T size="sm" color={SA.color.warn} testID="sa-unconfigured">The super admin is not configured on this server. Set SUPERADMIN_EMAIL and SUPERADMIN_PASSWORD_HASH, then restart.</T> : (
-            <>
-              <Field label="E-mail" value={email} onChangeText={setEmail} keyboardType="email-address" textContentType="username" {...({ testID: 'sa-email' } as object)} />
-              <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry onSubmitEditing={submit} {...({ testID: 'sa-password' } as object)} />
-              <ErrorLine error={error} />
-              <Btn testID="sa-signin" label="Sign in" onPress={submit} busy={busy} disabled={!email || !password} />
-            </>
-          )}
+          <Field label="E-mail or user name" value={email} onChangeText={setEmail} textContentType="username" {...({ testID: 'sa-email' } as object)} />
+          <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry onSubmitEditing={submit} {...({ testID: 'sa-password' } as object)} />
+          <ErrorLine error={error} />
+          <Btn testID="sa-signin" label="Sign in" onPress={submit} busy={busy} disabled={!email || !password} />
         </Card>
       </View>
     </View>
@@ -46,7 +43,7 @@ function Login() {
 }
 
 export function SuperShell({ children }: { children: React.ReactNode }) {
-  const { state, email, check, logout } = useSuper();
+  const { state, email, isDefault, check, logout } = useSuper();
   const path = usePathname();
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -74,7 +71,15 @@ export function SuperShell({ children }: { children: React.ReactNode }) {
         </View>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: wide ? SA.space.xxl : SA.space.lg, alignItems: 'center' }}>
-        <View style={{ width: '100%', maxWidth: SA.maxWidth }}>{children}</View>
+        <View style={{ width: '100%', maxWidth: SA.maxWidth }}>
+          {isDefault && !path.startsWith('/super-admin/settings') ? (
+            <Pressable testID="sa-default-warning" accessibilityRole="link" onPress={() => router.push('/super-admin/settings' as never)}
+              style={{ borderWidth: 1, borderColor: SA.color.warn, borderRadius: SA.radius.md, padding: SA.space.md, marginBottom: SA.space.lg, backgroundColor: SA.color.panel2 }}>
+              <T size="sm" weight="bold" color={SA.color.warn}>You are using the factory login (superadmin / superadmin). Open Settings and choose your own e-mail and password.</T>
+            </Pressable>
+          ) : null}
+          {children}
+        </View>
       </ScrollView>
     </View>
   );

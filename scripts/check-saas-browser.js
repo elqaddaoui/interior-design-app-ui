@@ -8,11 +8,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { chromium } = require('@playwright/test');
-const { hashPassword } = require('../server/admins');
 
 const PORT = Number(process.env.SAAS_TEST_PORT || 8791);
 const base = `http://127.0.0.1:${PORT}`;
-const SUPER = { email: 'boss@platform.test', password: 'Platform-Secret-123' };
+const FACTORY = { email: 'superadmin', password: 'superadmin' };
+const SUPER = { email: 'boss@platform.test', password: 'Platform-Secret-123' }; // chosen in Settings below
 const shots = path.join(__dirname, '..', 'docs', 'screenshots', 'saas');
 fs.mkdirSync(shots, { recursive: true });
 
@@ -22,7 +22,7 @@ const getJson = async (url, headers = {}) => { const r = await fetch(base + url,
 async function startServer() {
   const child = spawn(process.execPath, ['server/index.js'], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PORT: String(PORT), PGLITE_DIR: ':memory:', COOKIE_SECURE: 'false', SUPERADMIN_EMAIL: SUPER.email, SUPERADMIN_PASSWORD_HASH: hashPassword(SUPER.password) },
+    env: { ...process.env, PORT: String(PORT), ...(process.env.TEST_DATABASE_URL ? { DATABASE_URL: process.env.TEST_DATABASE_URL, DB_POOL_MAX: '3' } : { PGLITE_DIR: ':memory:' }), COOKIE_SECURE: 'false', SUPERADMIN_EMAIL: '', SUPERADMIN_PASSWORD_HASH: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -78,13 +78,40 @@ async function storefrontMatchesDatabase(page, prefix, label) {
     await sa.goto(`${base}/super-admin`, { waitUntil: 'domcontentloaded' });
     await sa.getByTestId('sa-email').waitFor({ timeout: 45000 });
     await shot(sa, '02-super-admin-login');
+    // Wrong password first, then the factory login (superadmin / superadmin) that exists with no configuration at all.
+    await sa.getByTestId('sa-email').fill(FACTORY.email);
+    await sa.getByTestId('sa-password').fill('not-the-password');
+    await sa.getByTestId('sa-signin').click();
+    await sa.getByTestId('sa-error').waitFor({ timeout: 20000 });
+    await sa.getByTestId('sa-password').fill(FACTORY.password);
+    await sa.getByTestId('sa-signin').click();
+    await sa.getByTestId('sa-shell').waitFor({ timeout: 20000 });
+    await sa.getByTestId('kpi-tenants').waitFor({ timeout: 30000 });
+    assert.equal((await sa.getByTestId('kpi-tenants').innerText()).trim(), '1', 'registry holds only the default tenant');
+    await sa.getByTestId('sa-default-warning').waitFor({ timeout: 10000 });
+    await shot(sa, '03-super-admin-overview');
+
+    // 2b) Settings: choose your own e-mail and password; the factory login stops working, the new one works after a reload.
+    await sa.getByTestId('sa-nav-settings').click();
+    await sa.getByTestId('sa-set-email').waitFor({ timeout: 20000 });
+    await shot(sa, '03b-super-admin-settings-factory');
+    await sa.getByTestId('sa-set-email').fill(SUPER.email);
+    await sa.getByTestId('sa-set-current').fill(FACTORY.password);
+    await sa.getByTestId('sa-set-new').fill(SUPER.password);
+    await sa.getByTestId('sa-set-again').fill(SUPER.password);
+    await sa.getByTestId('sa-set-save').click();
+    await sa.getByTestId('sa-set-saved').waitFor({ timeout: 20000 });
+    await shot(sa, '03c-super-admin-settings-saved');
+    assert.equal(await sa.getByTestId('sa-default-warning').count(), 0, 'factory-login banner is gone');
+    const factoryAgain = await fetch(`${base}/api/super-admin/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(FACTORY) });
+    assert.equal(factoryAgain.status, 401, 'the factory login no longer works');
+    await sa.getByTestId('sa-signout').click();
+    await sa.getByTestId('sa-email').waitFor({ timeout: 20000 });
     await sa.getByTestId('sa-email').fill(SUPER.email);
     await sa.getByTestId('sa-password').fill(SUPER.password);
     await sa.getByTestId('sa-signin').click();
     await sa.getByTestId('sa-shell').waitFor({ timeout: 20000 });
     await sa.getByTestId('kpi-tenants').waitFor({ timeout: 30000 });
-    assert.equal((await sa.getByTestId('kpi-tenants').innerText()).trim(), '1', 'registry holds only the default tenant');
-    await shot(sa, '03-super-admin-overview');
 
     // 3) Create a tenant through the UI; the generated password is shown once.
     await sa.getByTestId('sa-nav-tenants').click();
