@@ -80,7 +80,7 @@ function read(k){try{var v=L.getItem((window.__DWIRA_PFX||'dwira:v1:')+k);return
 var lang=read('lang'),local=read('local'),admin=!!(local&&local.adminSession);
 pre(W.icons,'font');pre(lang==='fr'?W.fr:W.ar,'font');
 var RT=window.__DWIRA_ROUTE||location.pathname,AB=window.__DWIRA_BASE__?'/'+window.__DWIRA_BASE__:'';
-if(!/^\\/api\\//.test(RT)){
+if(!/^\\/api\\//.test(RT)&&!/^\\/super-admin(\\/|$)/.test(RT)){
 var e=window.__dwiraEarly={admin:admin};
 e.promise=fetch(AB+'/api/content'+(admin?'?a=1':''),{credentials:'include'}).then(function(r){
 if(!r.ok||(r.headers.get('content-type')||'').indexOf('application/json')<0)return null;return r.json()}).then(function(s){
