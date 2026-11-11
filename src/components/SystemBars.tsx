@@ -4,6 +4,7 @@ import * as SystemUI from 'expo-system-ui';
 import { NavigationBar } from 'expo-navigation-bar';
 import { useTheme } from '@/theme/ThemeProvider';
 import { luminance } from '@/theme/color';
+import { storagePrefix } from '@/lib/tenant';
 
 /**
  * Status bar + Android navigation bar follow the app background chosen by the admin (theme stored in the database),
@@ -28,7 +29,7 @@ export function SystemBars() {
       let meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
       if (!meta) { meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); }
       meta.content = colors.bg;
-      try { localStorage.setItem('dwira:v1:bar-color', colors.bg); } catch { /* private mode */ }
+      try { localStorage.setItem(`${storagePrefix()}bar-color`, colors.bg); } catch { /* private mode */ }
     }
     return () => sub?.remove();
   }, [colors.bg, lightIcons]);

@@ -76,17 +76,18 @@ if (fs.existsSync(shell)) {
     const script = `(function(){try{
 var d=document,h=d.head,L=localStorage,W=${JSON.stringify(wanted)};
 function pre(href,as,extra){if(!href)return;var l=d.createElement('link');l.rel='preload';l.as=as;l.href=href;if(as==='font'){l.type='font/woff2';l.crossOrigin='anonymous'}if(extra)for(var k in extra)l.setAttribute(k,extra[k]);h.appendChild(l)}
-function read(k){try{var v=L.getItem('dwira:v1:'+k);return v?JSON.parse(v):null}catch(e){return null}}
+function read(k){try{var v=L.getItem((window.__DWIRA_PFX||'dwira:v1:')+k);return v?JSON.parse(v):null}catch(e){return null}}
 var lang=read('lang'),local=read('local'),admin=!!(local&&local.adminSession);
 pre(W.icons,'font');pre(lang==='fr'?W.fr:W.ar,'font');
-if(!/^\\/api\\//.test(location.pathname)){
+var RT=window.__DWIRA_ROUTE||location.pathname,AB=window.__DWIRA_BASE__?'/'+window.__DWIRA_BASE__:'';
+if(!/^\\/api\\//.test(RT)){
 var e=window.__dwiraEarly={admin:admin};
-e.promise=fetch('/api/content'+(admin?'?a=1':''),{credentials:'include'}).then(function(r){
+e.promise=fetch(AB+'/api/content'+(admin?'?a=1':''),{credentials:'include'}).then(function(r){
 if(!r.ok||(r.headers.get('content-type')||'').indexOf('application/json')<0)return null;return r.json()}).then(function(s){
 e.value=s;
 try{var tools=((s.collections||{}).tools||[]).filter(function(t){return t.visible}).sort(function(a,b){return(a.order||0)-(b.order||0)});
-var home=location.pathname==='/'||location.pathname==='';for(var i=0;home&&i<2&&i<tools.length;i++){var m=tools[i].media,u=m&&(m.type==='video'?m.poster:m.uri);
-if(u&&/^https?:|^\\//.test(u))pre(u,'image',{fetchpriority:'high'})}
+var home=RT==='/'||RT==='';for(var i=0;home&&i<2&&i<tools.length;i++){var m=tools[i].media,u=m&&(m.type==='video'?m.poster:m.uri);
+if(u&&/^https?:|^\\//.test(u))pre(AB&&u.indexOf('/api/media/')===0?AB+u:u,'image',{fetchpriority:'high'})}
 var st=(s.docs||{}).settings||{},B=window.__dwiraBoot;
 if(B&&B.apply){var c={enabled:st.loaderEnabled!==false,style:st.loaderStyle||'ring',uri:st.loaderCustomUri||'',anim:st.loaderCustomAnim||'none',delayMs:+st.loaderDelayMs||0};if(/^#[0-9a-fA-F]{6}$/.test(st.loaderColor||''))c.color=st.loaderColor;B.apply(c)}}catch(x){}
 return s}).catch(function(){return null})}
@@ -104,7 +105,7 @@ return s}).catch(function(){return null})}
     // Root + tab layouts are needed by every start page; the Home screen chunk only on Home (avoids "preloaded but not used").
     const homeChunk = routeChunks.find((href) => /\/index-[^/]+\.js$/.test(href));
     const chunkTags = routeChunks.filter((href) => href !== homeChunk).map((href) => `<link rel="preload" as="script" href="${href}">`).join('')
-      + (homeChunk ? `<script>if(location.pathname==='/'){var l=document.createElement('link');l.rel='preload';l.as='script';l.href=${JSON.stringify(homeChunk)};document.head.appendChild(l)}</script>` : '');
+      + (homeChunk ? `<script>if((window.__DWIRA_ROUTE||location.pathname)==='/'){var l=document.createElement('link');l.rel='preload';l.as='script';l.href=${JSON.stringify(homeChunk)};document.head.appendChild(l)}</script>` : '');
     console.log(`[postexport] preloading ${routeChunks.length}/${markers.length} Home route chunk(s)`);
     // Every other screen is its own lazy chunk (asyncRoutes). Left alone, each is downloaded the first time a page is opened, which is
     // the multi-second blank on a slow link. Once the first screen is up and the browser is idle they are fetched at the lowest priority
@@ -112,7 +113,7 @@ return s}).catch(function(){return null})}
     const allChunks = fs.existsSync(jsDir) ? fs.readdirSync(jsDir).filter((f) => f.endsWith('.js') && !f.startsWith('entry-') && !routeChunks.includes(`/_expo/static/js/web/${f}`)).map((f) => `/_expo/static/js/web/${f}`) : [];
     const adminChunks = fs.existsSync(jsDir) ? allChunks.filter((href) => /\/(\[entity\]|admin|branding|chats|credits|interface|notifications|requests|theme|users|assistant)-/.test(href) && fs.readFileSync(path.join(dist, href), 'utf8').length > 0) : [];
     const userChunks = allChunks.filter((href) => !adminChunks.includes(href));
-    const prefetchScript = `(function(){try{var c=navigator.connection;if(c&&(c.saveData||/(^|-)2g$/.test(c.effectiveType||'')))return;var U=${JSON.stringify(userChunks)},A=${JSON.stringify(adminChunks)};var all=location.pathname.indexOf('/admin')===0?A.concat(U):U;`
+    const prefetchScript = `(function(){try{var c=navigator.connection;if(c&&(c.saveData||/(^|-)2g$/.test(c.effectiveType||'')))return;var U=${JSON.stringify(userChunks)},A=${JSON.stringify(adminChunks)};var all=(window.__DWIRA_ROUTE||location.pathname).indexOf('/admin')===0?A.concat(U):U;`
       + `function go(){var i=0;(function next(){if(i>=all.length)return;var l=document.createElement('link');l.rel='prefetch';l.as='script';l.href=all[i++];document.head.appendChild(l);setTimeout(next,60)})()}`
       + `function idle(){(window.requestIdleCallback||function(f){setTimeout(f,1500)})(go,{timeout:4000})}`
       + `if(document.readyState==='complete')idle();else addEventListener('load',idle)}catch(e){}})();`;
@@ -120,9 +121,10 @@ return s}).catch(function(){return null})}
     // Startup loader (admin: Interface > Loading screen): pure HTML/SVG/CSS, painted with the first bytes of the page.
     const loader = require('../src/lib/loaderShell.js');
     const loaderDefaults = { enabled: true, style: 'ring', color: '#111111', bg: '#FFFFFF', uri: '', anim: 'none', delayMs: 0 };
+    const tenantHead = `<script>${require('../src/lib/tenantPath.js').shellScript()}</script>`;
     const loaderHead = `<style id="dwira-boot-css">${loader.CSS}</style><script>${loader.headScript(loaderDefaults)}</script>`;
     html = html.replace(/<body([^>]*)>/, (tag) => tag + loader.BODY);
-    const tags = `${loaderHead}<link rel="preconnect" href="https://images.unsplash.com" crossorigin>${chunkTags}<script>${script.replace(/\n/g, '')}</script><script>${prefetchScript}</script>`;
+    const tags = `${tenantHead}${loaderHead}<link rel="preconnect" href="https://images.unsplash.com" crossorigin>${chunkTags}<script>${script.replace(/\n/g, '')}</script><script>${prefetchScript}</script>`;
     // First in <head>: earlier than the stylesheet and the (deferred) bundle scripts.
     html = html.replace('<head>', '<head>' + tags);
     fs.writeFileSync(shell, html);

@@ -20,13 +20,13 @@ function createContent(db, sync, mediaOptions = {}) {
    */
   let seeded;
   const ensureSeed = () => seeded ||= (async () => {
-    if ((await db.query("SELECT 1 FROM settings WHERE key='content_seeded'"))[0]) return;
+    if ((await db.query("SELECT 1 FROM settings WHERE tenant_id=:tenant AND key='content_seeded'"))[0]) return;
     const seed = loadSeed(), now = Date.now();
     await db.tx(async q => {
-      const claimed = await q("INSERT INTO settings(key,value) VALUES('content_seeded',$1) ON CONFLICT (key) DO NOTHING RETURNING key", [String(now)]);
+      const claimed = await q("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,'content_seeded',$1) ON CONFLICT (tenant_id,key) DO NOTHING RETURNING key", [String(now)]);
       if (!claimed.length) return;
-      for (const [coll, rows] of Object.entries(seed.collections)) for (const row of rows) await q('INSERT INTO content_items(coll,id,data,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [coll, row.id, JSON.stringify(row), now]);
-      for (const [name, doc] of Object.entries(seed.docs)) await q('INSERT INTO content_docs(name,data,updated_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [name, JSON.stringify(doc), now]);
+      for (const [coll, rows] of Object.entries(seed.collections)) for (const row of rows) await q('INSERT INTO content_items(tenant_id,coll,id,data,updated_at) VALUES(:tenant,$1,$2,$3,$4) ON CONFLICT DO NOTHING', [coll, row.id, JSON.stringify(row), now]);
+      for (const [name, doc] of Object.entries(seed.docs)) await q('INSERT INTO content_docs(tenant_id,name,data,updated_at) VALUES(:tenant,$1,$2,$3) ON CONFLICT DO NOTHING', [name, JSON.stringify(doc), now]);
     });
   })().then(migrateMedia).catch(error => { seeded = undefined; throw error; });
 
@@ -37,7 +37,7 @@ function createContent(db, sync, mediaOptions = {}) {
    */
   const media = createMedia(db, mediaOptions);
   async function migrateMedia() {
-    if ((await db.query("SELECT 1 FROM settings WHERE key='media_migrated_v2'"))[0]) return;
+    if ((await db.query("SELECT 1 FROM settings WHERE tenant_id=:tenant AND key='media_migrated_v2'"))[0]) return;
     let moved = 0, failed = 0;
     const move = async (data, save) => {
       try {
@@ -45,10 +45,10 @@ function createContent(db, sync, mediaOptions = {}) {
         if (changed) { await save(JSON.stringify(value)); moved++; }
       } catch { failed++; }
     };
-    for (const row of await db.query("SELECT coll,id,data FROM content_items WHERE data LIKE '%data:%;base64,%'")) await move(row.data, data => db.query('UPDATE content_items SET data=$1 WHERE coll=$2 AND id=$3', [data, row.coll, row.id]));
-    for (const row of await db.query("SELECT name,data FROM content_docs WHERE data LIKE '%data:%;base64,%'")) await move(row.data, data => db.query('UPDATE content_docs SET data=$1 WHERE name=$2', [data, row.name]));
+    for (const row of await db.query("SELECT coll,id,data FROM content_items WHERE tenant_id=:tenant AND data LIKE '%data:%;base64,%'")) await move(row.data, data => db.query('UPDATE content_items SET data=$1 WHERE tenant_id=:tenant AND coll=$2 AND id=$3', [data, row.coll, row.id]));
+    for (const row of await db.query("SELECT name,data FROM content_docs WHERE tenant_id=:tenant AND data LIKE '%data:%;base64,%'")) await move(row.data, data => db.query('UPDATE content_docs SET data=$1 WHERE tenant_id=:tenant AND name=$2', [data, row.name]));
     if (failed) console.warn(`Media migration: ${failed} content row(s) could not be moved yet`);
-    else await db.query("INSERT INTO settings(key,value) VALUES('media_migrated_v2',$1) ON CONFLICT (key) DO NOTHING", [String(Date.now())]);
+    else await db.query("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,'media_migrated_v2',$1) ON CONFLICT (tenant_id,key) DO NOTHING", [String(Date.now())]);
     if (moved) await sync.bump('content');
   }
   /** Strings already stored in a row (external URLs among them are not re-downloaded on every save). */
@@ -77,7 +77,7 @@ function createContent(db, sync, mediaOptions = {}) {
     // Concurrent callers on the same version share one set of reads.
     if (building?.version === version) return building.promise;
     const promise = (async () => {
-      const [itemRows, docRows] = await Promise.all([db.query('SELECT coll,data FROM content_items'), db.query('SELECT name,data FROM content_docs')]);
+      const [itemRows, docRows] = await Promise.all([db.query('SELECT coll,data FROM content_items WHERE tenant_id=:tenant'), db.query('SELECT name,data FROM content_docs WHERE tenant_id=:tenant')]);
       const items = Object.fromEntries(COLLECTIONS.map(name => [name, []]));
       for (const row of itemRows) if (items[row.coll]) items[row.coll].push(JSON.parse(row.data));
       const docs = {};
@@ -102,11 +102,11 @@ function createContent(db, sync, mediaOptions = {}) {
     if (!ID.test(id)) throw fail(400, 'Invalid id');
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail(400, 'Invalid item');
     await ensureSeed();
-    const oldRow = (await db.query('SELECT data FROM content_items WHERE coll=$1 AND id=$2', [coll, id]))[0];
+    const oldRow = (await db.query('SELECT data FROM content_items WHERE tenant_id=:tenant AND coll=$1 AND id=$2', [coll, id]))[0];
     const old = oldRow ? JSON.parse(oldRow.data) : undefined;
     const item = { ...(await media.externalize(body, { known: strings(old) })).value, id };
     if (coll === 'models' && item.apiKey === undefined && old) item.apiKey = old.apiKey ?? '';
-    await db.query('INSERT INTO content_items(coll,id,data,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT (coll,id) DO UPDATE SET data=EXCLUDED.data, updated_at=EXCLUDED.updated_at', [coll, id, JSON.stringify(item), Date.now()]);
+    await db.query('INSERT INTO content_items(tenant_id,coll,id,data,updated_at) VALUES(:tenant,$1,$2,$3,$4) ON CONFLICT (tenant_id,coll,id) DO UPDATE SET data=EXCLUDED.data, updated_at=EXCLUDED.updated_at', [coll, id, JSON.stringify(item), Date.now()]);
     await sync.bump('content');
     return item;
   }
@@ -114,7 +114,7 @@ function createContent(db, sync, mediaOptions = {}) {
     if (!COLLECTIONS.includes(coll)) throw fail(404, 'Unknown collection');
     if (!Array.isArray(ids) || ids.length > 500 || ids.some(id => typeof id !== 'string' || !ID.test(id))) throw fail(400, 'Invalid ids');
     await ensureSeed();
-    for (const id of ids) await db.query('DELETE FROM content_items WHERE coll=$1 AND id=$2', [coll, id]);
+    for (const id of ids) await db.query('DELETE FROM content_items WHERE tenant_id=:tenant AND coll=$1 AND id=$2', [coll, id]);
     await sync.bump('content');
   }
   async function patchDoc(name, patch) {
@@ -123,12 +123,12 @@ function createContent(db, sync, mediaOptions = {}) {
     // The demo messages of the assistant are validated here, so a broken or oversized list can never reach the customers' chat.
     if (name === 'assistant' && patch.demo !== undefined) patch = { ...patch, demo: cleanDemo(patch.demo) };
     await ensureSeed();
-    const current = (await db.query('SELECT data FROM content_docs WHERE name=$1', [name]))[0];
+    const current = (await db.query('SELECT data FROM content_docs WHERE tenant_id=:tenant AND name=$1', [name]))[0];
     const clean = (await media.externalize(patch, { known: strings(current && JSON.parse(current.data)) })).value; // outside the transaction: it writes media rows itself
     const next = await db.tx(async q => {
-      const row = (await q('SELECT data FROM content_docs WHERE name=$1 FOR UPDATE', [name]))[0];
+      const row = (await q('SELECT data FROM content_docs WHERE tenant_id=:tenant AND name=$1 FOR UPDATE', [name]))[0];
       const merged = { ...(row ? JSON.parse(row.data) : {}), ...clean };
-      await q('INSERT INTO content_docs(name,data,updated_at) VALUES($1,$2,$3) ON CONFLICT (name) DO UPDATE SET data=EXCLUDED.data, updated_at=EXCLUDED.updated_at', [name, JSON.stringify(merged), Date.now()]);
+      await q('INSERT INTO content_docs(tenant_id,name,data,updated_at) VALUES(:tenant,$1,$2,$3) ON CONFLICT (tenant_id,name) DO UPDATE SET data=EXCLUDED.data, updated_at=EXCLUDED.updated_at', [name, JSON.stringify(merged), Date.now()]);
       return merged;
     });
     await sync.bump('content');
@@ -163,22 +163,22 @@ function createContent(db, sync, mediaOptions = {}) {
     if (input.studioPresets !== undefined) out.studioPresets = cleanStudioPresets(input.studioPresets);
     return out;
   }
-  const adminPrefs = async adminId => JSON.parse((await db.query('SELECT data FROM admin_prefs WHERE admin_id=$1', [adminId]))[0]?.data || '{}');
-  const clientPrefs = async clientId => JSON.parse((await db.query('SELECT prefs FROM clients WHERE id=$1', [clientId]))[0]?.prefs || '{}');
+  const adminPrefs = async adminId => JSON.parse((await db.query('SELECT data FROM admin_prefs WHERE tenant_id=:tenant AND admin_id=$1', [adminId]))[0]?.data || '{}');
+  const clientPrefs = async clientId => JSON.parse((await db.query('SELECT prefs FROM clients WHERE tenant_id=:tenant AND id=$1', [clientId]))[0]?.prefs || '{}');
   async function setAdminPrefs(adminId, patch) {
     const clean = cleanPrefs(patch);
     const next = { ...(await adminPrefs(adminId)), ...clean };
-    await db.query('INSERT INTO admin_prefs(admin_id,data) VALUES($1,$2) ON CONFLICT (admin_id) DO UPDATE SET data=EXCLUDED.data', [adminId, JSON.stringify(next)]);
+    await db.query('INSERT INTO admin_prefs(tenant_id,admin_id,data) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,admin_id) DO UPDATE SET data=EXCLUDED.data', [adminId, JSON.stringify(next)]);
     await sync.bump(`a:${adminId}`);
     return next;
   }
   async function setClientPrefs(clientId, patch) {
     const clean = cleanPrefs(patch);
     const next = await db.tx(async q => {
-      const row = (await q('SELECT prefs FROM clients WHERE id=$1 FOR UPDATE', [clientId]))[0];
+      const row = (await q('SELECT prefs FROM clients WHERE tenant_id=:tenant AND id=$1 FOR UPDATE', [clientId]))[0];
       if (!row) throw fail(404, 'NOT_FOUND');
       const merged = { ...JSON.parse(row.prefs || '{}'), ...clean };
-      await q('UPDATE clients SET prefs=$1 WHERE id=$2', [JSON.stringify(merged), clientId]);
+      await q('UPDATE clients SET prefs=$1 WHERE tenant_id=:tenant AND id=$2', [JSON.stringify(merged), clientId]);
       return merged;
     });
     await sync.bump(`c:${clientId}`);

@@ -23,18 +23,18 @@ function createAssistant(db, { chat, content, clock = Date.now } = {}) {
   async function getList() {
     if (listCache.value && clock() - listCache.at < 5000) return listCache.value;
     let value = [];
-    try { const row = (await db.query('SELECT value FROM settings WHERE key=$1', [LIST_KEY]))[0]; if (row) value = JSON.parse(row.value); } catch { /* none yet */ }
+    try { const row = (await db.query('SELECT value FROM settings WHERE tenant_id=:tenant AND key=$1', [LIST_KEY]))[0]; if (row) value = JSON.parse(row.value); } catch { /* none yet */ }
     listCache = { at: clock(), value };
     return value;
   }
   const bump = async name => {
     try {
-      await db.query("INSERT INTO settings(key,value) VALUES($1,'1') ON CONFLICT (key) DO UPDATE SET value=((settings.value)::bigint+1)::text", [`asst_n:${name}`]);
-      if (name.startsWith('auto:')) await db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [`asst_t:${name.slice(5)}`, String(clock())]);
+      await db.query("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,'1') ON CONFLICT (tenant_id,key) DO UPDATE SET value=((settings.value)::bigint+1)::text", [`asst_n:${name}`]);
+      if (name.startsWith('auto:')) await db.query('INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value', [`asst_t:${name.slice(5)}`, String(clock())]);
     } catch { /* a counter must never break a reply */ }
   };
   async function counts() {
-    const rows = await db.query("SELECT key, value FROM settings WHERE key LIKE 'asst_n:%' OR key LIKE 'asst_t:%'");
+    const rows = await db.query("SELECT key, value FROM settings WHERE tenant_id=:tenant AND (key LIKE 'asst_n:%' OR key LIKE 'asst_t:%')");
     const n = {}, t = {};
     for (const row of rows) { if (row.key.startsWith('asst_n:')) n[row.key.slice(7)] = Number(row.value) || 0; else t[row.key.slice(7)] = Number(row.value) || 0; }
     return { n, t };
@@ -63,9 +63,9 @@ function createAssistant(db, { chat, content, clock = Date.now } = {}) {
       const same = before && JSON.stringify({ ...before, updatedAt: 0 }) === JSON.stringify({ ...item, createdAt: before.createdAt, updatedAt: 0 });
       return before ? { ...item, createdAt: before.createdAt, updatedAt: same ? before.updatedAt : now } : { ...item, createdAt: now, updatedAt: now };
     });
-    await db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [LIST_KEY, JSON.stringify(next)]);
+    await db.query('INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value', [LIST_KEY, JSON.stringify(next)]);
     listCache = { at: clock(), value: next };
-    for (const item of old) if (!next.some(n => n.id === item.id)) await db.query('DELETE FROM settings WHERE key=$1 OR key=$2', [`asst_n:auto:${item.id}`, `asst_t:${item.id}`]);
+    for (const item of old) if (!next.some(n => n.id === item.id)) await db.query('DELETE FROM settings WHERE tenant_id=:tenant AND (key=$1 OR key=$2)', [`asst_n:auto:${item.id}`, `asst_t:${item.id}`]);
     return overview();
   }
   /** Public: the quick-reply buttons of the chat (labels only, never the replies). */

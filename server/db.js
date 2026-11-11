@@ -70,10 +70,63 @@ CREATE TABLE IF NOT EXISTS admin_accounts (
   admin_id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
   avatar TEXT NOT NULL DEFAULT '', pw_hash TEXT, pw_changed_at BIGINT, credits INTEGER, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, last_login_at BIGINT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS admin_accounts_email ON admin_accounts(lower(email)) WHERE email <> '';
+-- (the e-mail uniqueness of admin accounts is per tenant, see SCHEMA_MT)
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS created_at BIGINT;
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS ua TEXT;
 `;
+
+/**
+ * Multi-tenant layer (docs/MULTI_TENANT_PLAN.md). Runs right after SCHEMA and is idempotent.
+ *  - Every tenant-owned table gets `tenant_id TEXT NOT NULL DEFAULT 'default'`: existing rows therefore ARE the default tenant, no data copy.
+ *    (The DEFAULT is the "expand" half of expand/contract: it keeps a previous release, still running during a rolling deploy, writing valid
+ *    rows. Tenant code always writes tenant_id explicitly through scopeDb; the DEFAULT is dropped in a later release.)
+ *  - Keys that were global become per tenant (a phone number, a content id or a settings key may exist in two tenants).
+ *  - `saas_*` tables are the platform's own (tenants, domains, super admin, demos, requests, audit) and are never read by tenant code.
+ */
+const TENANT_TABLES = ['clients', 'user_sessions', 'claims', 'space', 'admin_sessions', 'requests', 'subscriptions', 'outbox', 'settings', 'content_items', 'content_docs', 'admin_prefs', 'sync_state', 'media', 'guest_chats', 'campaigns', 'campaign_deliveries', 'admin_accounts'];
+/** Tables whose primary key becomes tenant-scoped. (Tables keyed by a server-generated UUID keep their key: ids stay globally unique.) */
+const TENANT_KEYS = { claims: 'tenant_id,id', space: 'tenant_id,id', guest_chats: 'tenant_id,id', content_items: 'tenant_id,coll,id', content_docs: 'tenant_id,name', settings: 'tenant_id,key', sync_state: 'tenant_id,key', admin_accounts: 'tenant_id,admin_id', admin_prefs: 'tenant_id,admin_id', subscriptions: 'tenant_id,id', media: 'tenant_id,id', outbox: 'tenant_id,request_id' };
+const rekey = (table, cols) => `DO $mt$ DECLARE c text; BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey) WHERE i.indrelid='${table}'::regclass AND i.indisprimary AND a.attname='tenant_id') THEN
+    SELECT conname INTO c FROM pg_constraint WHERE conrelid='${table}'::regclass AND contype='p';
+    EXECUTE format('ALTER TABLE ${table} DROP CONSTRAINT %I', c);
+    ALTER TABLE ${table} ADD PRIMARY KEY (${cols});
+  END IF;
+END $mt$;`;
+const SCHEMA_MT = `
+${TENANT_TABLES.map(t => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';`).join('\n')}
+${Object.entries(TENANT_KEYS).map(([t, cols]) => rekey(t, cols)).join('\n')}
+ALTER TABLE clients DROP CONSTRAINT IF EXISTS clients_phone_key;
+CREATE UNIQUE INDEX IF NOT EXISTS clients_tenant_phone ON clients(tenant_id, phone);
+DROP INDEX IF EXISTS admin_accounts_email;
+CREATE UNIQUE INDEX IF NOT EXISTS admin_accounts_tenant_email ON admin_accounts(tenant_id, lower(email)) WHERE email <> '';
+CREATE INDEX IF NOT EXISTS requests_tenant_created ON requests(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS clients_tenant_created ON clients(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS campaigns_tenant_status ON campaigns(tenant_id, status, next_at);
+CREATE INDEX IF NOT EXISTS outbox_due ON outbox(next_at);
+CREATE INDEX IF NOT EXISTS user_sessions_tenant ON user_sessions(tenant_id);
+CREATE INDEX IF NOT EXISTS admin_sessions_tenant ON admin_sessions(tenant_id, admin_id);
+
+CREATE TABLE IF NOT EXISTS saas_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS saas_tenants (
+  id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'instance', status TEXT NOT NULL DEFAULT 'active',
+  plan TEXT NOT NULL DEFAULT '', owner_email TEXT NOT NULL DEFAULT '', source_demo_id TEXT, source_demo_version BIGINT, notes TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, suspended_at BIGINT
+);
+CREATE TABLE IF NOT EXISTS saas_domains (domain TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, token TEXT NOT NULL, verified_at BIGINT, created_at BIGINT NOT NULL);
+CREATE INDEX IF NOT EXISTS saas_domains_tenant ON saas_domains(tenant_id);
+CREATE TABLE IF NOT EXISTS saas_super (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', pw_hash TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, last_login_at BIGINT);
+CREATE TABLE IF NOT EXISTS saas_super_sessions (token_hash TEXT PRIMARY KEY, super_id TEXT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, ua TEXT);
+CREATE TABLE IF NOT EXISTS saas_demos (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', tenant_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'draft', version BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS saas_assignments (id TEXT PRIMARY KEY, demo_id TEXT NOT NULL, tenant_id TEXT NOT NULL UNIQUE, owner_email TEXT NOT NULL DEFAULT '', demo_version BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, created_by TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS saas_assignments_demo ON saas_assignments(demo_id);
+CREATE TABLE IF NOT EXISTS saas_requests (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, admin_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'customize', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', response TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
+CREATE INDEX IF NOT EXISTS saas_requests_tenant ON saas_requests(tenant_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS saas_audit (id TEXT PRIMARY KEY, at BIGINT NOT NULL, actor TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, tenant_id TEXT, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS saas_audit_at ON saas_audit(at DESC);
+INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
+`;
+const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_requests', 'saas_audit'];
 
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 /** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */
@@ -117,20 +170,20 @@ async function openLite(dataDir) {
 }
 
 /**
- * Marker row written after the schema was applied. Its value is a hash of SCHEMA, so editing the schema above makes the
+ * Marker row (platform table saas_kv, so it belongs to no tenant) written after the schema was applied. Its value is a hash of SCHEMA + SCHEMA_MT, so editing the schema above makes the
  * next start re-apply it once, while every other cold start only pays for ONE cheap SELECT instead of ~40 DDL statements
  * (each of which takes a lock on a database that may have just woken up).
  */
-const SCHEMA_VERSION = crypto.createHash('sha1').update(SCHEMA).digest('hex').slice(0, 12);
+const SCHEMA_VERSION = crypto.createHash('sha1').update(SCHEMA + SCHEMA_MT).digest('hex').slice(0, 12);
 /**
  * `migrationUrl` (DATABASE_URL_UNPOOLED, optional): the schema DDL then runs once over a short-lived direct connection, which
  * is what Neon recommends for migrations (its pooler runs PgBouncer in transaction mode). Normal queries stay on the pooled URL.
  */
 async function ensureSchema(db, migrationUrl) {
   try {
-    const marker = (await db.query("SELECT value FROM settings WHERE key='schema_version'"))[0];
+    const marker = (await db.query("SELECT value FROM saas_kv WHERE key='schema_version'"))[0];
     if (marker?.value === SCHEMA_VERSION) return;
-  } catch { /* no settings table yet: fresh database */ }
+  } catch { /* no saas_kv table yet: fresh database, or one created before multi-tenancy */ }
   if (migrationUrl) {
     const { Client } = require('pg');
     const direct = new Client({ connectionString: migrationUrl, connectionTimeoutMillis: 10000, ssl: isLocal(migrationUrl) ? false : { rejectUnauthorized: false } });
@@ -138,12 +191,14 @@ async function ensureSchema(db, migrationUrl) {
     await direct.connect();
     try {
       await direct.query(SCHEMA);
-      await direct.query("INSERT INTO settings(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+      await direct.query(SCHEMA_MT);
+      await direct.query("INSERT INTO saas_kv(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
     } finally { await direct.end().catch(() => {}); }
     return;
   }
   await db.exec(SCHEMA);
-  await db.query("INSERT INTO settings(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
+  await db.exec(SCHEMA_MT);
+  await db.query("INSERT INTO saas_kv(key,value) VALUES('schema_version',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [SCHEMA_VERSION]);
 }
 
 /** Lazily opened and schema-initialised once per process (one cold start on Vercel). */
@@ -168,4 +223,4 @@ function createDb(env = process.env) {
     info: async () => (await open()).kind,
   };
 }
-module.exports = { createDb, connectionString };
+module.exports = { createDb, connectionString, ensureSchema, SCHEMA, SCHEMA_MT, TENANT_TABLES, PLATFORM_TABLES };

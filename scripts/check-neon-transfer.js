@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { Readable } = require('node:stream');
 const { createBackend } = require('../server');
 const { createMedia } = require('../server/media');
+const { scopeDb } = require('../server/scope');
 const { freshDb, closeShared } = require('./test-db');
 
 /** Like the other checks, but keeps raw bodies and status so 304 / HEAD can be asserted. */
@@ -38,7 +39,7 @@ test('media: repeat reads of a database-stored file touch the database for metad
   const { backend, db } = await setup();
   try {
     const bytes = png(60 * 1024);
-    const url = await createMedia(db, { env: {}, storage: null, download: offline }).storeMedia({ body: bytes, mime: 'image/png' });
+    const url = await createMedia(scopeDb(db, 'default'), { env: {}, storage: null, download: offline }).storeMedia({ body: bytes, mime: 'image/png' });
     const first = await call(backend, url);
     assert.equal(first.status, 200);
     assert.equal(Buffer.from(first.raw).length, bytes.length);
@@ -60,7 +61,7 @@ test('media: repeat reads of a database-stored file touch the database for metad
 test('media: an unsettled or missing file is never served from the cache, and a cold read after restart still works', async () => {
   const { backend, db } = await setup();
   try {
-    const url = await createMedia(db, { env: {}, storage: null, download: offline }).storeMedia({ body: png(2048), mime: 'image/png' });
+    const url = await createMedia(scopeDb(db, 'default'), { env: {}, storage: null, download: offline }).storeMedia({ body: png(2048), mime: 'image/png' });
     assert.equal((await call(backend, url)).status, 200);
     const second = createBackend({ env: { PGLITE_DIR: ':memory:', COOKIE_SECURE: 'false' }, db, media: { storage: null, download: offline } });
     try { assert.equal((await call(second, url)).status, 200); } finally { second.server.emit('close'); }

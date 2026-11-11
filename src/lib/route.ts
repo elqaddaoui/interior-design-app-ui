@@ -1,10 +1,12 @@
 import { Platform } from 'react-native';
+import { stripBase } from '@/lib/tenant';
 
 let current = '';
 /** Kept in sync by the root layout so non-component code (stores, routers) knows where the user is. */
 export const setCurrentPath = (path: string) => { current = path; };
 export const currentPath = (): string => {
-  const raw = Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.pathname : current;
+  // On the web the address bar carries the tenant prefix (/acme/admin); the app's own routes never do.
+  const raw = Platform.OS === 'web' && typeof window !== 'undefined' ? stripBase(window.location.pathname) : current;
   return raw.replace(/\/+$/, '') || '/';
 };
 export const inAdminArea = () => { const path = currentPath(); return path === '/admin' || path.startsWith('/admin/'); };
