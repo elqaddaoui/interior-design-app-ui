@@ -33,7 +33,7 @@ const fr = {
     noResults: 'Aucun résultat',
   },
   tabs: { home: 'Accueil', explore: 'Explorer', history: 'Historique', assistant: 'Assistant' },
-  home: { empty: 'Aucun outil dans cet onglet pour le moment.', all: 'Tout' },
+  home: { empty: 'Aucun outil dans cet onglet pour le moment.', all: 'Tout', offline: 'Impossible de charger le contenu.', offlineHint: 'Vérifiez votre connexion. Nouvelle tentative automatique.', retry: 'Réessayer' },
   explore: { title: 'Explorer', photos: '{{count}} photos', useStyle: 'Utiliser ce style', emptyCat: 'Aucune photo dans cette catégorie.', styleApplied: 'Style appliqué' },
   wizard: {
     step: 'Étape {{n}}/{{total}}',

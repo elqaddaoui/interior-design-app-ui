@@ -4,21 +4,26 @@ const { isIP } = require('node:net');
 const crypto = require('node:crypto');
 const { createDb } = require('./db');
 const { sendBuffer } = require('./compress');
-const { createClients } = require('./clients');
-const { createAdmins, passwordMatches } = require('./admins');
-const { createSync } = require('./sync');
-const { createContent } = require('./content');
+const { passwordMatches } = require('./admins');
+const { createBundles } = require('./bundle');
+const { createTenants } = require('./tenants');
+const { createSuperAdmin } = require('./superadmin');
 const { r2Status } = require('./media');
 const { translate } = require('./translate');
-const { createNotifier, validateSubscription, trim, phone } = require('./notifications');
-const { createCampaigns, cleanCampaign } = require('./campaigns');
-const { createChat } = require('./chat');
-const { createAssistant } = require('./assistant');
+const { validateSubscription, trim, phone } = require('./notifications');
+const { cleanCampaign } = require('./campaigns');
 const knowledge = require('./assistant/knowledge');
-const { createImageGen } = require('./imagegen');
 const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+const DEFAULT_RESOLVED = pathname => ({ tenant: { id: 'default', slug: 'default', name: 'Default', kind: 'default', status: 'active' }, via: 'default', base: '', pathname, platform: true });
+/** The installable web app of a non-default tenant: its own name, and a scope / start_url under its prefix. */
+const tenantManifest = resolved => ({
+  name: resolved.tenant.name, short_name: String(resolved.tenant.name).slice(0, 12), description: resolved.tenant.name,
+  start_url: `${resolved.base}/`, scope: `${resolved.base}/`, display: 'standalone', background_color: '#FFFFFF', theme_color: '#FFFFFF',
+  icons: [{ src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }],
+});
+const MANIFEST_HEADERS = { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'public, max-age=300' };
 const fail = (status, message) => Object.assign(new Error(message), { status });
 async function readBody(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw fail(415, 'JSON required');
@@ -100,20 +105,16 @@ const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve 
  * background, so /api/health answers 503 `database: "starting"` and every other /api route 503 with a clear message.
  * Without it (Vercel, tests) the backend is always ready and behaves exactly as before.
  */
-function createBackend({ env = process.env, db = createDb(env), senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, isReady = () => true } = {}) {
-  const notifier = createNotifier(db, env, senders, { settings: () => content.getDoc('settings') });
-  const clients = createClients(db);
-  // Long-running server: anonymous polls are answered from a 2 s in-memory copy of the versions (local writes invalidate it at once).
-  // Serverless instances keep no cache: each one only sees a fraction of the writes.
-  const sync = createSync(db, { cacheMs: env.VERCEL ? 0 : Math.max(0, Math.min(10000, Number(env.SYNC_CACHE_MS ?? 2000) || 0)) });
-  const content = createContent(db, sync, { env, ...mediaOptions });
-  const media = content.media;
-  const admins = createAdmins(db, { env, sync, media });
-  // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
-  const campaigns = createCampaigns(db, notifier, { sync, settings: () => content.getDoc('settings') });
-  const imagegen = createImageGen(db, { env, media, content, sync, ...(imageFetch ? { fetch: imageFetch } : {}) });
-  const chat = createChat(db, { env, ...(chatFetch ? { fetch: chatFetch } : {}) });
-  const assistant = createAssistant(db, { chat, content });
+function createBackend({ env = process.env, db = createDb(env), dnsResolver, senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, isReady = () => true } = {}) {
+  // `db` is the RAW database: only the tenant registry, the background sweep and the platform tables use it. Every request works on the
+  // modules of ONE tenant (server/bundle.js), each built on a tenant-bound handle (server/scope.js) that cannot read another tenant's rows.
+  const bundles = createBundles({ db, env, senders, media: mediaOptions, chatFetch, imageFetch });
+  const rawDb = db; // `handle` shadows `db` with the tenant-bound handle; the registry check below needs the raw one
+  const tenants = createTenants({ db, env, resolveTxt: dnsResolver });
+  // Platform back office: the only code that touches the saas_* tables with the raw database (server/superadmin.js).
+  const superAdmin = createSuperAdmin({ db: rawDb, env, bundles, tenants });
+  const base = bundles.get('default'); // the original single-tenant app = the default tenant (also what `createBackend()` exposes to tests / scripts)
+  const { notifier, clients, campaigns, chat, assistant } = base;
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
   // Managed hosts (Hostinger) put a reverse proxy on the same machine in front of the app: every request then comes from a
   // loopback address. TRUST_PROXY=true (set automatically by server/start.js on Hostinger) reads the client address the proxy
@@ -145,36 +146,6 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
   // `aiRun` (the full prompt and the models tried) is for the admin; the owner's own app never needs it.
   const publicRow = ({ clientHash: ignored, clientRequestId: ignored2, ...row }, isAdmin = true) => { if (!isAdmin) delete row.aiRun; return row; };
 
-  /** Queue a notification. `kind`: request (new demand -> admins) | lead (new client -> admins) | ready (design delivered -> its owner). */
-  async function enqueue(kind, jobId, payload) {
-    await db.query('INSERT INTO outbox(request_id,attempts,next_at,completed,kind,payload) VALUES($1,0,$2,$3,$4,$5) ON CONFLICT (request_id) DO NOTHING', [jobId, Date.now(), '[]', kind, payload ? JSON.stringify(payload) : null]);
-  }
-  /** Deliver due notification jobs. A short lease stops concurrent instances sending the same job twice. */
-  async function pump(only) {
-    try {
-      const now = Date.now();
-      const due = await db.query(only ? 'SELECT * FROM outbox WHERE request_id=$1 AND next_at<=$2' : 'SELECT * FROM outbox WHERE next_at<=$1 ORDER BY next_at LIMIT 20', only ? [only, now] : [now]);
-      for (const job of due) {
-        const leased = await db.query('UPDATE outbox SET next_at=$1 WHERE request_id=$2 AND next_at=$3 RETURNING request_id', [now + 60000, job.request_id, job.next_at]);
-        if (!leased.length) continue;
-        let item, options;
-        if (job.kind === 'request') {
-          const demand = (await db.query('SELECT data FROM requests WHERE id=$1', [job.request_id]))[0];
-          if (demand) { item = rowOf(demand); options = { event: 'request' }; }
-        } else {
-          const payload = JSON.parse(job.payload || 'null');
-          if (payload) { item = payload; options = { event: job.kind, ...(payload.audience ? { audience: payload.audience } : {}) }; }
-        }
-        if (!item) { await db.query('DELETE FROM outbox WHERE request_id=$1', [job.request_id]); continue; }
-        try {
-          const result = await notifier.deliver(item, JSON.parse(job.completed), options);
-          if (!result.retry || job.attempts >= 6) await db.query('DELETE FROM outbox WHERE request_id=$1', [job.request_id]);
-          else await db.query('UPDATE outbox SET completed=$1, attempts=attempts+1, next_at=$2 WHERE request_id=$3', [JSON.stringify(result.completed), Date.now() + Math.min(3600000, 30000 * 2 ** (job.attempts + 1)), job.request_id]);
-        } catch { console.warn('Notification job deferred'); }
-      }
-    } catch { console.warn('Notification queue temporarily unavailable'); }
-  }
-
   async function handle(req, res) {
     const origin = req.headers.origin;
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -183,13 +154,23 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
     const json = (status, value, extra) => sendBuffer(req, res, status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra }, Buffer.from(JSON.stringify(value)));
     try {
       const url = new URL(req.url, 'http://localhost');
+      // Which tenant is this request for? (server/tenants.js: custom domain -> /slug prefix -> native header -> default tenant.)
+      // The registry cannot be read while the database is still starting or unconfigured: those answers do not depend on a tenant.
+      const resolved = rawDb.configured() && isReady() ? await tenants.resolve(req, url.pathname) : DEFAULT_RESOLVED(url.pathname);
+      url.pathname = resolved.pathname; // from here on every route sees the same path whatever the tenant's URL looks like
+      const apiBase = `${resolved.base}/api`; // where this tenant's API lives for the browser: also the cookie Path
+      // The super admin exists on the platform host only: never under a tenant slug and never on a custom domain.
+      if ((url.pathname === '/super-admin' || url.pathname.startsWith('/super-admin/') || url.pathname.startsWith('/api/super-admin/')) && !resolved.platform) throw fail(404, 'NOT_FOUND');
+      const bundle = bundles.get(resolved.tenant.id);
+      const { content, media, sync, admins, imagegen, enqueue, pump, clients, notifier, campaigns, chat, assistant } = bundle;
+      const db = bundle.db; // tenant-bound: shadows the raw database for everything below
       if (url.pathname.startsWith('/api/')) {
         lastApiAt = Date.now();
         // Same-origin needs no configuration; other origins need an explicit allowlist.
         const sameOrigin = origin && /^https?:\/\//.test(origin) && new URL(origin).host === req.headers.host;
         if (origin && !sameOrigin && !allowedOrigins.includes(origin)) throw fail(403, 'Origin not allowed');
         if (origin) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Access-Control-Allow-Credentials', 'true'); res.setHeader('Vary', 'Origin'); }
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-User-Token, If-None-Match');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-Dwira-Tenant, X-User-Token, X-Super-Token, If-None-Match');
         res.setHeader('Access-Control-Expose-Headers', 'ETag');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -199,6 +180,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           res.setHeader('Retry-After', '5');
           throw fail(503, 'The database is starting up. Please retry in a few seconds.');
         }
+        // The web-app manifest of a tenant under a slug (the shell links to it: /acme/api/manifest.webmanifest).
+        if (url.pathname === '/api/manifest.webmanifest' && req.method === 'GET' && resolved.tenant.id !== 'default') return json(200, tenantManifest(resolved), MANIFEST_HEADERS);
         // Media (images and videos): stable content-addressed /api/media/<hash>.<ext> URLs. Files stored in R2 are a redirect
         // to the public R2 URL (bytes never pass through the function); the database fallback serves the bytes, cached forever.
         // Served before rate limiting: one Home screen can show dozens of them.
@@ -228,8 +211,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           }
           return sendBuffer(req, res, 200, headers, file.body);
         }
-        const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
-        const key = `${address(req)}:${bucketName}`;
+        const bucketName = (url.pathname === '/api/admin/login' || url.pathname === '/api/super-admin/login') ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
+        const key = `${bundle.tenantId}:${address(req)}:${bucketName}`; // one tenant's traffic can never exhaust another's allowance
         const now = Date.now();
         if (buckets.size > 10000) for (const [id, bucket] of buckets) if (bucket.until < now) buckets.delete(id);
         const bucket = buckets.get(key) || { count: 0, until: now + 15 * 60000 };
@@ -250,9 +233,15 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           } catch { database = 'error'; }
           const ok = database !== 'error' && database !== 'missing';
           // media: 'r2' | 'database' (no R2 variables) | 'incomplete' (some missing). Only the mode, never a value.
-          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
+          return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, ...(db.schema?.() ? { isolatedSchema: db.schema() } : {}), media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
         }
         if (!db.configured()) throw fail(503, 'DATABASE_NOT_CONFIGURED');
+
+        // ---- Super admin (platform host only: guarded above, never under a slug or on a custom domain) ----
+        if (url.pathname.startsWith('/api/super-admin/')) {
+          const result = await superAdmin.handle({ req, url, readBody, ip: address(req) });
+          return json(result.status, result.data, { 'Cache-Control': 'private, no-store', ...(result.headers || {}) });
+        }
 
         const rawCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_admin='))?.slice(12);
         const sessionToken = req.headers.authorization?.replace(/^Bearer /, '') || rawCookie;
@@ -261,7 +250,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         // admin panel request with ?a=1) pays for the session query, because only admins may see provider API keys.
         if (url.pathname === '/api/content' && req.method === 'GET') {
           const adminAsked = !!sessionToken || url.searchParams.has('a');
-          const admin = !!sessionToken && !!(await db.query('SELECT 1 FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
+          const admin = !!sessionToken && !!(await db.query('SELECT 1 FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
           // The ETag is the content version (one tiny sync_state read): an unchanged app gets a bodyless 304 and the database is never asked for the snapshot.
           const etag = await content.etag(admin);
           const matches = (req.headers['if-none-match'] || '').split(',').map(value => value.trim()).includes(etag);
@@ -277,7 +266,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           return json(200, snapshot, { 'Cache-Control': cacheControl, ETag: etag });
         }
 
-        const session = sessionToken && (await db.query('SELECT token_hash,admin_id FROM admin_sessions WHERE token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
+        const session = sessionToken && (await db.query('SELECT token_hash,admin_id FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
         const adminId = session?.admin_id;
         const admin = () => { if (!session) throw fail(401, 'Admin login required'); };
         const clientToken = req.headers['x-demand-token'];
@@ -289,7 +278,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         const PARTS = ['conversations', 'history', 'requests'];
         const touch = (id, ...parts) => [`c:${id}`, ...(parts.length ? parts : PARTS).map(part => `c:${id}:${part}`)];
         const requireUser = () => { if (!client) throw fail(401, 'USER_LOGIN_REQUIRED'); if (client.blocked) throw fail(403, 'ACCOUNT_BLOCKED'); return client; };
-        const cookie = (name, token, age) => `${name}=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${age}${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
+        const cookie = (name, token, age) => `${name}=${token}; HttpOnly; SameSite=Strict; Path=${apiBase}; Max-Age=${age}${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
 
         // ---- Client accounts ----
         if (url.pathname === '/api/user/login' && req.method === 'POST') {
@@ -314,7 +303,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           if (env.VERCEL) {
             // Serverless has no background timer (cron is only daily): any open app retries failed notifications and drives
             // scheduled / recurring / automated campaigns (cross-instance throttled to one run per 10 s).
-            const waiting = (await db.query('SELECT 1 FROM outbox WHERE next_at<=$1 LIMIT 1', [now]))[0];
+            const waiting = (await db.query('SELECT 1 FROM outbox WHERE tenant_id=:tenant AND next_at<=$1 LIMIT 1', [now]))[0];
             if (waiting) await withTimeout(pump(), 9000);
             await withTimeout(campaigns.tick({ budgetMs: 6000 }), 8000);
           }
@@ -341,7 +330,7 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         if (url.pathname === '/api/user/requests' && req.method === 'GET') {
           requireUser();
-          return json(200, (await db.query('SELECT data FROM requests WHERE user_id=$1 ORDER BY created_at DESC', [client.id])).map(row => publicRow(rowOf(row), false)));
+          return json(200, (await db.query('SELECT data FROM requests WHERE tenant_id=:tenant AND user_id=$1 ORDER BY created_at DESC', [client.id])).map(row => publicRow(rowOf(row), false)));
         }
         // ---- Visitors: assistant chats without an account or any personal detail, stored under the device token ----
         const guestChat = url.pathname.match(/^\/api\/guest\/conversations(?:\/([A-Za-z0-9_-]{1,100}))?$/);
@@ -632,8 +621,8 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           const identity = typeof body.email === 'string' && typeof body.password === 'string' ? await admins.verify(body.email, body.password) : null;
           if (!identity) throw fail(401, 'Invalid credentials');
           const token = crypto.randomBytes(32).toString('hex');
-          await db.query('DELETE FROM admin_sessions WHERE expires_at<=$1', [now]);
-          await db.query('INSERT INTO admin_sessions(token_hash,expires_at,admin_id,created_at,ua) VALUES($1,$2,$3,$4,$5)', [hash(token), now + 7 * 86400000, identity, now, String(req.headers['user-agent'] || '').slice(0, 300)]);
+          await db.query('DELETE FROM admin_sessions WHERE tenant_id=:tenant AND expires_at<=$1', [now]);
+          await db.query('INSERT INTO admin_sessions(tenant_id,token_hash,expires_at,admin_id,created_at,ua) VALUES(:tenant,$1,$2,$3,$4,$5)', [hash(token), now + 7 * 86400000, identity, now, String(req.headers['user-agent'] || '').slice(0, 300)]);
           await admins.touchLogin(identity);
           res.setHeader('Set-Cookie', cookie('dwira_admin', token, 604800));
           const profile = await admins.get(identity);
@@ -657,9 +646,24 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         const sessionId = url.pathname.match(/^\/api\/admin\/account\/sessions\/([a-f0-9]{16})$/);
         if (sessionId && req.method === 'DELETE') { admin(); await admins.revoke(adminId, sessionId[1], session.token_hash); return json(200, { ok: true }); }
         if (req.method === 'POST' && url.pathname === '/api/admin/logout') {
-          if (session) await db.query('DELETE FROM admin_sessions WHERE token_hash=$1', [session.token_hash]);
+          if (session) await db.query('DELETE FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1', [session.token_hash]);
           res.setHeader('Set-Cookie', cookie('dwira_admin', '', 0));
           return json(200, { ok: true });
+        }
+
+        // ---- This tenant's own change requests to the platform operator (customise / manage / support). The tenant id comes from the
+        // resolved tenant, never from the body, so an administrator can only read and write the requests of their own instance. ----
+        if (url.pathname === '/api/admin/instance' && req.method === 'GET') {
+          admin();
+          const { tenant } = resolved;
+          return json(200, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, status: tenant.status, base: resolved.base });
+        }
+        if (url.pathname === '/api/admin/change-requests') {
+          admin();
+          if (resolved.tenant.kind === 'default' && !resolved.tenant.id) throw fail(404, 'NOT_FOUND');
+          if (req.method === 'GET') return json(200, await superAdmin.requestsOfTenant(resolved.tenant.id));
+          if (req.method === 'POST') return json(201, await superAdmin.submitRequest(resolved.tenant, adminId, await readBody(req)));
+          throw fail(405, 'Method not allowed');
         }
 
         // ---- Notifications for new requests ----
@@ -687,9 +691,16 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         }
         // Retry queue trigger for Vercel Cron (Authorization: Bearer $CRON_SECRET) or an admin session.
         if (url.pathname === '/api/push/pump' && (req.method === 'GET' || req.method === 'POST')) {
-          if (!session && !(env.CRON_SECRET && req.headers.authorization === `Bearer ${env.CRON_SECRET}`)) throw fail(401, 'Admin login required');
-          await withTimeout(pump(), 25000);
-          const ran = await withTimeout(campaigns.tick({ force: true, budgetMs: 20000 }), 25000);
+          const cron = !!env.CRON_SECRET && req.headers.authorization === `Bearer ${env.CRON_SECRET}`;
+          if (!session && !cron) throw fail(401, 'Admin login required');
+          // The platform cron serves every tenant with work due; an administrator's own call only serves their tenant.
+          let ran;
+          for (const id of cron ? await bundles.dueTenants() : [bundle.tenantId]) {
+            const target = bundles.get(id);
+            await withTimeout(target.pump(), 25000);
+            const result = await withTimeout(target.campaigns.tick({ force: true, budgetMs: 20000 }), 25000);
+            if (id === bundle.tenantId || !ran) ran = result;
+          }
           return json(200, { ok: true, campaigns: ran && !ran.skipped ? !!ran.ok : null });
         }
 
@@ -702,12 +713,12 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           await clients.claim(client, body.id);
           // The photo is stored as media (R2 or the database fallback); the request row keeps only its /api/media URL.
           // Skipped for a retry of a request that already exists (idempotent, no duplicate upload work).
-          const known = (await db.query('SELECT 1 FROM requests WHERE user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0];
+          const known = (await db.query('SELECT 1 FROM requests WHERE tenant_id=:tenant AND user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0];
           if (!known) input.photoUri = (await media.externalize({ photoUri: input.photoUri }, { remote: 'report', svg: false })).value.photoUri;
           const request = { ...input, id: crypto.randomUUID(), clientHash, clientRequestId: body.id };
-          const inserted = await db.query('INSERT INTO requests(id,user_id,client_request_id,created_at,data) VALUES($1,$2,$3,$4,$5) ON CONFLICT (user_id, client_request_id) DO NOTHING RETURNING id', [request.id, client.id, body.id, request.createdAt, JSON.stringify(request)]);
+          const inserted = await db.query('INSERT INTO requests(tenant_id,id,user_id,client_request_id,created_at,data) VALUES(:tenant,$1,$2,$3,$4,$5) ON CONFLICT (user_id, client_request_id) DO NOTHING RETURNING id', [request.id, client.id, body.id, request.createdAt, JSON.stringify(request)]);
           if (inserted.length) { await enqueue('request', request.id); await sync.bump('requests', 'clients', ...touch(client.id, 'requests', 'history')); }
-          const stored = rowOf((await db.query('SELECT data FROM requests WHERE user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0]);
+          const stored = rowOf((await db.query('SELECT data FROM requests WHERE tenant_id=:tenant AND user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0]);
           // The demand is already durable. Serverless functions freeze after the response, so send the
           // notification now (bounded) instead of in the background; failures stay queued for retry.
           if (inserted.length) await withTimeout(pump(request.id), Number(env.PUSH_WAIT_MS) || 8000);
@@ -718,16 +729,16 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
           void pump();
           // Newest first. Default: the newest 500 (a few hundred KB at most instead of every request ever made); ?limit= (max 2000) and ?before=<createdAt> page further back.
           const limit = Math.max(1, Math.min(2000, Number(url.searchParams.get('limit')) || 500)), before = Number(url.searchParams.get('before')) || null;
-          const rows = before ? await db.query('SELECT data FROM requests WHERE created_at<$1 ORDER BY created_at DESC LIMIT $2', [before, limit]) : await db.query('SELECT data FROM requests ORDER BY created_at DESC LIMIT $1', [limit]);
+          const rows = before ? await db.query('SELECT data FROM requests WHERE tenant_id=:tenant AND created_at<$1 ORDER BY created_at DESC LIMIT $2', [before, limit]) : await db.query('SELECT data FROM requests WHERE tenant_id=:tenant ORDER BY created_at DESC LIMIT $1', [limit]);
           return json(200, rows.map(row => publicRow(rowOf(row))));
         }
         const match = url.pathname.match(/^\/api\/requests\/([A-Za-z0-9_-]+)$/);
         if (match) {
-          const found = (await db.query('SELECT data FROM requests WHERE id=$1', [match[1]]))[0];
+          const found = (await db.query('SELECT data FROM requests WHERE tenant_id=:tenant AND id=$1', [match[1]]))[0];
           const request = found && rowOf(found);
           if (!request || (!session && (!client || request.userId !== client.id))) throw fail(404, 'Not found');
           if (req.method === 'GET') return json(200, publicRow(request, !!session));
-          if (req.method === 'DELETE') { admin(); await db.query('DELETE FROM outbox WHERE request_id=$1', [request.id]); await db.query('DELETE FROM requests WHERE id=$1', [request.id]); await sync.bump('requests', ...touch(request.userId, 'requests')); return json(200, { ok: true }); }
+          if (req.method === 'DELETE') { admin(); await db.query('DELETE FROM outbox WHERE tenant_id=:tenant AND request_id=$1', [request.id]); await db.query('DELETE FROM requests WHERE tenant_id=:tenant AND id=$1', [request.id]); await sync.bump('requests', ...touch(request.userId, 'requests')); return json(200, { ok: true }); }
           if (req.method === 'PATCH') {
             const body = await readBody(req), patch = {};
             const fields = session ? ['status', 'autoSent', 'aiResult', 'finalResult', 'historyId'] : ['aiResult', 'historyId'];
@@ -742,10 +753,10 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
             if (!session && body.status === 'delivered' && body.autoSent === true && body.aiResult) { patch.status = 'delivered'; patch.autoSent = true; }
             let wasDelivered = false;
             const result = await db.tx(async q => {
-              const current = rowOf((await q('SELECT data FROM requests WHERE id=$1 FOR UPDATE', [request.id]))[0]);
+              const current = rowOf((await q('SELECT data FROM requests WHERE tenant_id=:tenant AND id=$1 FOR UPDATE', [request.id]))[0]);
               wasDelivered = current.status === 'delivered';
               const next = Object.assign(current, patch);
-              await q('UPDATE requests SET data=$1 WHERE id=$2', [JSON.stringify(next), request.id]);
+              await q('UPDATE requests SET data=$1 WHERE tenant_id=:tenant AND id=$2', [JSON.stringify(next), request.id]);
               return next;
             });
             await sync.bump('requests', ...touch(result.userId, 'requests', 'history'));
@@ -765,10 +776,18 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
         throw fail(404, 'API route not found');
       }
       // Same-origin static hosting of dist/ for the long-running server (Vercel serves dist/ itself). Same rules as vercel.json.
+      // A custom domain installs its own app: the root manifest answers with the tenant's name instead of the static default one.
+      if (url.pathname === '/manifest.webmanifest' && req.method === 'GET' && resolved.tenant.id !== 'default') return json(200, tenantManifest(resolved), MANIFEST_HEADERS);
       return staticFiles.handle(req, res, url);
     } catch (error) {
       if (!error.status) console.warn('API error', error.code || error.message);
-      if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error' }); else res.end();
+      // An unknown / suspended tenant asked for a PAGE: a plain page, nothing about the tenant's data.
+      if (error.page && !res.headersSent) {
+        const suspended = error.code === 'TENANT_SUSPENDED';
+        res.writeHead(suspended ? 503 : 404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(suspended ? 'This site is temporarily unavailable.' : 'Not found');
+      }
+      if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error', ...(error.code === 'TENANT_SUSPENDED' || error.code === 'TENANT_NOT_FOUND' ? { code: error.code } : {}) }); else res.end();
     }
   }
   const server = http.createServer(handle);
@@ -788,11 +807,19 @@ function createBackend({ env = process.env, db = createDb(env), senders, media: 
     const now = Date.now();
     if (now - lastRunAt < (now - lastApiAt < 300000 ? activeEvery : idleEvery) - 1000) return;
     lastRunAt = now;
-    void pump().then(() => (closed ? null : campaigns.tick()));
+    // Every tenant that has work due (a notification job, a live campaign), one after the other so a busy platform never opens a burst of connections.
+    void (async () => {
+      for (const id of await bundles.dueTenants(now)) {
+        if (closed) return;
+        const target = bundles.get(id);
+        await target.pump();
+        if (!closed) await target.campaigns.tick();
+      }
+    })().catch(() => {});
   }, Math.min(activeEvery, 15000));
   timer.unref();
   server.on('close', () => { closed = true; clearInterval(timer); void db.close(); });
-  return { server, handle, pump, db, clients, notifier, campaigns, chat, assistant, staticFiles };
+  return { server, handle, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
 }
 module.exports = { createBackend, passwordMatches };
 // `node server/index.js` keeps working (README, browser checks): same startup as server/start.js.

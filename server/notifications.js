@@ -94,14 +94,16 @@ function createFcm(json, fetchImpl = fetch) {
 /**
  * VAPID keys come from the environment when provided. Otherwise they are generated once and stored in the
  * database so the "Notifications" button works on a fresh deployment with zero configuration.
+ * The key pair belongs to the PLATFORM (one browser push identity for the whole deployment), so `db` here is the raw database and the
+ * row lives under the default tenant, exactly where it lived before multi-tenancy. It is never returned to any tenant.
  */
 async function loadVapid(db, env) {
   if (env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY) return { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT || 'mailto:admin@example.com' };
-  const read = async () => (await db.query("SELECT value FROM settings WHERE key='vapid'"))[0];
+  const read = async () => (await db.query("SELECT value FROM settings WHERE tenant_id='default' AND key='vapid'"))[0];
   let row = await read();
   if (!row) {
     const keys = webpush.generateVAPIDKeys();
-    await db.query("INSERT INTO settings VALUES('vapid',$1) ON CONFLICT (key) DO NOTHING", [JSON.stringify(keys)]);
+    await db.query("INSERT INTO settings(tenant_id,key,value) VALUES('default','vapid',$1) ON CONFLICT (tenant_id,key) DO NOTHING", [JSON.stringify(keys)]);
     row = await read(); // a concurrent cold start may have won the race: always use the stored winner
   }
   const keys = JSON.parse(row.value);
@@ -109,13 +111,14 @@ async function loadVapid(db, env) {
 }
 
 /**
+ * `options.platformDb` (the raw, unscoped database) holds the platform-wide VAPID keys; defaults to `db` for single-tenant callers.
  * `options.settings()` returns the shared settings document. Two independent master switches live there:
  * `notifyAdmins` and `notifyUsers` (both on unless explicitly false). Every delivery path goes through `recipients()`, so a
  * switch that is off, or a person who turned their own notifications off, receives nothing.
  */
 function createNotifier(db, env, adapters = {}, options = {}) {
   let vapid;
-  const keys = async () => vapid ||= await loadVapid(db, env);
+  const keys = async () => vapid ||= await loadVapid(options.platformDb || db, env);
   const fcmSender = adapters.fcm || (env.FCM_SERVICE_ACCOUNT_JSON ? createFcm(env.FCM_SERVICE_ACCOUNT_JSON) : null);
   const ADMIN = { type: 'admin' };
   /** Devices of one audience whose owner has not switched notifications off (the preference lives in the database). */
@@ -126,17 +129,17 @@ function createNotifier(db, env, adapters = {}, options = {}) {
   async function recipients(audience = ADMIN) {
     if (!(await enabled(audience.type))) return [];
     if (audience.type === 'client') {
-      const rows = await db.query("SELECT id,data,owner_id FROM subscriptions WHERE owner_type='client' AND owner_id=$1", [audience.id]);
+      const rows = await db.query("SELECT id,data,owner_id FROM subscriptions WHERE tenant_id=:tenant AND owner_type='client' AND owner_id=$1", [audience.id]);
       if (!rows.length) return [];
-      const prefs = JSON.parse((await db.query('SELECT prefs FROM clients WHERE id=$1', [audience.id]))[0]?.prefs || '{}');
+      const prefs = JSON.parse((await db.query('SELECT prefs FROM clients WHERE tenant_id=:tenant AND id=$1', [audience.id]))[0]?.prefs || '{}');
       return prefs.notifications === false ? [] : rows.map(row => ({ ...JSON.parse(row.data), rowId: row.id }));
     }
-    const rows = await db.query("SELECT id,data,owner_id FROM subscriptions WHERE owner_type='admin'");
+    const rows = await db.query("SELECT id,data,owner_id FROM subscriptions WHERE tenant_id=:tenant AND owner_type='admin'");
     if (!rows.length) return [];
-    const off = new Set((await db.query('SELECT admin_id,data FROM admin_prefs')).filter(row => JSON.parse(row.data || '{}').notifications === false).map(row => row.admin_id));
+    const off = new Set((await db.query('SELECT admin_id,data FROM admin_prefs WHERE tenant_id=:tenant')).filter(row => JSON.parse(row.data || '{}').notifications === false).map(row => row.admin_id));
     return rows.filter(row => !off.has(row.owner_id)).map(row => ({ ...JSON.parse(row.data), rowId: row.id }));
   }
-  const removeDevice = deviceId => db.query('DELETE FROM subscriptions WHERE COALESCE(device_id,id)=$1', [deviceId]);
+  const removeDevice = deviceId => db.query('DELETE FROM subscriptions WHERE tenant_id=:tenant AND COALESCE(device_id,id)=$1', [deviceId]);
   async function deliver(request, completed = [], options = {}) {
     const done = new Set(completed), event = options.event || 'request';
     let retry = false, sent = 0;
@@ -168,15 +171,15 @@ function createNotifier(db, env, adapters = {}, options = {}) {
     config: async () => ({ publicKey: (await keys()).publicKey, web: true, android: !!fcmSender }),
     /** One row per (device, owner): the same browser can serve an admin and a client account at once. */
     save: async (subscriber, owner = { type: 'admin', id: 'admin' }) => {
-      await db.query('INSERT INTO subscriptions(id,data,owner_type,owner_id,device_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data', [`${subscriber.id}:${owner.type}:${owner.id}`, JSON.stringify(subscriber), owner.type, owner.id, subscriber.id]);
+      await db.query('INSERT INTO subscriptions(tenant_id,id,data,owner_type,owner_id,device_id) VALUES(:tenant,$1,$2,$3,$4,$5) ON CONFLICT (tenant_id,id) DO UPDATE SET data=EXCLUDED.data', [`${subscriber.id}:${owner.type}:${owner.id}`, JSON.stringify(subscriber), owner.type, owner.id, subscriber.id]);
     },
     remove: (deviceId, owner) => owner
-      ? db.query('DELETE FROM subscriptions WHERE COALESCE(device_id,id)=$1 AND owner_type=$2 AND owner_id=$3', [deviceId, owner.type, owner.id])
+      ? db.query('DELETE FROM subscriptions WHERE tenant_id=:tenant AND COALESCE(device_id,id)=$1 AND owner_type=$2 AND owner_id=$3', [deviceId, owner.type, owner.id])
       : removeDevice(deviceId),
     enabled,
     /** Clients that registered at least one device, with the state of their notifications (admin list). */
     clientSubscribers: async () => {
-      const rows = await db.query("SELECT s.owner_id, s.data, c.name, c.phone, c.prefs FROM subscriptions s JOIN clients c ON c.id=s.owner_id WHERE s.owner_type='client'");
+      const rows = await db.query("SELECT s.owner_id, s.data, c.name, c.phone, c.prefs FROM subscriptions s JOIN clients c ON c.tenant_id=:tenant AND c.id=s.owner_id WHERE s.tenant_id=:tenant AND s.owner_type='client'");
       const byClient = new Map();
       for (const row of rows) {
         const entry = byClient.get(row.owner_id) || { id: row.owner_id, name: row.name, whatsapp: row.phone, off: JSON.parse(row.prefs || '{}').notifications === false, browsers: 0, apps: 0 };
@@ -186,8 +189,8 @@ function createNotifier(db, env, adapters = {}, options = {}) {
       const on = await enabled('client');
       return [...byClient.values()].map(({ off, ...entry }) => ({ ...entry, devices: entry.browsers + entry.apps, status: !on ? 'paused' : off ? 'off' : 'on' })).sort((a, b) => a.name.localeCompare(b.name));
     },
-    count: async () => (await db.query("SELECT COUNT(*)::int AS n FROM subscriptions WHERE owner_type='admin'"))[0].n,
-    removeOwner: (type, id) => db.query('DELETE FROM subscriptions WHERE owner_type=$1 AND owner_id=$2', [type, id]),
+    count: async () => (await db.query("SELECT COUNT(*)::int AS n FROM subscriptions WHERE tenant_id=:tenant AND owner_type='admin'"))[0].n,
+    removeOwner: (type, id) => db.query('DELETE FROM subscriptions WHERE tenant_id=:tenant AND owner_type=$1 AND owner_id=$2', [type, id]),
   };
 }
 module.exports = { createNotifier, createFcm, payloadFor, validateSubscription, trim, phone, CAMPAIGN_URL };

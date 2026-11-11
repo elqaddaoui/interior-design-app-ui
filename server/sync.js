@@ -8,6 +8,8 @@
  *   c:<clientId>   one client's profile, credits, history, chats, requests, prefs
  *   a:<adminId>    one admin's preferences
  *
+ * Tenancy: `db` is a tenant-bound handle (server/scope.js), so counters and the in-memory cache below are per tenant.
+ *
  * `cacheMs` (long-running server only): versions read in the last `cacheMs` are answered from memory, so N open apps
  * polling every few seconds cost about one query per key per `cacheMs` instead of one per poll. A bump made by THIS process
  * drops the keys it changed at once; a change made by another process (another instance, or the www. copy of the site on
@@ -18,7 +20,7 @@ function createSync(db, { cacheMs = 0 } = {}) {
   const bump = async (...keys) => {
     for (const key of [...new Set(keys.filter(Boolean))]) {
       cache.delete(key);
-      await db.query('INSERT INTO sync_state(key,version) VALUES($1,1) ON CONFLICT (key) DO UPDATE SET version=sync_state.version+1', [key]);
+      await db.query('INSERT INTO sync_state(tenant_id,key,version) VALUES(:tenant,$1,1) ON CONFLICT (tenant_id,key) DO UPDATE SET version=sync_state.version+1', [key]);
       cache.delete(key); // a read that started before the write must not keep the old value
     }
   };
@@ -26,7 +28,7 @@ function createSync(db, { cacheMs = 0 } = {}) {
     const now = Date.now();
     const missing = cacheMs > 0 ? keys.filter(key => !(now - (cache.get(key)?.at ?? -Infinity) < cacheMs)) : keys;
     if (missing.length) {
-      const rows = await db.query('SELECT key,version FROM sync_state WHERE key = ANY($1)', [missing]);
+      const rows = await db.query('SELECT key,version FROM sync_state WHERE tenant_id=:tenant AND key = ANY($1)', [missing]);
       const fresh = Object.fromEntries(missing.map(key => [key, Number(rows.find(row => row.key === key)?.version ?? 0)]));
       if (cacheMs > 0) {
         if (cache.size > 5000) for (const [key, entry] of cache) if (now - entry.at >= cacheMs) cache.delete(key);

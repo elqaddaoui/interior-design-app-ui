@@ -87,7 +87,7 @@ async function download(version?: number): Promise<Snapshot> {
   if (early && !early.used && early.admin === admin) {
     early.used = true;
     const value = await early.promise;
-    if (value) return value;
+    if (value) return resolveMediaUrls(value);
   }
   const query = [admin ? 'a=1' : '', version != null && version >= 0 ? `v=${version}` : ''].filter(Boolean).join('&');
   return resolveMediaUrls(await api<Snapshot>(`/content${query ? `?${query}` : ''}`));
@@ -102,7 +102,7 @@ export async function primeContent(): Promise<boolean> {
   const admin = isAdminDevice();
   const early = earlyShell();
   let snapshot: Snapshot | null | undefined;
-  if (early && !early.used && early.admin === admin && early.value) { early.used = true; snapshot = early.value; }
+  if (early && !early.used && early.admin === admin && early.value) { early.used = true; snapshot = resolveMediaUrls(early.value); }
   // An admin device always loads fresh data (the stored copy has no provider keys and must never feed an admin form).
   if (!snapshot && !admin) {
     const saved = await storage.read<{ schema?: number; snapshot?: Snapshot }>(CACHE_KEY);

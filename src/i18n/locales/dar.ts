@@ -35,7 +35,7 @@ const dar: Dict = {
     noResults: 'ما لقينا والو',
   },
   tabs: { home: 'الرئيسية', explore: 'اكتاشف', history: 'التاريخ', assistant: 'المساعد' },
-  home: { empty: 'ما كاين حتى أداة فهاد التبويب دابا.', all: 'الكل' },
+  home: { empty: 'ما كاين حتى أداة فهاد التبويب دابا.', all: 'الكل', offline: 'ما قدرناش نحمّلو المحتوى.', offlineHint: 'تأكد من الكونيكسيون. غادي نعاودو المحاولة بوحدنا.', retry: 'عاود جرّب' },
   explore: { title: 'اكتاشف', photos: '{{count}} تصويرة', useStyle: 'استعمل هاد الستايل', emptyCat: 'ما كاين حتى تصويرة فهاد القسم.', styleApplied: 'تطبق الستايل' },
   wizard: {
     step: 'الخطوة {{n}}/{{total}}',

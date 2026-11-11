@@ -1,19 +1,29 @@
 import { Platform } from 'react-native';
 import { storage } from '@/data/mock/storage';
 import { useLocal } from '@/store/useLocal';
+import { canonicalMedia, mediaUrl, tenantBase } from '@/lib/tenant';
 
 // This is a public URL, never an admin credential or VAPID private key.
 // Web deployments use the backend on the same host without build-time configuration.
 // Native builds still need an absolute URL. Demo mode must be explicitly requested.
-const BASE = (process.env.EXPO_PUBLIC_API_URL?.trim() || (Platform.OS === 'web' ? '/api' : '')).replace(/\/+$/, '');
+// '/api' means "same origin", which is also what an unset variable means: the tenant prefix then applies.
+const configured = (process.env.EXPO_PUBLIC_API_URL?.trim() || '').replace(/\/+$/, '');
+const CONFIGURED = configured === '/api' ? '' : configured;
+// A tenant served under the platform host (app.com/acme) reaches ITS API at /acme/api: the base is only known once the page runs, so it is read per call.
+const apiBase = () => (CONFIGURED || (Platform.OS === 'web' ? `${tenantBase()}/api` : '')).replace(/\/+$/, '');
+const BASE = apiBase();
 export const backendEnabled = process.env.EXPO_PUBLIC_BACKEND_MODE !== 'demo' && !!BASE;
+/** Native apps address one tenant with X-Dwira-Tenant (EXPO_PUBLIC_TENANT, set per white-label build); unset = the default tenant. */
+const NATIVE_TENANT = process.env.EXPO_PUBLIC_TENANT?.trim() || '';
 /** True when the API lives on the same origin as the page (web default): only then can the HTML shell prefetch it. */
-export const sameOriginApi = Platform.OS === 'web' && BASE === '/api';
+export const sameOriginApi = Platform.OS === 'web' && !CONFIGURED;
 /** Uploaded images are served by the API at `/api/media/...`. The web resolves that against the page; native apps need the API host. */
 const MEDIA_ORIGIN = Platform.OS === 'web' ? '' : BASE.replace(/\/api$/, '');
+/** Stored media URLs are `/api/media/...`: web pages of a tenant show them under its prefix, native apps need the API host. */
 export const resolveMediaUrls = <T,>(value: T): T => {
-  if (!MEDIA_ORIGIN) return value;
-  const walk = (node: unknown): unknown => typeof node === 'string' ? (node.startsWith('/api/media/') ? MEDIA_ORIGIN + node : node)
+  const tenant = Platform.OS === 'web' && tenantBase();
+  if (!MEDIA_ORIGIN && !tenant) return value;
+  const walk = (node: unknown): unknown => typeof node === 'string' ? (node.startsWith('/api/media/') ? (tenant ? mediaUrl(node) : MEDIA_ORIGIN + node) : node)
     : Array.isArray(node) ? node.map(walk) : node && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v)])) : node;
   return walk(value) as T;
 };
@@ -42,12 +52,13 @@ export async function api<T>(path: string, options: { method?: string; body?: un
     const userToken = await getItemAsync('dwira-user-session');
     if (userToken) headers['X-User-Token'] = userToken;
     headers['X-Dwira-Native'] = '1';
+    if (NATIVE_TENANT) headers['X-Dwira-Tenant'] = NATIVE_TENANT;
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15000);
   try {
     const transport = Platform.OS === 'web' ? fetch : (await import('expo/fetch')).fetch;
-    const response = await transport(`${BASE}${path}`, { method: options.method || 'GET', headers, credentials: 'include', body: options.raw ?? (options.body == null ? undefined : JSON.stringify(options.body)), signal: controller.signal });
+    const response = await transport(`${apiBase()}${path}`, { method: options.method || 'GET', headers, credentials: 'include', body: options.raw ?? (options.body == null ? undefined : JSON.stringify(canonicalMedia(options.body))), signal: controller.signal });
     // Static SPA rewrites often return index.html with HTTP 200 for missing API routes.
     // Never mistake that response for a working backend or silently fall back to mocks.
     if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) throw new BackendError(503, 'BACKEND_UNAVAILABLE');
@@ -69,7 +80,7 @@ export async function apiBlob(path: string, timeoutMs = 30000): Promise<Blob> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${BASE}${path}`, { credentials: 'include', signal: controller.signal });
+    const response = await fetch(`${apiBase()}${path}`, { credentials: 'include', signal: controller.signal });
     if (!response.ok) {
       const body = await response.json().catch(() => ({} as { error?: string }));
       throw new BackendError(response.status, body.error);

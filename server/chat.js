@@ -156,12 +156,12 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
   async function stored(slot, key, fallback) {
     if (clock() - cache[slot].at < 15000 && cache[slot].value) return cache[slot].value;
     let value = fallback;
-    try { const row = (await db.query('SELECT value FROM settings WHERE key=$1', [key]))[0]; if (row) value = JSON.parse(row.value); } catch { /* none stored */ }
+    try { const row = (await db.query('SELECT value FROM settings WHERE tenant_id=:tenant AND key=$1', [key]))[0]; if (row) value = JSON.parse(row.value); } catch { /* none stored */ }
     cache[slot] = { at: clock(), value };
     return value;
   }
   const save = async (slot, key, value) => {
-    await db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [key, JSON.stringify(value)]);
+    await db.query('INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value', [key, JSON.stringify(value)]);
     cache[slot] = { at: clock(), value };
   };
   const storedKeys = () => stored('keys', 'chat_keys', {});
