@@ -106,6 +106,8 @@ CREATE INDEX IF NOT EXISTS campaigns_tenant_status ON campaigns(tenant_id, statu
 CREATE INDEX IF NOT EXISTS outbox_due ON outbox(next_at);
 CREATE INDEX IF NOT EXISTS user_sessions_tenant ON user_sessions(tenant_id);
 CREATE INDEX IF NOT EXISTS admin_sessions_tenant ON admin_sessions(tenant_id, admin_id);
+-- A disabled administrator (set by the super admin) cannot sign in; existing sessions are deleted at the same time.
+ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS saas_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS saas_tenants (

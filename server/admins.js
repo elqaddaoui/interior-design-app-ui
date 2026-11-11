@@ -62,7 +62,7 @@ function createAdmins(db, { env = process.env, sync, media } = {}) {
   async function verify(identifier, password) {
     const user = String(identifier ?? '').trim().toLowerCase();
     if (!user || user.length > 190 || typeof password !== 'string' || !password || password.length > 512) return null;
-    const stored = (await db.query('SELECT admin_id, pw_hash FROM admin_accounts WHERE tenant_id=:tenant AND pw_hash IS NOT NULL AND (admin_id=$1 OR lower(email)=$1) ORDER BY (admin_id=$1) DESC LIMIT 1', [user]))[0];
+    const stored = (await db.query('SELECT admin_id, pw_hash FROM admin_accounts WHERE tenant_id=:tenant AND pw_hash IS NOT NULL AND disabled=0 AND (admin_id=$1 OR lower(email)=$1) ORDER BY (admin_id=$1) DESC LIMIT 1', [user]))[0];
     if (stored) return passwordMatches(password, stored.pw_hash) ? stored.admin_id : null;
     if (defaultAllowed() && user === 'admin' && password === 'admin') return 'admin';
     return isDefault && env.ADMIN_EMAIL && user === env.ADMIN_EMAIL.toLowerCase() && passwordMatches(password, env.ADMIN_PASSWORD_HASH) ? user : null;

@@ -7,6 +7,7 @@ const { sendBuffer } = require('./compress');
 const { passwordMatches } = require('./admins');
 const { createBundles } = require('./bundle');
 const { createTenants } = require('./tenants');
+const { createSuperAdmin } = require('./superadmin');
 const { r2Status } = require('./media');
 const { translate } = require('./translate');
 const { validateSubscription, trim, phone } = require('./notifications');
@@ -110,6 +111,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
   const bundles = createBundles({ db, env, senders, media: mediaOptions, chatFetch, imageFetch });
   const rawDb = db; // `handle` shadows `db` with the tenant-bound handle; the registry check below needs the raw one
   const tenants = createTenants({ db, env, resolveTxt: dnsResolver });
+  // Platform back office: the only code that touches the saas_* tables with the raw database (server/superadmin.js).
+  const superAdmin = createSuperAdmin({ db: rawDb, env, bundles, tenants });
   const base = bundles.get('default'); // the original single-tenant app = the default tenant (also what `createBackend()` exposes to tests / scripts)
   const { notifier, clients, campaigns, chat, assistant } = base;
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
@@ -167,7 +170,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         const sameOrigin = origin && /^https?:\/\//.test(origin) && new URL(origin).host === req.headers.host;
         if (origin && !sameOrigin && !allowedOrigins.includes(origin)) throw fail(403, 'Origin not allowed');
         if (origin) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Access-Control-Allow-Credentials', 'true'); res.setHeader('Vary', 'Origin'); }
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-Dwira-Tenant, X-User-Token, If-None-Match');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Demand-Token, X-Dwira-Native, X-Dwira-Tenant, X-User-Token, X-Super-Token, If-None-Match');
         res.setHeader('Access-Control-Expose-Headers', 'ETag');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -208,7 +211,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           }
           return sendBuffer(req, res, 200, headers, file.body);
         }
-        const bucketName = url.pathname === '/api/admin/login' ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
+        const bucketName = (url.pathname === '/api/admin/login' || url.pathname === '/api/super-admin/login') ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
         const key = `${bundle.tenantId}:${address(req)}:${bucketName}`; // one tenant's traffic can never exhaust another's allowance
         const now = Date.now();
         if (buckets.size > 10000) for (const [id, bucket] of buckets) if (bucket.until < now) buckets.delete(id);
@@ -233,6 +236,12 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           return json(ok ? 200 : 503, { ok, runtime: process.versions.bun ? 'bun' : 'node', node: process.versions.node, platform: env.VERCEL ? 'vercel' : env.DWIRA_PLATFORM || 'node', database, media: r2Status(env), adminConfigured: !!(env.ADMIN_EMAIL && env.ADMIN_PASSWORD_HASH), uptime: Math.round(process.uptime()) });
         }
         if (!db.configured()) throw fail(503, 'DATABASE_NOT_CONFIGURED');
+
+        // ---- Super admin (platform host only: guarded above, never under a slug or on a custom domain) ----
+        if (url.pathname.startsWith('/api/super-admin/')) {
+          const result = await superAdmin.handle({ req, url, readBody, ip: address(req) });
+          return json(result.status, result.data, { 'Cache-Control': 'private, no-store', ...(result.headers || {}) });
+        }
 
         const rawCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_admin='))?.slice(12);
         const sessionToken = req.headers.authorization?.replace(/^Bearer /, '') || rawCookie;
@@ -642,6 +651,21 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           return json(200, { ok: true });
         }
 
+        // ---- This tenant's own change requests to the platform operator (customise / manage / support). The tenant id comes from the
+        // resolved tenant, never from the body, so an administrator can only read and write the requests of their own instance. ----
+        if (url.pathname === '/api/admin/instance' && req.method === 'GET') {
+          admin();
+          const { tenant } = resolved;
+          return json(200, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, status: tenant.status, base: resolved.base });
+        }
+        if (url.pathname === '/api/admin/change-requests') {
+          admin();
+          if (resolved.tenant.kind === 'default' && !resolved.tenant.id) throw fail(404, 'NOT_FOUND');
+          if (req.method === 'GET') return json(200, await superAdmin.requestsOfTenant(resolved.tenant.id));
+          if (req.method === 'POST') return json(201, await superAdmin.submitRequest(resolved.tenant, adminId, await readBody(req)));
+          throw fail(405, 'Method not allowed');
+        }
+
         // ---- Notifications for new requests ----
         if (req.method === 'GET' && url.pathname === '/api/push/config') return json(200, await notifier.config());
         if (url.pathname === '/api/push/subscriptions') {
@@ -795,7 +819,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
   }, Math.min(activeEvery, 15000));
   timer.unref();
   server.on('close', () => { closed = true; clearInterval(timer); void db.close(); });
-  return { server, handle, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants };
+  return { server, handle, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
 }
 module.exports = { createBackend, passwordMatches };
 // `node server/index.js` keeps working (README, browser checks): same startup as server/start.js.
