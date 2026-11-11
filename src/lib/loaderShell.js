@@ -87,9 +87,9 @@ function makeRender(markup, keys, safeUri) {
  */
 function headScript(defaults) {
   return '(function(){var render=(' + makeRender.toString() + ')(' + JSON.stringify(MARKUP) + ',' + JSON.stringify(KEYS) + ',' + SAFE_URI.toString() + ');' +
-    'var cfg=' + JSON.stringify(defaults) + ';try{var s=localStorage.getItem("dwira:v1:loader");if(s){var p=JSON.parse(s);for(var k in p)cfg[k]=p[k]}}catch(e){}' +
+    'var cfg=' + JSON.stringify(defaults) + ';try{var s=localStorage.getItem((window.__DWIRA_PFX||"dwira:v1:")+"loader");if(s){var p=JSON.parse(s);for(var k in p)cfg[k]=p[k]}}catch(e){}' +
     'var B=window.__dwiraBoot={active:cfg.enabled!==false,' +
-    'mount:function(){try{var bc=localStorage.getItem("dwira:v1:bar-color");if(/^#[0-9a-fA-F]{6}$/.test(bc||"")){var mt=document.querySelector("meta[name=theme-color]");if(mt)mt.content=bc;document.documentElement.style.background=bc}}catch(e){}' +
+    'mount:function(){try{var bc=localStorage.getItem((window.__DWIRA_PFX||"dwira:v1:")+"bar-color");if(/^#[0-9a-fA-F]{6}$/.test(bc||"")){var mt=document.querySelector("meta[name=theme-color]");if(mt)mt.content=bc;document.documentElement.style.background=bc}}catch(e){}' +
     'var r=document.getElementById("dwira-boot");if(!r)return;if(!B.active){r.remove();return}' +
     'if(/^#[0-9a-fA-F]{6}$/.test(cfg.bg||""))r.style.background=cfg.bg;render(r.firstChild,cfg);' +
     'setTimeout(B.hide,Math.max(12000,(+cfg.delayMs||0)+4000))},' +

@@ -1,6 +1,7 @@
 import type { Lang } from '@/data/types';
 
 import { api, backendEnabled } from './backend';
+import { tenantBase } from './tenant';
 
 /** Whose notifications a device subscription is for. A browser can serve an admin and a client at once. */
 export type PushOwner = 'admin' | 'client';
@@ -19,16 +20,25 @@ function keyBytes(value: string) {
   const decoded = atob(base64 + '='.repeat((4 - base64.length % 4) % 4));
   return Uint8Array.from(decoded, char => char.charCodeAt(0));
 }
+// One service worker registration PER TENANT (scope `/slug/`): tenants share an origin, so a shared worker would share push subscriptions.
+const scopePath = () => `${tenantBase()}/`;
+async function existingRegistration() {
+  const worker = await navigator.serviceWorker.getRegistration(scopePath());
+  // getRegistration answers with the closest registration, which may be the default tenant's (scope `/`): only an exact scope is ours.
+  return worker && new URL(worker.scope).pathname === scopePath() ? worker : undefined;
+}
 async function registration() {
-  await navigator.serviceWorker.register('/push-sw.js', { scope: '/', updateViaCache: 'none' });
+  const base = tenantBase();
+  const registered = await navigator.serviceWorker.register(`/push-sw.js${base ? `?b=${base.slice(1)}` : ''}`, { scope: scopePath(), updateViaCache: 'none' });
   // `ready` resolves once a worker controls the scope, including on the very first visit.
-  return navigator.serviceWorker.ready;
+  const ready = await navigator.serviceWorker.ready;
+  return new URL(ready.scope).pathname === scopePath() ? ready : registered;
 }
 export async function pushStatus(): Promise<PushStatus> {
   if (!backendEnabled) return 'unconfigured';
   if (!supported()) return isIos() && !standalone() ? 'install' : 'unsupported';
   if (Notification.permission === 'denied') return 'blocked';
-  const worker = await navigator.serviceWorker.getRegistration('/');
+  const worker = await existingRegistration();
   return worker && await worker.pushManager.getSubscription() ? 'enabled' : 'disabled';
 }
 /** True when the browser already allows notifications (no prompt needed to subscribe this device). */
@@ -60,14 +70,14 @@ export async function enablePush(language: Lang, owner: PushOwner = 'admin', pro
 }
 export async function syncPushLanguage(language: Lang, owner: PushOwner = 'admin') {
   if (!backendEnabled || !supported() || Notification.permission !== 'granted') return;
-  const worker = await navigator.serviceWorker.getRegistration('/');
+  const worker = await existingRegistration();
   const subscription = await worker?.pushManager.getSubscription();
   if (subscription) await api('/push/subscriptions', { method: 'POST', body: { kind: 'web', subscription: subscription.toJSON(), language, ...ownerBody(owner) } });
 }
 /** Stops notifications for `owner` on this device. The browser subscription itself is only dropped when `keepDevice` is false. */
 export async function disablePush(owner: PushOwner = 'admin', keepDevice = false) {
   if (!supported()) return;
-  const worker = await navigator.serviceWorker.getRegistration('/');
+  const worker = await existingRegistration();
   const subscription = await worker?.pushManager.getSubscription();
   if (!subscription) return;
   try { await api('/push/subscriptions', { method: 'DELETE', body: { kind: 'web', subscription: subscription.toJSON(), ...ownerBody(owner) } }); }

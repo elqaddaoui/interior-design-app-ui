@@ -169,16 +169,16 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
 
   async function loadClients() {
     const rows = await db.query(`SELECT c.id, c.name, c.created_at, c.last_seen, c.prefs,
-      (SELECT COUNT(*) FROM claims k WHERE k.client_id=c.id)::int AS designs,
-      (SELECT MIN(k.created_at) FROM claims k WHERE k.client_id=c.id) AS first_design,
-      (SELECT COUNT(*) FROM subscriptions s WHERE s.owner_type='client' AND s.owner_id=c.id)::int AS devices
-      FROM clients c WHERE c.blocked=0`);
+      (SELECT COUNT(*) FROM claims k WHERE k.tenant_id=:tenant AND k.client_id=c.id)::int AS designs,
+      (SELECT MIN(k.created_at) FROM claims k WHERE k.tenant_id=:tenant AND k.client_id=c.id) AS first_design,
+      (SELECT COUNT(*) FROM subscriptions s WHERE s.tenant_id=:tenant AND s.owner_type='client' AND s.owner_id=c.id)::int AS devices
+      FROM clients c WHERE c.tenant_id=:tenant AND c.blocked=0`);
     return rows.map(row => ({ ...row, created_at: Number(row.created_at), last_seen: row.last_seen == null ? null : Number(row.last_seen), first_design: row.first_design == null ? null : Number(row.first_design), designs: Number(row.designs), devices: Number(row.devices) }));
   }
   async function statsFor(ids) {
     const out = new Map(ids.map(id => [id, { total: 0, sent: 0, pending: 0, skipped: 0, failed: 0, devices: 0 }]));
     if (!ids.length) return out;
-    for (const row of await db.query('SELECT campaign_id, status, COUNT(*)::int AS n, COALESCE(SUM(devices),0)::int AS devices FROM campaign_deliveries WHERE campaign_id = ANY($1) GROUP BY campaign_id, status', [ids])) {
+    for (const row of await db.query('SELECT campaign_id, status, COUNT(*)::int AS n, COALESCE(SUM(devices),0)::int AS devices FROM campaign_deliveries WHERE tenant_id=:tenant AND campaign_id = ANY($1) GROUP BY campaign_id, status', [ids])) {
       const stat = out.get(row.campaign_id);
       if (!stat || !(row.status in stat)) continue;
       stat[row.status] = Number(row.n); stat.total += Number(row.n); stat.devices += Number(row.devices);
@@ -191,33 +191,33 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
       const chunk = items.slice(i, i + 200), values = [], params = [];
       chunk.forEach((item, j) => {
         const b = j * 6;
-        values.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},'pending',0,$${b + 5},$${b + 6})`);
+        values.push(`(:tenant,$${b + 1},$${b + 2},$${b + 3},$${b + 4},'pending',0,$${b + 5},$${b + 6})`);
         params.push(`${campaignId}:${item.client.id}:${item.occurrence ?? occurrence}`, campaignId, item.client.id, item.occurrence ?? occurrence, item.at ?? nextAt, now);
       });
-      inserted += (await q(`INSERT INTO campaign_deliveries(id,campaign_id,client_id,occurrence,status,attempts,next_at,created_at) VALUES ${values.join(',')} ON CONFLICT (id) DO NOTHING RETURNING id`, params)).length;
+      inserted += (await q(`INSERT INTO campaign_deliveries(tenant_id,id,campaign_id,client_id,occurrence,status,attempts,next_at,created_at) VALUES ${values.join(',')} ON CONFLICT (id) DO NOTHING RETURNING id`, params)).length;
     }
     return inserted;
   }
-  const getRow = async id => (await db.query('SELECT * FROM campaigns WHERE id=$1', [id]))[0];
+  const getRow = async id => (await db.query('SELECT * FROM campaigns WHERE tenant_id=:tenant AND id=$1', [id]))[0];
   const mustGet = async id => { const row = await getRow(id); if (!row) throw fail(404, 'NOT_FOUND'); return row; };
-  const save = (row, data, patch = {}) => db.query('UPDATE campaigns SET data=$1, status=$2, next_at=$3, updated_at=$4 WHERE id=$5', [JSON.stringify(data), patch.status ?? row.status, patch.nextAt === undefined ? row.next_at : patch.nextAt, clock(), row.id]);
+  const save = (row, data, patch = {}) => db.query('UPDATE campaigns SET data=$1, status=$2, next_at=$3, updated_at=$4 WHERE tenant_id=:tenant AND id=$5', [JSON.stringify(data), patch.status ?? row.status, patch.nextAt === undefined ? row.next_at : patch.nextAt, clock(), row.id]);
 
   /* ---------------- admin operations */
   async function list() {
-    const rows = await db.query('SELECT * FROM campaigns ORDER BY updated_at DESC LIMIT 300');
+    const rows = await db.query('SELECT * FROM campaigns WHERE tenant_id=:tenant ORDER BY updated_at DESC LIMIT 300');
     const stats = await statsFor(rows.map(row => row.id));
     return rows.map(row => ({ ...toCampaign(row), stats: stats.get(row.id) }));
   }
   async function get(id) {
     const row = await mustGet(id);
-    const recent = await db.query(`SELECT d.status, d.devices, d.sent_at, d.reason, d.occurrence, c.name FROM campaign_deliveries d JOIN clients c ON c.id=d.client_id WHERE d.campaign_id=$1 ORDER BY COALESCE(d.sent_at, d.created_at) DESC LIMIT 30`, [id]);
+    const recent = await db.query(`SELECT d.status, d.devices, d.sent_at, d.reason, d.occurrence, c.name FROM campaign_deliveries d JOIN clients c ON c.tenant_id=:tenant AND c.id=d.client_id WHERE d.tenant_id=:tenant AND d.campaign_id=$1 ORDER BY COALESCE(d.sent_at, d.created_at) DESC LIMIT 30`, [id]);
     return { ...toCampaign(row), stats: (await statsFor([id])).get(id), recent: recent.map(r => ({ status: r.status, devices: Number(r.devices), sentAt: r.sent_at == null ? null : Number(r.sent_at), reason: r.reason, name: r.name })) };
   }
   async function create(body) {
     const kind = body?.kind;
     if (!['once', 'recurring', 'trigger'].includes(kind)) throw fail(400, 'INVALID_KIND');
     const data = cleanCampaign(body, kind), id = crypto.randomUUID(), now = clock();
-    await db.query('INSERT INTO campaigns(id,kind,data,status,next_at,created_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5,$5)', [id, kind, JSON.stringify(data), 'draft', now]);
+    await db.query('INSERT INTO campaigns(tenant_id,id,kind,data,status,next_at,created_at,updated_at) VALUES(:tenant,$1,$2,$3,$4,NULL,$5,$5)', [id, kind, JSON.stringify(data), 'draft', now]);
     await bump();
     return body.live === true ? activate(id) : get(id);
   }
@@ -250,21 +250,21 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     const row = await mustGet(id), now = clock();
     if (row.status === 'sent' || row.status === 'draft' || row.status === 'paused' || row.status === 'ended') return get(id);
     // Anything not yet delivered is cancelled: resuming never fires a backlog of stale messages.
-    await db.query("UPDATE campaign_deliveries SET status='skipped', reason='cancelled' WHERE campaign_id=$1 AND status='pending'", [id]);
+    await db.query("UPDATE campaign_deliveries SET status='skipped', reason='cancelled' WHERE tenant_id=:tenant AND campaign_id=$1 AND status='pending'", [id]);
     const next = row.kind === 'once' ? (row.status === 'sending' ? 'sent' : 'draft') : 'paused';
-    await db.query('UPDATE campaigns SET status=$1, next_at=NULL, updated_at=$2 WHERE id=$3', [next, now, id]);
+    await db.query('UPDATE campaigns SET status=$1, next_at=NULL, updated_at=$2 WHERE tenant_id=:tenant AND id=$3', [next, now, id]);
     await bump();
     return get(id);
   }
   async function remove(id) {
-    const rows = await db.query('DELETE FROM campaigns WHERE id=$1 RETURNING id', [id]);
+    const rows = await db.query('DELETE FROM campaigns WHERE tenant_id=:tenant AND id=$1 RETURNING id', [id]);
     if (!rows.length) throw fail(404, 'NOT_FOUND');
     await bump();
   }
   async function duplicate(id) {
     const row = await mustGet(id), data = JSON.parse(row.data), now = clock(), copy = crypto.randomUUID();
     const { activatedAt, lastRunAt, lastRunCount, ...rest } = data;
-    await db.query('INSERT INTO campaigns(id,kind,data,status,next_at,created_at,updated_at) VALUES($1,$2,$3,$4,NULL,$5,$5)', [copy, row.kind, JSON.stringify({ ...rest, name: text(`${data.name} (copy)`, 80), ...(row.kind === 'once' ? { schedule: { at: null, tz: TZ_DEFAULT } } : {}) }), 'draft', now]);
+    await db.query('INSERT INTO campaigns(tenant_id,id,kind,data,status,next_at,created_at,updated_at) VALUES(:tenant,$1,$2,$3,$4,NULL,$5,$5)', [copy, row.kind, JSON.stringify({ ...rest, name: text(`${data.name} (copy)`, 80), ...(row.kind === 'once' ? { schedule: { at: null, tz: TZ_DEFAULT } } : {}) }), 'draft', now]);
     await bump();
     return get(copy);
   }
@@ -281,12 +281,12 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     return out;
   }
   /** Clients (name, phone, reachability) for the hand-picked audience. */
-  const people = async () => (await db.query('SELECT id,name,phone FROM clients WHERE blocked=0 ORDER BY name LIMIT 500')).map(row => ({ id: row.id, name: row.name, whatsapp: row.phone }));
+  const people = async () => (await db.query('SELECT id,name,phone FROM clients WHERE tenant_id=:tenant AND blocked=0 ORDER BY name LIMIT 500')).map(row => ({ id: row.id, name: row.name, whatsapp: row.phone }));
 
   /* ---------------- scheduler */
   /** One-time and recurring campaigns whose moment has come: claim + create the delivery rows atomically. */
   async function materialise(now) {
-    const due = await db.query("SELECT * FROM campaigns WHERE status IN ('scheduled','active') AND kind <> 'trigger' AND next_at IS NOT NULL AND next_at<=$1 ORDER BY next_at LIMIT 20", [now]);
+    const due = await db.query("SELECT * FROM campaigns WHERE tenant_id=:tenant AND status IN ('scheduled','active') AND kind <> 'trigger' AND next_at IS NOT NULL AND next_at<=$1 ORDER BY next_at LIMIT 20", [now]);
     let changed = false;
     for (const row of due) {
       const c = toCampaign(row), occurrence = row.kind === 'once' ? 'once' : `r${row.next_at}`;
@@ -296,7 +296,7 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
       const data = { ...JSON.parse(row.data), lastRunAt: now, lastRunCount: audience.length, ...(skipped ? { lastRunSkipped: true } : { lastRunSkipped: false }) };
       const status = recurring ? (next ? 'active' : 'ended') : 'sending';
       const claimed = await db.tx(async q => {
-        const won = await q("UPDATE campaigns SET status=$1, next_at=$2, data=$3, updated_at=$4 WHERE id=$5 AND next_at=$6 AND updated_at=$7 AND status IN ('scheduled','active') RETURNING id", [status, next, JSON.stringify(data), now, row.id, row.next_at, row.updated_at]);
+        const won = await q("UPDATE campaigns SET status=$1, next_at=$2, data=$3, updated_at=$4 WHERE tenant_id=:tenant AND id=$5 AND next_at=$6 AND updated_at=$7 AND status IN ('scheduled','active') RETURNING id", [status, next, JSON.stringify(data), now, row.id, row.next_at, row.updated_at]);
         if (!won.length) return false;
         await insertDeliveries(q, row.id, audience.map(client => ({ client })), occurrence, now, now);
         return true;
@@ -307,13 +307,13 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
   }
   /** Automations: who has just become eligible for each active trigger campaign. */
   async function automations(now) {
-    const rows = await db.query("SELECT * FROM campaigns WHERE kind='trigger' AND status='active'");
+    const rows = await db.query("SELECT * FROM campaigns WHERE tenant_id=:tenant AND kind='trigger' AND status='active'");
     if (!rows.length) return false;
     const clients = (await loadClients()).filter(reachable);
     let changed = false;
     for (const row of rows) {
       const c = toCampaign(row), t = c.trigger, since = Math.max(c.activatedAt || 0, now - 7 * DAY), items = [];
-      const recent = t.event === 'inactive' ? new Map((await db.query('SELECT client_id, MAX(created_at) AS at FROM campaign_deliveries WHERE campaign_id=$1 GROUP BY client_id', [row.id])).map(r => [r.client_id, Number(r.at)])) : null;
+      const recent = t.event === 'inactive' ? new Map((await db.query('SELECT client_id, MAX(created_at) AS at FROM campaign_deliveries WHERE tenant_id=:tenant AND campaign_id=$1 GROUP BY client_id', [row.id])).map(r => [r.client_id, Number(r.at)])) : null;
       for (const client of clients) {
         const lastActive = client.last_seen ?? client.created_at;
         if (t.event === 'signup' && client.created_at >= since && client.created_at + t.delayMinutes * MIN <= now) items.push({ client, occurrence: 'once' });
@@ -332,24 +332,24 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
   async function deliverDue(now, deadline) {
     const paused = !(await notifier.enabled('client'));
     const cap = Number((await settings().catch(() => ({}))).campaignCapHours ?? 24) * 3600000;
-    const due = await db.query("SELECT d.*, c.name AS client_name FROM campaign_deliveries d JOIN clients c ON c.id=d.client_id WHERE d.status='pending' AND d.next_at<=$1 ORDER BY d.next_at LIMIT 200", [now]);
+    const due = await db.query("SELECT d.*, c.name AS client_name FROM campaign_deliveries d JOIN clients c ON c.tenant_id=:tenant AND c.id=d.client_id WHERE d.tenant_id=:tenant AND d.status='pending' AND d.next_at<=$1 ORDER BY d.next_at LIMIT 200", [now]);
     const cache = new Map();
     const campaign = async id => { if (!cache.has(id)) { const row = await getRow(id); cache.set(id, row ? toCampaign(row) : null); } return cache.get(id); };
     let settled = 0;
-    const settle = (d, status, patch = {}) => db.query('UPDATE campaign_deliveries SET status=$1, attempts=$2, next_at=$3, devices=$4, reason=$5, sent_at=$6, completed=$7 WHERE id=$8', [status, patch.attempts ?? d.attempts, patch.nextAt ?? d.next_at, patch.devices ?? d.devices, patch.reason ?? null, patch.sentAt ?? null, patch.completed ?? d.completed, d.id]);
+    const settle = (d, status, patch = {}) => db.query('UPDATE campaign_deliveries SET status=$1, attempts=$2, next_at=$3, devices=$4, reason=$5, sent_at=$6, completed=$7 WHERE tenant_id=:tenant AND id=$8', [status, patch.attempts ?? d.attempts, patch.nextAt ?? d.next_at, patch.devices ?? d.devices, patch.reason ?? null, patch.sentAt ?? null, patch.completed ?? d.completed, d.id]);
     async function one(d) {
-      const leased = await db.query("UPDATE campaign_deliveries SET next_at=$1 WHERE id=$2 AND next_at=$3 AND status='pending' RETURNING id", [now + 2 * MIN, d.id, d.next_at]);
+      const leased = await db.query("UPDATE campaign_deliveries SET next_at=$1 WHERE tenant_id=:tenant AND id=$2 AND next_at=$3 AND status='pending' RETURNING id", [now + 2 * MIN, d.id, d.next_at]);
       if (!leased.length) return;
       const c = await campaign(d.campaign_id);
       if (!c) return void (settled++, await settle(d, 'skipped', { reason: 'cancelled' }));
       if (paused) return void (settled++, await settle(d, 'skipped', { reason: 'paused' }));
       // Automations respect a frequency cap across all campaigns: postpone (up to 3 days after creation), never drop silently within that window.
       if (c.kind === 'trigger' && cap > 0) {
-        const last = (await db.query("SELECT MAX(sent_at) AS at FROM campaign_deliveries WHERE client_id=$1 AND status='sent'", [d.client_id]))[0]?.at;
+        const last = (await db.query("SELECT MAX(sent_at) AS at FROM campaign_deliveries WHERE tenant_id=:tenant AND client_id=$1 AND status='sent'", [d.client_id]))[0]?.at;
         if (last && Number(last) + cap > now) {
           const wait = Number(last) + cap;
           if (wait > Number(d.created_at) + 3 * DAY) { settled++; return void await settle(d, 'skipped', { reason: 'capped' }); }
-          return void await db.query('UPDATE campaign_deliveries SET next_at=$1 WHERE id=$2', [wait, d.id]);
+          return void await db.query('UPDATE campaign_deliveries SET next_at=$1 WHERE tenant_id=:tenant AND id=$2', [wait, d.id]);
         }
       }
       let result;
@@ -365,15 +365,15 @@ function createCampaigns(db, notifier, { sync, settings = async () => ({}), cloc
     return settled;
   }
   async function finalise(now) {
-    const done = await db.query("UPDATE campaigns SET status='sent', updated_at=$1 WHERE status='sending' AND NOT EXISTS (SELECT 1 FROM campaign_deliveries d WHERE d.campaign_id=campaigns.id AND d.status='pending') RETURNING id", [now]);
+    const done = await db.query("UPDATE campaigns SET status='sent', updated_at=$1 WHERE tenant_id=:tenant AND status='sending' AND NOT EXISTS (SELECT 1 FROM campaign_deliveries d WHERE d.tenant_id=:tenant AND d.campaign_id=campaigns.id AND d.status='pending') RETURNING id", [now]);
     return done.length > 0;
   }
 
   let localAt = 0, running = null;
   /** Cross-instance throttle: at most one instance runs a tick every 10 s (a poll from any open app triggers it). */
   async function claimTick(now) {
-    await db.query("INSERT INTO settings(key,value) VALUES('campaign_tick','0') ON CONFLICT (key) DO NOTHING");
-    return (await db.query("UPDATE settings SET value=$1 WHERE key='campaign_tick' AND CAST(value AS BIGINT) <= $2 RETURNING key", [String(now), now - 10000])).length > 0;
+    await db.query("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,'campaign_tick','0') ON CONFLICT (tenant_id,key) DO NOTHING");
+    return (await db.query("UPDATE settings SET value=$1 WHERE tenant_id=:tenant AND key='campaign_tick' AND CAST(value AS BIGINT) <= $2 RETURNING key", [String(now), now - 10000])).length > 0;
   }
   async function tick({ force = false, budgetMs = 8000 } = {}) {
     const now = clock();

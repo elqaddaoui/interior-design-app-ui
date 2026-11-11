@@ -41,7 +41,8 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 const mb = (value, fallback) => Math.max(1, Math.min(5000, Number(value) || fallback)) * 1024 * 1024;
 const limitsOf = env => ({ image: mb(env.MEDIA_MAX_IMAGE_MB, 10), video: mb(env.MEDIA_MAX_VIDEO_MB, 100), audio: mb(env.MEDIA_MAX_AUDIO_MB, 8) });
 const kindOf = mime => (VIDEO_TYPES.includes(mime) ? 'video' : IMAGE_TYPES.includes(mime) ? 'image' : AUDIO_TYPES.includes(audioType(mime)) ? 'audio' : '');
-const keyOf = name => `media/${name}`;
+/** Object key in R2. The default tenant keeps the historical `media/<name>`; every other tenant has its own prefix, so one tenant's files can never be addressed (or overwritten) through another's. */
+const keyFor = tenantId => (!tenantId || tenantId === 'default' ? name => `media/${name}` : name => `t/${tenantId}/media/${name}`);
 const idOf = body => crypto.createHash('sha256').update(body.toString('base64')).digest('hex').slice(0, 32);
 
 /** 'r2' when every R2 variable is set, 'database' when none is, 'incomplete' otherwise (treated as missing). Never returns values. */
@@ -119,6 +120,7 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
  */
 function createMedia(db, { env = process.env, storage = createR2Storage(env), download = downloadRemote, dryRun = false } = {}) {
   const limits = limitsOf(env);
+  const keyOf = keyFor(db.tenantId);
   const saved = new Set();
   const remoteCache = new Map(); // url -> Promise<media URL>: an external image is downloaded once per process
   const stats = { stored: 0, downloaded: 0 };
@@ -149,17 +151,17 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     if (!EXT[mime]) throw fail(400, 'UNSUPPORTED_MEDIA');
     const id = idOf(body), name = `${id}.${EXT[mime]}`;
     if (dryRun || saved.has(id)) return PREFIX + name;
-    const existing = (await db.query('SELECT storage FROM media WHERE id=$1', [id]))[0];
+    const existing = (await db.query('SELECT storage FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
     if (storage) {
       if (existing?.storage !== 'r2') {
         await storage.put(keyOf(name), body, mime);
-        await db.query("INSERT INTO media(id,mime,data,body,size,storage,created_at) VALUES($1,$2,'',NULL,$3,'r2',$4) ON CONFLICT (id) DO UPDATE SET storage='r2', size=EXCLUDED.size", [id, mime, body.length, Date.now()]);
+        await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) VALUES(:tenant,$1,$2,'',NULL,$3,'r2',$4) ON CONFLICT (tenant_id,id) DO UPDATE SET storage='r2', size=EXCLUDED.size", [id, mime, body.length, Date.now()]);
         meta.delete(id);
         stats.stored++;
       }
     } else if (!existing) {
       // Fallback without R2: raw bytes (BYTEA), never base64 text.
-      await db.query("INSERT INTO media(id,mime,data,body,size,storage,created_at) VALUES($1,$2,'',$3,$4,'db',$5) ON CONFLICT (id) DO NOTHING", [id, mime, body, body.length, Date.now()]);
+      await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) VALUES(:tenant,$1,$2,'',$3,$4,'db',$5) ON CONFLICT (tenant_id,id) DO NOTHING", [id, mime, body, body.length, Date.now()]);
       stats.stored++;
     }
     saved.add(id);
@@ -289,7 +291,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     const id = match[1];
     let info = meta.get(id);
     if (!info) {
-      const row = (await db.query('SELECT mime,storage,size FROM media WHERE id=$1', [id]))[0];
+      const row = (await db.query('SELECT mime,storage,size FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
       if (!row) return null;
       info = { mime: row.mime, storage: row.storage, size: row.size == null ? null : Number(row.size) };
       if (info.storage === 'r2' || info.storage === 'db') { // 'pending' rows change: never remembered
@@ -303,7 +305,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     if (head) return { mime: info.mime, body: Buffer.alloc(0), size: info.size };
     const cached = bodies.get(id);
     if (cached) { bodies.delete(id); bodies.set(id, cached); return { mime: info.mime, body: cached }; } // refresh LRU position
-    const row = (await db.query('SELECT data,body FROM media WHERE id=$1', [id]))[0];
+    const row = (await db.query('SELECT data,body FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
     if (!row) return null;
     let body = null;
     if (row.body) body = Buffer.from(row.body);
@@ -322,7 +324,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     if (!Number.isSafeInteger(size) || size < 1) throw fail(400, 'INVALID_SIZE');
     if (size > limits[kind]) throw fail(413, 'MEDIA_TOO_LARGE');
     const id = crypto.randomBytes(16).toString('hex'), name = `${id}.${EXT[mime]}`;
-    await db.query("INSERT INTO media(id,mime,data,body,size,storage,created_at) VALUES($1,$2,'',NULL,$3,'pending',$4)", [id, mime, size, Date.now()]);
+    await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) VALUES(:tenant,$1,$2,'',NULL,$3,'pending',$4)", [id, mime, size, Date.now()]);
     const uploadUrl = await storage.presignPut(keyOf(name), mime, size);
     return { id, uploadUrl, method: 'PUT', headers: { 'Content-Type': mime }, url: PREFIX + name, expiresIn: UPLOAD_EXPIRES, maxBytes: limits[kind] };
   }
@@ -331,17 +333,17 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
   async function completeUpload(id) {
     if (!storage) throw fail(503, 'R2_NOT_CONFIGURED');
     if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) throw fail(400, 'INVALID_ID');
-    const row = (await db.query('SELECT mime,size,storage,created_at FROM media WHERE id=$1', [id]))[0];
+    const row = (await db.query('SELECT mime,size,storage,created_at FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
     if (!row) throw fail(404, 'NOT_FOUND');
     const name = `${id}.${EXT[row.mime]}`;
     if (row.storage === 'r2') return { url: PREFIX + name };
     if (row.storage !== 'pending' || Number(row.created_at) < Date.now() - PENDING_TTL) throw fail(410, 'UPLOAD_EXPIRED');
     const object = await storage.head(keyOf(name));
     if (!object) throw fail(409, 'UPLOAD_MISSING');
-    const reject = async code => { await storage.remove(keyOf(name)).catch(() => {}); await db.query("DELETE FROM media WHERE id=$1 AND storage='pending'", [id]); throw fail(400, code); };
+    const reject = async code => { await storage.remove(keyOf(name)).catch(() => {}); await db.query("DELETE FROM media WHERE tenant_id=:tenant AND id=$1 AND storage='pending'", [id]); throw fail(400, code); };
     if (object.size !== Number(row.size) || object.mime !== row.mime) return reject('UPLOAD_MISMATCH');
     try { verifyMedia(await storage.getRange(keyOf(name), 64), row.mime, kindOf(row.mime)); } catch { return reject('INVALID_MEDIA'); }
-    await db.query("UPDATE media SET storage='r2' WHERE id=$1", [id]);
+    await db.query("UPDATE media SET storage='r2' WHERE tenant_id=:tenant AND id=$1", [id]);
     meta.delete(id);
     return { url: PREFIX + name };
   }
@@ -358,7 +360,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     if (dryRun) return true;
     const object = await storage.head(keyOf(name));
     if (!object || object.size !== body.length) await storage.put(keyOf(name), body, row.mime);
-    await db.query("UPDATE media SET storage='r2', size=$2 WHERE id=$1", [row.id, body.length]);
+    await db.query("UPDATE media SET storage='r2', size=$2 WHERE tenant_id=:tenant AND id=$1", [row.id, body.length]);
     meta.delete(row.id);
     return true;
   }
@@ -366,4 +368,4 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
   return { storeMedia, storeRaw, rawLimit, readMedia, fetchBytes, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, stats, mode: storage ? 'r2' : 'database' };
 }
 
-module.exports = { createMedia, createR2Storage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };
+module.exports = { keyFor, createMedia, createR2Storage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };

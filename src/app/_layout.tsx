@@ -2,7 +2,7 @@ import '../global.css';
 import '@/lib/interop';
 import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import { Stack, usePathname } from 'expo-router';
+import { Slot, Stack, usePathname } from 'expo-router';
 import { GestureRoot } from '@/components/GestureRoot';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ensureFont } from '@/lib/fonts';
@@ -26,12 +26,15 @@ import { boot, loaderConfig } from '@/lib/boot';
 import { resolveTokens } from '@/theme/tokens';
 import { BootOverlay } from '@/components/BootOverlay';
 import { defaultSettings, defaultTheme } from '@/data/mock/seed';
+import { isSuperAdminPath } from '@/superadmin/paths';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+// The Super Admin console (/super-admin) is not a tenant: it never loads tenant content, theme, loader or branding.
+const ON_CONSOLE = typeof window !== 'undefined' && isSuperAdminPath(window.location.pathname);
 // Native / dev: until the real settings arrive the React loader uses the defaults (web production uses index.html's loader).
-{ const tokens = resolveTokens(defaultTheme()); boot.preset(loaderConfig(defaultSettings(), tokens)); }
+if (!ON_CONSOLE) { const tokens = resolveTokens(defaultTheme()); boot.preset(loaderConfig(defaultSettings(), tokens)); }
 // Public content does not depend on who is signed in: download it now, not after the session answers.
-if (backendEnabled) prefetchContent();
+if (backendEnabled && !ON_CONSOLE) prefetchContent();
 
 /** Startup reads are retried a few times with a short pause; after that the app opens anyway and the sync loop keeps checking. */
 const INIT_ATTEMPTS = 4;
@@ -47,7 +50,23 @@ async function initWithRetry() {
 }
 const withTimeout = (work: Promise<unknown>, ms: number) => Promise.race([work.catch(() => {}), new Promise((resolve) => setTimeout(resolve, ms))]);
 
+/** The console's own root: no tenant theme, store, loader, fonts, sync or push. Its look comes from src/superadmin/tokens.ts only. */
+function ConsoleRoot() {
+  useEffect(() => {
+    // The HTML shell's tenant loader would otherwise stay up until its safety timer.
+    (globalThis as { __dwiraBoot?: { hide?: () => void } }).__dwiraBoot?.hide?.();
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+  return <View style={{ flex: 1 }}><Slot /></View>;
+}
+
 export default function RootLayout() {
+  const path = usePathname();
+  // `ON_CONSOLE` is fixed for the page's lifetime (the console is its own page load), so the hook order below never changes.
+  return ON_CONSOLE || isSuperAdminPath(path) ? <ConsoleRoot /> : <TenantRoot />;
+}
+
+function TenantRoot() {
   const initialPath = usePathname();
   setCurrentPath(initialPath);
   const [shown, setShown] = useState(false);

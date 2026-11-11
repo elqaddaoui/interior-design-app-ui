@@ -89,13 +89,13 @@ function createDemo(db, { clock = Date.now } = {}) {
   async function click(id) {
     if (typeof id !== 'string' || !ID_RE.test(id)) throw Object.assign(new Error('INVALID_DEMO'), { status: 400 });
     try {
-      await db.query("INSERT INTO settings(key,value) VALUES($1,'1') ON CONFLICT (key) DO UPDATE SET value=((settings.value)::bigint+1)::text", [key(id)]);
-      await db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [`asst_t:demo:${id}`, String(clock())]);
+      await db.query("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,'1') ON CONFLICT (tenant_id,key) DO UPDATE SET value=((settings.value)::bigint+1)::text", [key(id)]);
+      await db.query('INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value', [`asst_t:demo:${id}`, String(clock())]);
     } catch { /* counter only */ }
   }
   /** Admin: { [id]: { used, last } } for every demo message that was ever picked. */
   async function stats() {
-    const rows = await db.query("SELECT key, value FROM settings WHERE key LIKE 'asst_n:demo:%' OR key LIKE 'asst_t:demo:%'");
+    const rows = await db.query("SELECT key, value FROM settings WHERE tenant_id=:tenant AND (key LIKE 'asst_n:demo:%' OR key LIKE 'asst_t:demo:%')");
     const out = {};
     for (const row of rows) {
       const n = row.key.startsWith('asst_n:demo:');

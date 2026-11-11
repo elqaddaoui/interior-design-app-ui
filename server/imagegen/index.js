@@ -51,7 +51,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   async function storedKeys() {
     if (clock() - keysCache.at < 15000) return keysCache.value;
     let value = {};
-    try { const row = (await db.query("SELECT value FROM settings WHERE key='image_keys'"))[0]; if (row) value = JSON.parse(row.value); } catch { /* none stored */ }
+    try { const row = (await db.query("SELECT value FROM settings WHERE tenant_id=:tenant AND key='image_keys'"))[0]; if (row) value = JSON.parse(row.value); } catch { /* none stored */ }
     keysCache = { at: clock(), value };
     return value;
   }
@@ -83,7 +83,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       else current[name] = trimmed;
       for (const key of [...cooling.keys()]) if (key.startsWith(`${name}|`)) cooling.delete(key);
     }
-    await db.query("INSERT INTO settings(key,value) VALUES('image_keys',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(current)]);
+    await db.query("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,'image_keys',$1) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(current)]);
     keysCache = { at: clock(), value: current };
     return status();
   }
@@ -116,7 +116,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const ids = Array.isArray(raw?.ids) ? raw.ids.filter(id => typeof id === 'string' && ID_RE.test(id)).slice(0, 50) : [];
     return { on: raw?.on === true, ids: ids.filter((id, i) => ids.indexOf(id) === i) };
   };
-  const rotationLast = async () => { try { const row = (await db.query('SELECT value FROM settings WHERE key=$1', [ROTATION_KEY]))[0]; return row ? String(JSON.parse(row.value).last || '') : ''; } catch { return ''; } };
+  const rotationLast = async () => { try { const row = (await db.query('SELECT value FROM settings WHERE tenant_id=:tenant AND key=$1', [ROTATION_KEY]))[0]; return row ? String(JSON.parse(row.value).last || '') : ''; } catch { return ''; } };
   /** The selected models that exist, are switched on, have an engine, and (with a photo) can take one. In the admin's list order. */
   function rotationPool(collections, setting, needImage) {
     const chosen = new Set(setting.ids);
@@ -140,17 +140,17 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const setting = rotationSetting(settings);
     if (!setting.on) return null;
     const pick = await db.tx(async q => {
-      const stored = (await q('SELECT value FROM settings WHERE key=$1 FOR UPDATE', [ROTATION_KEY]))[0];
+      const stored = (await q('SELECT value FROM settings WHERE tenant_id=:tenant AND key=$1 FOR UPDATE', [ROTATION_KEY]))[0];
       const order = await rotationOrder(collections, setting, needImage, stored ? String(JSON.parse(stored.value).last || '') : '');
       if (!order.length) return null;
-      await q('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [ROTATION_KEY, JSON.stringify({ last: order[0].id, at: clock() })]);
+      await q('INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value', [ROTATION_KEY, JSON.stringify({ last: order[0].id, at: clock() })]);
       return order;
     });
     return pick ? { order: pick, size: rotationPool(collections, setting, needImage).length } : null;
   }
   /** A fallback model answered instead of the one whose turn it was: the next turn continues after the one that really ran. */
   const rotationUsed = (id, setting) => id && setting.ids.includes(id)
-    ? db.query('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [ROTATION_KEY, JSON.stringify({ last: id, at: clock() })]).catch(() => {})
+    ? db.query('INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,$1,$2) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value', [ROTATION_KEY, JSON.stringify({ last: id, at: clock() })]).catch(() => {})
     : Promise.resolve();
   /** What the admin screen shows: the switch, the pool in order, and which model is next (read only: nothing is taken). */
   async function rotationInfo() {
@@ -237,14 +237,14 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   async function loadRules() {
     if (rulesCache.value && clock() - rulesCache.at < 15000) return rulesCache.value;
     let value = defaultRules();
-    try { const row = (await db.query("SELECT value FROM settings WHERE key='prompt_rules'"))[0]; if (row) value = cleanRules(JSON.parse(row.value)); } catch { /* none stored: the defaults */ }
+    try { const row = (await db.query("SELECT value FROM settings WHERE tenant_id=:tenant AND key='prompt_rules'"))[0]; if (row) value = cleanRules(JSON.parse(row.value)); } catch { /* none stored: the defaults */ }
     rulesCache = { at: clock(), value };
     return value;
   }
   async function setRules(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail(400, 'INVALID_RULES');
     const value = cleanRules(input);
-    await db.query("INSERT INTO settings(key,value) VALUES('prompt_rules',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(value)]);
+    await db.query("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,'prompt_rules',$1) ON CONFLICT (tenant_id,key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(value)]);
     rulesCache = { at: clock(), value };
     return rulesInfo();
   }
@@ -428,7 +428,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
   /** Idempotent per request: a second call returns the stored result (or joins the one in flight) and never generates twice. */
   async function renderRequest(client, claimId) {
     if (typeof claimId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(claimId)) throw fail(400, 'INVALID_CLAIM');
-    const found = (await db.query('SELECT id,data FROM requests WHERE user_id=$1 AND client_request_id=$2', [client.id, claimId]))[0];
+    const found = (await db.query('SELECT id,data FROM requests WHERE tenant_id=:tenant AND user_id=$1 AND client_request_id=$2', [client.id, claimId]))[0];
     if (!found) throw fail(404, 'NOT_FOUND');
     const key = found.id;
     if (inflight.has(key)) return inflight.get(key);
@@ -440,15 +440,15 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       try { result = await generate({ request, userId: client.id }); }
       catch (error) {
         // Keep what was asked and which models failed: the admin sees it on the request (no result is stored, the client can retry).
-        if (error.run) await db.query('UPDATE requests SET data=$1 WHERE id=$2', [JSON.stringify({ ...request, aiRun: error.run }), key]).catch(() => {});
+        if (error.run) await db.query('UPDATE requests SET data=$1 WHERE tenant_id=:tenant AND id=$2', [JSON.stringify({ ...request, aiRun: error.run }), key]).catch(() => {});
         throw error;
       }
       if (!result.cached) {
         await db.tx(async q => {
-          const row = (await q('SELECT data FROM requests WHERE id=$1 FOR UPDATE', [key]))[0];
+          const row = (await q('SELECT data FROM requests WHERE tenant_id=:tenant AND id=$1 FOR UPDATE', [key]))[0];
           if (!row) return;
           const next = { ...JSON.parse(row.data), aiResult: result.imageUri, aiModel: { engine: result.engine, model: result.model, label: result.label }, aiRun: result.run };
-          await q('UPDATE requests SET data=$1 WHERE id=$2', [JSON.stringify(next), key]);
+          await q('UPDATE requests SET data=$1 WHERE tenant_id=:tenant AND id=$2', [JSON.stringify(next), key]);
         });
         if (sync) await sync.bump('requests', `c:${client.id}`, `c:${client.id}:requests`).catch(() => {});
       }

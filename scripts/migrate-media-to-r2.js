@@ -2,7 +2,10 @@
 /**
  * Moves every media file of the app to Cloudflare R2.
  *
- *   node scripts/migrate-media-to-r2.js [--dry-run] [--external] [--videos]
+ *   node scripts/migrate-media-to-r2.js [--dry-run] [--external] [--videos] [--tenant=<id> | --all]
+ *
+ * Multi-tenant: one run migrates ONE tenant (default: the `default` tenant, i.e. the original app). `--tenant=<id>` picks another,
+ * `--all` goes through every tenant in turn. Files of a non-default tenant are stored under its own R2 prefix (t/<id>/media/).
  *
  * Steps (each one idempotent: running the script again only does what is left):
  *   1. `media` table rows stored in the database (legacy base64 `data` or `body` bytes) are uploaded to R2 under the SAME
@@ -19,6 +22,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { createDb } = require('../server/db');
+const { scopeDb } = require('../server/scope');
 const { createSync } = require('../server/sync');
 const { createMedia, createR2Storage, r2Status, R2_VARS } = require('../server/media');
 
@@ -32,15 +36,16 @@ function loadEnvFile(env, file = path.join(__dirname, '..', 'server', '.env')) {
 }
 
 const TABLES = [
-  { name: 'content items', select: 'SELECT coll,id,data FROM content_items', column: 'data', update: 'UPDATE content_items SET data=$1 WHERE coll=$2 AND id=$3', keys: row => [row.coll, row.id], label: row => `${row.coll}/${row.id}`, sync: () => ['content'] },
-  { name: 'content documents', select: 'SELECT name,data FROM content_docs', column: 'data', update: 'UPDATE content_docs SET data=$1 WHERE name=$2', keys: row => [row.name], label: row => `doc/${row.name}`, sync: () => ['content'] },
-  { name: 'requests', select: 'SELECT id,user_id,data FROM requests', column: 'data', update: 'UPDATE requests SET data=$1 WHERE id=$2', keys: row => [row.id], label: row => `request/${row.id}`, sync: row => ['requests', `c:${row.user_id}`] },
-  { name: 'user spaces', select: 'SELECT id,client_id,kind,value FROM space', column: 'value', update: 'UPDATE space SET value=$1 WHERE id=$2', keys: row => [row.id], label: row => `${row.kind}/${row.id}`, sync: row => [`c:${row.client_id}`] },
+  { name: 'content items', select: 'SELECT coll,id,data FROM content_items WHERE tenant_id=:tenant', column: 'data', update: 'UPDATE content_items SET data=$1 WHERE tenant_id=:tenant AND coll=$2 AND id=$3', keys: row => [row.coll, row.id], label: row => `${row.coll}/${row.id}`, sync: () => ['content'] },
+  { name: 'content documents', select: 'SELECT name,data FROM content_docs WHERE tenant_id=:tenant', column: 'data', update: 'UPDATE content_docs SET data=$1 WHERE tenant_id=:tenant AND name=$2', keys: row => [row.name], label: row => `doc/${row.name}`, sync: () => ['content'] },
+  { name: 'requests', select: 'SELECT id,user_id,data FROM requests WHERE tenant_id=:tenant', column: 'data', update: 'UPDATE requests SET data=$1 WHERE tenant_id=:tenant AND id=$2', keys: row => [row.id], label: row => `request/${row.id}`, sync: row => ['requests', `c:${row.user_id}`] },
+  { name: 'user spaces', select: 'SELECT id,client_id,kind,value FROM space WHERE tenant_id=:tenant', column: 'value', update: 'UPDATE space SET value=$1 WHERE tenant_id=:tenant AND id=$2', keys: row => [row.id], label: row => `${row.kind}/${row.id}`, sync: row => [`c:${row.client_id}`] },
 ];
 
-async function migrate({ env = process.env, db, storage, download, dryRun = false, external = false, videos = false, log = console.log } = {}) {
-  const ownDb = !db;
-  db ||= createDb(env);
+async function migrate({ env = process.env, db: rawDb, tenant = 'default', storage, download, dryRun = false, external = false, videos = false, log = console.log } = {}) {
+  const ownDb = !rawDb;
+  rawDb ||= createDb(env);
+  const db = scopeDb(rawDb, tenant); // every statement below is bound to this one tenant
   storage ||= createR2Storage(env);
   if (!storage) throw new Error(`R2 is not configured (${r2Status(env)}). Set ${R2_VARS.join(', ')}.`);
   const media = createMedia(db, { env, storage, download, dryRun });
@@ -48,7 +53,7 @@ async function migrate({ env = process.env, db, storage, download, dryRun = fals
   const report = { dryRun, rowsMoved: 0, rowsFailed: 0, fieldsUpdated: 0, rowsUpdated: 0, externalFailed: [], bumped: new Set() };
   try {
     // 1. Legacy media rows -> R2 (same names, so every existing /api/media URL keeps working).
-    const rows = await db.query("SELECT id,mime,data,body FROM media WHERE storage='db'");
+    const rows = await db.query("SELECT id,mime,data,body FROM media WHERE tenant_id=:tenant AND storage='db'");
     log(`[media] ${rows.length} database media row(s) to copy to R2${dryRun ? ' (dry run)' : ''}`);
     for (const row of rows) {
       try { if (await media.moveRowToR2(row)) report.rowsMoved++; }
@@ -92,7 +97,7 @@ async function migrate({ env = process.env, db, storage, download, dryRun = fals
     log(`[media] done${dryRun ? ' (dry run: nothing was written)' : ''}: ${report.rowsMoved} media row(s) copied to R2, ${report.rowsUpdated} JSON row(s) / ${report.fieldsUpdated} field(s) updated, ${report.downloaded} external file(s) downloaded, ${report.externalFailed.length} URL(s) kept, ${report.rowsFailed} copy error(s).`);
     for (const failure of report.externalFailed) log(`[media]   kept ${failure.url} in ${failure.row}: ${failure.reason}`);
     return report;
-  } finally { if (ownDb) await db.close(); }
+  } finally { if (ownDb) await rawDb.close(); }
 }
 
 function countChanges(a, b) {
@@ -103,14 +108,24 @@ function countChanges(a, b) {
 
 if (require.main === module) {
   const args = new Set(process.argv.slice(2));
-  const unknown = [...args].filter(arg => !['--dry-run', '--external', '--videos', '--help', '-h'].includes(arg));
+  const tenantArg = [...args].find(arg => arg.startsWith('--tenant='));
+  const unknown = [...args].filter(arg => !['--dry-run', '--external', '--videos', '--all', '--help', '-h'].includes(arg) && arg !== tenantArg);
   if (args.has('--help') || args.has('-h') || unknown.length) {
-    console.log('Usage: node scripts/migrate-media-to-r2.js [--dry-run] [--external] [--videos]');
+    console.log('Usage: node scripts/migrate-media-to-r2.js [--dry-run] [--external] [--videos] [--tenant=<id> | --all]');
     process.exit(unknown.length ? 1 : 0);
   }
   loadEnvFile(process.env);
-  migrate({ dryRun: args.has('--dry-run'), external: args.has('--external') || args.has('--videos'), videos: args.has('--videos') })
-    .then(report => { process.exit(report.rowsFailed ? 2 : 0); })
+  const options = { dryRun: args.has('--dry-run'), external: args.has('--external') || args.has('--videos'), videos: args.has('--videos') };
+  (async () => {
+    const db = createDb(process.env);
+    try {
+      const tenants = args.has('--all') ? (await db.query('SELECT id FROM saas_tenants ORDER BY created_at')).map(row => row.id) : [tenantArg ? tenantArg.slice('--tenant='.length) : 'default'];
+      let failed = 0;
+      for (const tenant of tenants) { console.log(`[media] tenant ${tenant}`); failed += (await migrate({ ...options, db: { ...db, close: async () => {} }, tenant })).rowsFailed; }
+      return failed;
+    } finally { await db.close(); }
+  })()
+    .then(failed => { process.exit(failed ? 2 : 0); })
     .catch(error => { console.error(`[media] migration failed: ${error.message}`); process.exit(1); });
 }
 

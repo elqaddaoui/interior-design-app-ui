@@ -104,3 +104,17 @@ test('simulated Vercel requests: POST /api/user/login reaches the backend throug
   assert.equal(missing.status, 404);
   assert.equal(typeof missing.body, 'object', 'unknown API routes answer JSON from the backend, not a Vercel NOT_FOUND');
 });
+
+test('a tenant served under a slug reaches the function with its slug restored (multi-tenant routing)', () => {
+  const { originalUrl } = require('../api');
+  const dest = resolve('/acme/api/user/login');
+  assert.equal(functionFor(dest), 'api/index.js');
+  assert.equal(originalUrl(dest), '/acme/api/user/login');
+  assert.equal(originalUrl(`${resolve('/acme/api/media/abc.png')}&x=1`), '/acme/api/media/abc.png?x=1'); // Vercel appends the original query string
+  assert.equal(originalUrl(resolve('/api/user/login')), '/api/user/login');
+  // Pages of a tenant are the SPA; its storefront and admin are static files behind the same fallback.
+  assert.equal(resolve('/acme'), '/index.html');
+  assert.equal(resolve('/acme/admin/settings'), '/index.html');
+  // A forged __slug on a plain /api URL is ignored.
+  assert.equal(originalUrl('/api/user/login?__slug=acme'), '/api/user/login');
+});

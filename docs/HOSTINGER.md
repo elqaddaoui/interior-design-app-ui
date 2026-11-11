@@ -82,6 +82,8 @@ Without it the server does not start. The runtime log then shows:
 | `ADMIN_EMAIL` | your admin login | Replaces the default `admin` / `admin` |
 | `ADMIN_PASSWORD_HASH` | output of `ADMIN_PASSWORD='a-long-password' node server/password.js` | |
 | `DISABLE_DEFAULT_ADMIN` | `true` once your own login works | |
+| `SUPERADMIN_EMAIL` | the platform owner's e-mail | Enables `/super-admin` (tenants, demos, requests). Not set = console disabled |
+| `SUPERADMIN_PASSWORD_HASH` | same format as `ADMIN_PASSWORD_HASH` | Never reuse the tenant admin password |
 | `CRON_SECRET` | a long random string | Protects `/api/push/pump` (see section 4) |
 
 ### Optional (same meaning as on Vercel, see `server/.env.example`)
