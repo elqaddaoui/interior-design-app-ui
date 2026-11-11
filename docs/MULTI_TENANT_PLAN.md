@@ -1,6 +1,6 @@
 # Multi-tenant SaaS plan
 
-Status: approved by the owner to implement. Written before any code, kept up to date as phases land.
+Status: approved by the owner to implement. Phases 1-6 are implemented (data layer, identity, routing/domains, super admin, demos/ownership, hardening with leak tests) and covered by `npm run test:server` plus `npm run check:saas:browser`. Remaining: a tenant-side screen for change requests (API exists), see Q-list.
 Scope: turn the single-admin Dwira app into a multi-tenant SaaS **without a rewrite**. The app as it runs today keeps working
 unchanged as the **default tenant** (`id = 'default'`), at the root of the current domain, with all existing data.
 
@@ -16,7 +16,7 @@ unchanged as the **default tenant** (`id = 'default'`), at the root of the curre
 | Expo Router reads `process.env.EXPO_BASE_URL` at call time, but Babel inlines it at build time. | A tiny Babel plugin replaces that one expression with a runtime value (`window.__DWIRA_BASE__`), set by the HTML shell from the URL. Expo Router then adds/strips `/{slug}` itself for links, `router.push`, back/forward and reloads. No route is duplicated. |
 | Web push uses one service worker per origin and `PushManager.subscribe` needs one VAPID key per origin. | One **platform** VAPID key pair (the one default-tenant subscribers already use). Subscription **rows** are tenant-scoped. |
 | `origin/genspark_ai_developer` (unmerged, not on `main`) contains a different Super Admin (`/superadmin`, `sa_tenants` = organisations that group admins, default `superadmin/superadmin` password). The commit message also says generic table names (`tenants`, `audit_log`, `admin_roles`) **already exist with another shape in the shared Neon database**. | New tables are all prefixed `saas_` and never reuse a generic name. This work does not merge that branch (see open questions Q1). |
-| Dev box has 1 GB RAM: `tsc` needs `NODE_OPTIONS=--max-old-space-size=3072`; a full Metro web export is not feasible here. | Client routing/domain code is kept small, pure and unit-tested (Babel plugin test, path helpers); the web export is verified in CI/Vercel, not here. |
+| Dev box has 1 GB RAM: `tsc` needs `NODE_OPTIONS=--max-old-space-size=3072`; a full Metro web export works here (about 2 minutes, run it detached) but needs the memory to itself. | Client routing/domain code is kept small, pure and unit-tested (Babel plugin test, path helpers); the web export and `scripts/check-saas-browser.js` run here and in CI/Vercel. |
 
 ## 1. Schema
 

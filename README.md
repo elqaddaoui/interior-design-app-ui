@@ -186,8 +186,21 @@ node scripts/check-client-browser.js   # lead flow, sessions, admin menu
 node scripts/check-push-browser.js     # notification button desktop/mobile/iOS hint
 node scripts/check-inbox-browser.js    # admin chat deep link + reply, notification switches, Moroccan loader tiles
 node scripts/check-sync-browser.js     # two browsers: content, leads and preferences sync (server serving dist/)
+# multi-tenant browser check (boots its own server on :8791 from dist/, saves screenshots to docs/screenshots/saas/):
+npm run check:saas:browser
 ```
 Phone-only login is the existing behavior (no OTP verification); do not treat knowledge of a phone number as production-grade proof of identity. Real push delivery to Google/Apple and physical devices remain manual checks.
+
+## Multi-tenant SaaS and Super Admin
+
+One codebase and one database serve many tenants. Every tenant-owned row carries a `tenant_id`; the existing app is the **default tenant** (`/`, `/admin`) and all existing data lives there. Design and phases: `docs/MULTI_TENANT_PLAN.md`.
+
+- **Addresses**: `app.com/{slug}` and `app.com/{slug}/admin`, or a verified custom domain (`brand.com/`, `brand.com/admin`). Slugs that clash with app routes are reserved.
+- **Super Admin console**: `/super-admin` on the platform host only (404 under a slug or custom domain). Create, edit, suspend and delete tenants and their admins, manage domains, create **demos** and assign them, answer tenant change requests, read the audit log. Its design system is hard-coded in `src/superadmin/tokens.ts` and never reads tenant data (`scripts/check-superadmin-isolation.js` enforces it).
+- **Enable it**: there is no built-in password. Set `SUPERADMIN_EMAIL` and `SUPERADMIN_PASSWORD_HASH` (`ADMIN_PASSWORD='a-long-password' node server/password.js`) and restart; until then the console says it is not configured and login answers 503.
+- **Demos**: a demo is a template tenant with storefront, admin and sample data. Assigning it to an administrator creates an **independent copy** (new tenant, one transaction). Edits on the copy never reach the demo or any other tenant; provider keys and secrets are not copied.
+- **Change requests**: a tenant admin can send a request to the Super Admin about its own instance (`GET/POST /api/admin/change-requests`). The Super Admin answers it and may apply a content change to that tenant only (refused for demos).
+- **Tests**: `npm run test:server` includes the cross-tenant leak matrix; `npm run check:saas:browser` loads the real pages in Chromium and asserts that what is rendered matches what the database returns (default tenant, a new tenant, a demo instance, super admin console).
 
 ## Admin account, logins and demo messages
 

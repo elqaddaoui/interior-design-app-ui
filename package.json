@@ -97,7 +97,8 @@
     "check:settings": "sucrase-node scripts/check-settings.ts",
     "check:settings:browser": "node scripts/check-settings-browser.js",
     "check:layouts:browser": "node scripts/check-layouts-browser.js",
-    "check:layouts:wow": "node scripts/check-layouts-wow-browser.js"
+    "check:layouts:wow": "node scripts/check-layouts-wow-browser.js",
+    "check:saas:browser": "node scripts/check-saas-browser.js"
   },
   "private": true,
   "engines": {
