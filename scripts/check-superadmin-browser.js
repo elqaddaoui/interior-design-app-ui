@@ -151,7 +151,6 @@ async function startServer() {
     await page.locator('iframe').first().waitFor();
     await page.waitForTimeout(2500);
     await shot(page, '08-demos-live-phone');
-    await demoGrid(page, 'demos');
     // The frame shows the real device layout: the page fills the whole phone screen (390x844), not just the top part.
     const frameOf = () => page.locator('iframe').first().evaluate(f => { const r = f.getBoundingClientRect(); return { w: Math.round(f.offsetWidth), h: Math.round(f.offsetHeight), vis: Math.round(r.height) }; });
     let fr = await frameOf();
@@ -160,7 +159,17 @@ async function startServer() {
     fr = await frameOf();
     assert.deepEqual([fr.w, fr.h], [1280, 800], 'desktop preview keeps the real desktop size');
     await shot(page, '09-demos-live-desktop');
+    // Stop the previews (every one is a whole app, heavy on a small CI machine), add four more demos through the API so there are five
+    // (they also appear with no reload), then check the grid geometry: 2 desktop windows per row; 4 phones then 1 on the second row.
+    await page.getByText('Stop previews', { exact: true }).click({ timeout: 120000 });
+    for (const n of ['Demo B', 'Demo C', 'Demo D', 'Demo E']) { const r = await sa('/demos', { method: 'POST', body: { name: n } }); assert.ok(r.status === 200 || r.status === 201, JSON.stringify(r.body)); }
+    await until(() => page.getByTestId('sa-live-card').count().then(n => n === 5), 'five demo cards appear without a reload (live)', 30000);
+    const rowsOf = () => page.getByTestId('sa-live-row').evaluateAll(rows => rows.map(r => r.querySelectorAll('[data-testid="sa-live-card"]').length));
     await demoGrid(page, 'demos', 'desktop');
+    assert.deepEqual(await rowsOf(), [2, 2, 1], 'five desktop windows: two per row');
+    await page.getByTestId('sa-live-phone').click();
+    await demoGrid(page, 'demos');
+    assert.deepEqual(await rowsOf(), [4, 1], 'five phones: four on the first row, one on the second');
     // Same switch on Stores and Store themes.
     await page.getByTestId('sa-nav-tenants').click();
     await page.getByTestId('sa-tenant-view').waitFor();
@@ -190,7 +199,8 @@ async function startServer() {
     assert.ok((await page.getByTestId('sa-logo').count()) >= 1, 'logo mark shown in the console');
     // Customize on a card -> admin of the demo opens signed in.
     await page.getByTestId('sa-view-list').click();
-    const [demoTab] = await Promise.all([context.waitForEvent('page'), page.getByTestId('sa-demo-customize').first().click()]);
+    // Newest first: "Atlas Look" was created before the four extra demos, so it is the last row.
+    const [demoTab] = await Promise.all([context.waitForEvent('page'), page.getByTestId('sa-demo-customize').last().click()]);
     await until(async () => (await demoTab.evaluate(async s => (await fetch(`/${s}/api/admin/session`, { credentials: 'include' })).status, demo.slug)) === 200, 'demo admin opened with no login', 60000);
     await demoTab.close();
 
