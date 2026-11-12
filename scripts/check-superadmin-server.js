@@ -231,7 +231,7 @@ test('demos: a demo is a template tenant with sample data; assigning it creates 
 
   // Storefront + admin dashboard + sample data exist for the template.
   assert.ok((await call(backend, `/${demo.slug}/api/content`)).body.collections.tools.length > 0);
-  const demoCookie = await tenantLogin(backend, demo.slug, made.body.admin.email, made.body.admin.password);
+  const demoCookie = await tenantLogin(backend, demo.slug, made.body.admin.id, made.body.admin.password);
   const sampleRequests = await call(backend, `/${demo.slug}/api/requests`, { headers: demoCookie });
   assert.equal(sampleRequests.body.length, 5);
   assert.equal((await call(backend, `/${demo.slug}/api/admin/clients`, { headers: demoCookie })).body.length, 4);
@@ -301,7 +301,7 @@ test('assigning to an EXISTING admin re-uses their login; AI provider keys never
   const { api, backend, db } = await setup();
   const owner = await newTenant(api, 'ownerhome', { ownerEmail: 'boss@ownerhome.test' });
   const { demo, admin: demoAdmin } = (await api('/demos', { method: 'POST', body: { name: 'Keys Demo' } })).body;
-  const cookie = await tenantLogin(backend, demo.slug, demoAdmin.email, demoAdmin.password);
+  const cookie = await tenantLogin(backend, demo.slug, demoAdmin.id, demoAdmin.password);
   // Put a provider key into the template: in a model entry and in the image-keys setting.
   const models = (await call(backend, `/${demo.slug}/api/admin/content/models`, { headers: cookie })).status;
   await call(backend, `/${demo.slug}/api/admin/content/models/m-secret`, { method: 'PUT', headers: cookie, body: { name: 'Secret model', provider: 'x', apiKey: 'sk-TEMPLATE-SECRET-123456' } });
@@ -329,7 +329,7 @@ test('change requests: an admin files them for THEIR instance only; the super ad
   const b = (await api(`/demos/${demo.id}/assign`, { method: 'POST', body: { slug: 'req-b', owner: { email: 'b@req.test' } } })).body;
   const ca = await tenantLogin(backend, 'req-a', 'a@req.test', a.admin.password);
   const cb = await tenantLogin(backend, 'req-b', 'b@req.test', b.admin.password);
-  const cd = await tenantLogin(backend, demo.slug, demoAdmin.email, demoAdmin.password);
+  const cd = await tenantLogin(backend, demo.slug, demoAdmin.id, demoAdmin.password);
 
   assert.equal((await call(backend, '/req-a/api/admin/change-requests')).status, 401, 'needs an admin session');
   assert.equal((await call(backend, '/req-a/api/admin/change-requests', { method: 'POST', headers: ca, body: { title: 'x', body: 'y' } })).status, 400);

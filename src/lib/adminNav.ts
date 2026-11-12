@@ -12,6 +12,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { key: 'notifications', icon: 'bell-ring-outline', href: '/admin/notifications' },
     { key: 'credits', icon: 'star-circle-outline', href: '/admin/credits' },
     { key: 'plans', icon: 'crown-outline', href: '/admin/plans' },
+    { key: 'support', icon: 'lifebuoy', href: '/admin/support' },
   ] },
   { key: 'content', items: [
     { key: 'tabs', icon: 'tab', href: '/admin/tabs' },

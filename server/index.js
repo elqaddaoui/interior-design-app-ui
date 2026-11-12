@@ -656,7 +656,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         if (url.pathname === '/api/admin/instance' && req.method === 'GET') {
           admin();
           const { tenant } = resolved;
-          return json(200, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, status: tenant.status, base: resolved.base });
+          // Allowance + API policy of THIS store only (the tenant id is the resolved one). No key, no other store.
+          return json(200, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, status: tenant.status, base: resolved.base, ...(await superAdmin.platformInfo(tenant.id)) });
         }
         if (url.pathname === '/api/admin/change-requests') {
           admin();

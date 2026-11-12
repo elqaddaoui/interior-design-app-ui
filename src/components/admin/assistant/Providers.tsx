@@ -143,6 +143,7 @@ export function Providers({ api: pv, totals }: { api: ProvidersApi; totals?: Aut
   const { status, cfg, setCfg, failed, load } = pv;
   if (failed && !status) return <Card className="p-4 items-center gap-3"><Txt testID="asst-prov-error" className="text-danger">{t('asx.loadFail')}</Txt><Button size="sm" title={t('asx.retry')} onPress={() => load()} /></Card>;
   if (!status || !cfg) return <AdminLoading testID="asst-loading" />;
+  if (status.managed) return <View testID="asst-providers"><Note testID="asst-managed" tone="warn" text={t('sp.apiPlatform')} /></View>; // keys and paid providers belong to the platform
   const chain = orderedChain(status, cfg);
   const noKey = !status.free.some((p) => p.needsKey && p.configured);
   const full = cfg.paid.length >= Math.min(MAX_PAID, status.maxPaid);

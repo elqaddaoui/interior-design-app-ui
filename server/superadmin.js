@@ -26,7 +26,7 @@ const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@.]{2,24}$/;
 const newId = prefix => `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
 const SESSION_MS = 12 * 3600 * 1000;
 const RETIRE_MS = 30 * 86400000; // a released slug stays reserved for 30 days (Q6)
-const REQUEST_KINDS = ['customize', 'manage', 'support'];
+const REQUEST_KINDS = ['customize', 'manage', 'support', 'credits', 'api'];
 const REQUEST_STATUS = ['open', 'in_progress', 'done', 'rejected'];
 const DEMO_STATUS = ['draft', 'published'];
 const TENANT_STATUS = ['active', 'trial'];
@@ -43,8 +43,11 @@ const SUPER_ID = 'super';
 const DEFAULT_LOGIN = 'superadmin'; // factory e-mail AND password of the platform owner, to be changed in /super-admin/settings
 // A login id is an e-mail address or a plain user name (the factory one is "superadmin").
 const LOGIN_ID = /^[a-z0-9][a-z0-9._@+-]{2,189}$/;
+// A store administrator's user name (no @: it can never be mistaken for an e-mail address).
+const USERNAME = /^[a-z0-9][a-z0-9._-]{2,39}$/;
 
 function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = bundles.storage }) {
+  const platform = bundles.platform; // allowances + API manager (server/platform.js)
   const attempts = new Map(); // address -> { count, until }: 5 failed sign-ins lock that address for 15 minutes
   const cookieFlags = `HttpOnly; SameSite=Strict; Path=/api${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
   /** The console is always available: the account lives in the database (saas_super), it is never "not configured". */
@@ -172,10 +175,12 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
 
   // ---------- Tenants ----------
   const urls = row => ({ path: row.kind === 'default' ? '/' : `/${row.slug}`, adminPath: row.kind === 'default' ? '/admin' : `/${row.slug}/admin` });
+  const linksOf = row => { try { return JSON.parse(row.api_links || '{}') || {}; } catch { return {}; } };
   const tenantView = row => ({
     id: row.id, slug: row.slug, name: row.name, kind: row.kind, status: row.status, plan: row.plan, ownerEmail: row.owner_email,
     sourceDemoId: row.source_demo_id, sourceDemoVersion: num(row.source_demo_version), notes: row.notes,
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at), suspendedAt: num(row.suspended_at), ...urls(row),
+    creditLimit: num(row.credit_limit), creditsUsed: Number(row.credits_used || 0), apiMode: row.api_mode === 'platform' ? 'platform' : 'own', apiLinks: linksOf(row),
     ...(row.clients !== undefined ? { counts: { clients: row.clients, requests: row.requests, admins: row.admins, domains: row.domains, openRequests: row.open_requests } } : {}),
   });
   const getTenantRow = async id => {
@@ -193,21 +198,31 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     return rows.map(tenantView);
   }
 
-  /** Adds an administrator to a tenant. Returns the generated password when none was given (shown once, never stored in clear). */
-  async function addAdmin(q, tenantId, { email, name, password, phone = '', title = '', pwHash }) {
+  /**
+   * Adds an administrator to a tenant. The sign-in name is a user name OR an e-mail address, and the e-mail is optional:
+   *   { username }          -> signs in with the user name
+   *   { email }             -> signs in with the e-mail (it is also the id)
+   *   { username, email }   -> signs in with either
+   *   neither               -> the user name "admin" (unique per store)
+   * Returns the generated password when none was given (shown once, never stored in clear).
+   */
+  async function addAdmin(q, tenantId, { username, email, name, password, phone = '', title = '', pwHash }) {
     const address = clean(email, 254).toLowerCase();
-    if (!EMAIL.test(address)) throw fail(400, 'INVALID_EMAIL');
+    if (address && !EMAIL.test(address)) throw fail(400, 'INVALID_EMAIL');
+    let id = clean(username, 40).toLowerCase();
+    if (id && !USERNAME.test(id)) throw fail(400, 'INVALID_USERNAME');
+    if (!id) id = address || 'admin';
     let generated = null, stored = pwHash;
     if (!stored) {
       let value = typeof password === 'string' && password ? password : '';
-      if (value) { const problem = passwordProblem(value, { email: address }); if (problem) throw fail(400, problem); } else value = generated = randomPassword();
+      if (value) { const problem = passwordProblem(value, { username: id, email: address }); if (problem) throw fail(400, problem); } else value = generated = randomPassword();
       stored = hashPassword(value);
     }
     const now = Date.now();
     try {
-      await q('INSERT INTO admin_accounts(tenant_id,admin_id,name,email,phone,title,pw_hash,pw_changed_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,$8)', [tenantId, address, clean(name, 80), address, phone, title, stored, now]);
+      await q('INSERT INTO admin_accounts(tenant_id,admin_id,name,email,phone,title,pw_hash,pw_changed_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,$8)', [tenantId, id, clean(name, 80), address, phone, title, stored, now]);
     } catch (error) { if (/duplicate key|unique/i.test(String(error.message))) throw fail(409, 'ADMIN_EXISTS'); throw error; }
-    return { id: address, email: address, password: generated };
+    return { id, username: id, email: address, password: generated };
   }
 
   async function createTenant(body, actor, { kind = 'instance' } = {}) {
@@ -216,19 +231,22 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     const slug = await checkSlug(body?.slug);
     const status = body?.status === undefined ? 'active' : body.status;
     if (!TENANT_STATUS.includes(status)) throw fail(400, 'INVALID_STATUS');
+    // The store's contact e-mail is optional. The first administrator signs in with a user name or an e-mail (see addAdmin).
     const ownerEmail = clean(body?.ownerEmail, 254).toLowerCase();
-    if (!EMAIL.test(ownerEmail)) throw fail(400, 'INVALID_EMAIL');
+    if (ownerEmail && !EMAIL.test(ownerEmail)) throw fail(400, 'INVALID_EMAIL');
+    const policy = platform.policyFields(body, { forCreate: true });
     const id = newId('t'), now = Date.now();
     let admin;
     await db.tx(async q => {
       try {
         await q('INSERT INTO saas_tenants(id,slug,name,kind,status,plan,owner_email,notes,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)', [id, slug, name, kind, status, clean(body?.plan, 40), ownerEmail, clean(body?.notes, 1000), now]);
       } catch (error) { if (/duplicate key|unique/i.test(String(error.message))) throw fail(409, 'SLUG_TAKEN'); throw error; }
-      admin = await addAdmin(q, id, { email: ownerEmail, name: body?.ownerName, password: body?.password });
+      admin = await addAdmin(q, id, { username: body?.ownerUsername, email: body?.ownerLogin || ownerEmail, name: body?.ownerName, password: body?.password });
     });
+    if (Object.keys(policy).length) await platform.setPolicy(id, body);
     await bundles.get(id).content.ensureSeed(); // starter content now, so the tenant is complete from its first visit
     tenants.invalidate();
-    await audit(actor, `tenant.create`, id, slug, { kind, owner: ownerEmail });
+    await audit(actor, `tenant.create`, id, slug, { kind, owner: admin.id });
     return { tenant: tenantView(await getTenantRow(id)), admin };
   }
 
@@ -248,8 +266,14 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
       if (row.kind === 'default') throw fail(400, 'DEFAULT_TENANT_PROTECTED');
       next.slug = await checkSlug(body.slug, { except: id });
     }
+    const policy = platform.policyFields(body);
+    if (body.resetUsed === true) policy.credits_used = 0;
     const keys = Object.keys(next);
-    if (!keys.length) return tenantView(row);
+    if (Object.keys(policy).length) {
+      await platform.setPolicy(id, body);
+      await audit(actor, 'tenant.policy', id, row.slug, Object.fromEntries(Object.entries(policy).map(([k, v]) => [k, k === 'api_links' ? '(links)' : v])));
+    }
+    if (!keys.length) return tenantView(await getTenantRow(id));
     await db.tx(async q => {
       if (next.slug) await retireSlug(q, row.slug);
       try { await q(`UPDATE saas_tenants SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')}, updated_at=$${keys.length + 1} WHERE id=$${keys.length + 2}`, [...keys.map(k => next[k]), Date.now(), id]); }
@@ -304,7 +328,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
   }
 
   // ---------- Tenant administrators ----------
-  const adminView = row => ({ id: row.admin_id, name: row.name, email: row.email, phone: row.phone, title: row.title, disabled: !!row.disabled, hasPassword: !!row.pw_hash, lastLoginAt: num(row.last_login_at), createdAt: Number(row.created_at) });
+  const adminView = row => ({ id: row.admin_id, username: row.admin_id.includes('@') ? '' : row.admin_id, name: row.name, email: row.email, phone: row.phone, title: row.title, disabled: !!row.disabled, hasPassword: !!row.pw_hash, lastLoginAt: num(row.last_login_at), createdAt: Number(row.created_at) });
   const getAdminRow = async (tenantId, adminId) => {
     const row = (await db.query('SELECT * FROM admin_accounts WHERE tenant_id=$1 AND admin_id=$2', [tenantId, String(adminId).toLowerCase()]))[0];
     if (!row) throw fail(404, 'NOT_FOUND');
@@ -326,7 +350,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
       if (body.name !== undefined) next.name = clean(body.name, 80);
       if (body.email !== undefined) {
         const email = clean(body.email, 254).toLowerCase();
-        if (!EMAIL.test(email)) throw fail(400, 'INVALID_EMAIL');
+        if (email && !EMAIL.test(email)) throw fail(400, 'INVALID_EMAIL'); // an empty e-mail is allowed: the user name still signs in
         next.email = email;
       }
       if (body.disabled !== undefined) next.disabled = body.disabled ? 1 : 0;
@@ -384,19 +408,19 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     const now = Date.now();
     const people = [['Salma Benali', '+212600000101', 3], ['Youssef Amrani', '+212600000102', 1], ['Nadia El Idrissi', '+212600000103', 5], ['Karim Tazi', '+212600000104', 0]];
     const clientIds = [], requestIds = [];
+    const prompts = ['Warm Moroccan living room with zellige tiles', 'Minimal bedroom, natural light, linen', 'Bright kitchen with open shelves', 'Modern salon, green and gold accents', 'Small balcony turned into a reading nook'];
+    const clientRows = people.map(([name, phone, credits], index) => { const id = crypto.randomUUID(); clientIds.push(id); return [tenantId, id, phone, name, credits, index % 2, now - (index + 1) * 86400000]; });
+    const requestRows = prompts.map((prompt, index) => {
+      const owner = clientIds[index % clientIds.length], person = people[index % people.length];
+      const request = { id: crypto.randomUUID(), userId: owner, name: person[0], whatsapp: person[1], status: ['pending', 'processing', 'delivered'][index % 3], createdAt: now - (index + 1) * 3600000 * 5, photoUri: '', draft: { ...(tools.length ? { toolId: tools[index % tools.length] } : { toolId: 'sample' }), source: 'text', prompt } };
+      requestIds.push(request.id);
+      return [tenantId, request.id, owner, request.createdAt, JSON.stringify(request)];
+    });
+    const values = (rows, width) => rows.map((_, n) => `(${Array.from({ length: width }, (__, k) => `$${n * width + k + 1}`).join(',')})`).join(',');
+    // One transaction, three statements (rows are inserted together, not one by one).
     await db.tx(async q => {
-      for (const [index, [name, phone, credits]] of people.entries()) {
-        const id = crypto.randomUUID();
-        await q('INSERT INTO clients(tenant_id,id,phone,name,credits,free_used,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [tenantId, id, phone, name, credits, index % 2, now - (index + 1) * 86400000]);
-        clientIds.push(id);
-      }
-      const prompts = ['Warm Moroccan living room with zellige tiles', 'Minimal bedroom, natural light, linen', 'Bright kitchen with open shelves', 'Modern salon, green and gold accents', 'Small balcony turned into a reading nook'];
-      for (let index = 0; index < prompts.length; index++) {
-        const owner = clientIds[index % clientIds.length], person = people[index % people.length];
-        const request = { id: crypto.randomUUID(), userId: owner, name: person[0], whatsapp: person[1], status: ['pending', 'processing', 'delivered'][index % 3], createdAt: now - (index + 1) * 3600000 * 5, photoUri: '', draft: { ...(tools.length ? { toolId: tools[index % tools.length] } : { toolId: 'sample' }), source: 'text', prompt: prompts[index] } };
-        await q('INSERT INTO requests(tenant_id,id,user_id,client_request_id,created_at,data) VALUES($1,$2,$3,NULL,$4,$5)', [tenantId, request.id, owner, request.createdAt, JSON.stringify(request)]);
-        requestIds.push(request.id);
-      }
+      await q(`INSERT INTO clients(tenant_id,id,phone,name,credits,free_used,created_at) VALUES ${values(clientRows, 7)}`, clientRows.flat());
+      await q(`INSERT INTO requests(tenant_id,id,user_id,client_request_id,created_at,data) SELECT v.t, v.i, v.u, NULL, v.c, v.d FROM (VALUES ${requestRows.map((_, n) => `($${n * 5 + 1}::text,$${n * 5 + 2}::text,$${n * 5 + 3}::text,$${n * 5 + 4}::bigint,$${n * 5 + 5}::text)`).join(',')}) AS v(t,i,u,c,d)`, requestRows.flat());
       await q('INSERT INTO saas_kv(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [`demo_sample:${tenantId}`, JSON.stringify({ clients: clientIds, requests: requestIds })]);
     });
     await bundles.get(tenantId).sync.bump('clients', 'requests');
@@ -411,7 +435,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     for (let tries = 0; ; tries++) {
       try { slug = await checkSlug(slug); break; } catch (error) { if (tries > 5 || !['SLUG_TAKEN', 'SLUG_RETIRED'].includes(error.message) || body?.slug) throw error; slug = `${base.slice(0, 34)}-${crypto.randomBytes(2).toString('hex')}`; }
     }
-    const created = await createTenant({ name, slug, ownerEmail: `admin@${slug}.demo`, ownerName: `${name} demo admin` }, actor, { kind: 'demo' });
+    const created = await createTenant({ name, slug, ownerName: `${name} demo admin` }, actor, { kind: 'demo' }); // no e-mail needed: the user name is "admin"
     const id = newId('d'), now = Date.now();
     await db.query('INSERT INTO saas_demos(id,name,description,tenant_id,status,version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,1,$6,$6)', [id, name, clean(body?.description, 500), created.tenant.id, 'draft', now]);
     await seedSample(created.tenant.id);
@@ -455,12 +479,14 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     let owner;
     if (body?.owner?.tenantId) {
       const source = await getAdminRow((await getTenantRow(body.owner.tenantId)).id, body.owner.adminId);
-      if (!EMAIL.test(source.email)) throw fail(400, 'OWNER_EMAIL_REQUIRED');
-      owner = { email: source.email, name: source.name, phone: source.phone, title: source.title, pwHash: source.pw_hash || undefined };
+      owner = { username: source.admin_id.includes('@') ? '' : source.admin_id, email: source.email, name: source.name, phone: source.phone, title: source.title, pwHash: source.pw_hash || undefined };
     } else {
-      owner = { email: body?.owner?.email, name: body?.owner?.name, password: body?.owner?.password };
-      if (!EMAIL.test(clean(owner.email, 254).toLowerCase())) throw fail(400, 'INVALID_EMAIL');
+      // User name and e-mail are both optional (no name at all = the user name "admin" with a generated password).
+      owner = { username: body?.owner?.username, email: body?.owner?.email, name: body?.owner?.name, password: body?.owner?.password };
+      const given = clean(owner.email, 254).toLowerCase();
+      if (given && !EMAIL.test(given)) throw fail(400, 'INVALID_EMAIL');
     }
+    const policy = platform.policyFields(body, { forCreate: true });
     const tenantId = newId('t'), now = Date.now();
     const version = await contentVersion(template.id);
     // Files: R2 keys carry the tenant id, so each instance gets its own copy of the template's objects (content-addressed, copied once).
@@ -478,7 +504,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
       await q('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'); // one consistent picture of the template, even while it is being edited
       try {
         await q('INSERT INTO saas_tenants(id,slug,name,kind,status,plan,owner_email,source_demo_id,source_demo_version,notes,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)',
-          [tenantId, slug, name, 'instance', 'active', clean(body?.plan, 40), clean(owner.email, 254).toLowerCase(), demo.id, version, clean(body?.notes, 1000), now]);
+          [tenantId, slug, name, 'instance', 'active', clean(body?.plan, 40), clean(body?.ownerEmail || owner.email, 254).toLowerCase(), demo.id, version, clean(body?.notes, 1000), now]);
       } catch (error) { if (/duplicate key|unique/i.test(String(error.message))) throw fail(409, 'SLUG_TAKEN'); throw error; }
       const ids = mediaRows.map(row => row.id);
       await q("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) SELECT $2,id,mime,data,body,size,storage,created_at FROM media WHERE tenant_id=$1 AND id=ANY($3) AND storage IN ('r2','db')", [template.id, tenantId, ids]);
@@ -505,11 +531,12 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
         await q('INSERT INTO requests(tenant_id,id,user_id,client_request_id,created_at,data) VALUES($1,$2,$3,NULL,$4,$5)', [tenantId, id, userId, row.created_at, JSON.stringify({ ...data, id, userId })]);
       }
       admin = await addAdmin(q, tenantId, owner);
-      await q('INSERT INTO saas_assignments(id,demo_id,tenant_id,owner_email,demo_version,created_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)', [newId('as'), demo.id, tenantId, admin.email, version, now, actor]);
+      await q('INSERT INTO saas_assignments(id,demo_id,tenant_id,owner_email,demo_version,created_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)', [newId('as'), demo.id, tenantId, admin.email || admin.id, version, now, actor]);
     });
+    if (Object.keys(policy).length) await platform.setPolicy(tenantId, body);
     await bundles.get(tenantId).sync.bump('content', 'clients', 'requests');
     tenants.invalidate();
-    await audit(actor, 'demo.assign', tenantId, demo.id, { slug, owner: admin.email, version });
+    await audit(actor, 'demo.assign', tenantId, demo.id, { slug, owner: admin.id, version });
     return { tenant: tenantView(await getTenantRow(tenantId)), admin, demoId: demo.id };
   }
   async function listAssignments(demoId) {
@@ -593,6 +620,9 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
       assignments: await count('SELECT COUNT(*) AS n FROM saas_assignments'),
       openRequests: await count("SELECT COUNT(*) AS n FROM saas_requests WHERE status IN ('open','in_progress')"),
       clients: await count('SELECT COUNT(*) AS n FROM clients'),
+      apis: await count('SELECT COUNT(*) AS n FROM saas_apis'),
+      creditsUsed: await count("SELECT COALESCE(SUM(credits_used),0) AS n FROM saas_tenants WHERE kind IN ('default','instance')"),
+      platformManaged: await count("SELECT COUNT(*) AS n FROM saas_tenants WHERE kind IN ('default','instance') AND api_mode='platform'"),
     };
   }
   async function auditLog({ tenantId, limit }) {
@@ -665,13 +695,22 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     }
     if ((m = /^\/demos\/([a-z0-9_-]+)\/assign$/.exec(path)) && method === 'POST') return ok(await assignDemo(m[1], await readBody(req), actor), 201);
     if ((m = /^\/demos\/([a-z0-9_-]+)\/assignments$/.exec(path)) && method === 'GET') return ok(await listAssignments(m[1]));
+    // API manager: provider connections shared by (or linked to) platform-managed stores. Keys are write-only: no route returns one.
+    if (path === '/apis') {
+      if (method === 'GET') return ok({ apis: await platform.list(), catalog: platform.CATALOG });
+      if (method === 'POST') { const view = await platform.create(await readBody(req)); await audit(actor, 'api.create', null, view.id, `${view.kind}/${view.provider}`); return ok(view, 201); }
+    }
+    if ((m = /^\/apis\/(api_[a-f0-9]{10})$/.exec(path))) {
+      if (method === 'PATCH') { const body = await readBody(req); const view = await platform.update(m[1], body); await audit(actor, 'api.update', null, m[1], Object.keys(body || {}).map(k => (k === 'apiKey' ? 'key' : k)).join(',')); return ok(view); }
+      if (method === 'DELETE') { const row = await platform.remove(m[1]); await audit(actor, 'api.delete', null, m[1], `${row.kind}/${row.provider}`); return ok({ ok: true }); }
+    }
     if (path === '/requests' && method === 'GET') return ok(await listRequests({ status: url.searchParams.get('status') || undefined, tenantId: url.searchParams.get('tenant') || undefined }));
     if ((m = /^\/requests\/([a-z0-9_-]+)$/.exec(path)) && method === 'PATCH') return ok(await updateRequest(m[1], await readBody(req), actor));
     if ((m = /^\/requests\/([a-z0-9_-]+)\/apply$/.exec(path)) && method === 'POST') return ok(await applyRequest(m[1], await readBody(req), actor));
     throw fail(404, 'API route not found');
   }
 
-  return { handle, authenticate, configured, account, resetToDefault, submitRequest, requestsOfTenant, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit };
+  return { handle, authenticate, configured, account, resetToDefault, submitRequest, requestsOfTenant, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit, platformInfo: tenantId => platform.infoOf(tenantId) };
 }
 
 module.exports = { createSuperAdmin, COPIED_SETTINGS };

@@ -1,0 +1,36 @@
+/** Texts of the admin Support page (namespace `sp`): credits left, who manages the AI keys, requests to the platform team. [fr, ar, dar] */
+type Row = [fr: string, ar: string, dar: string];
+const T: Record<string, Row> = {
+  intro: ['Écrivez à l’équipe de la plateforme : personnalisation, aide, plus de crédits ou accès aux API.', 'راسل فريق المنصة: تخصيص، مساعدة، المزيد من الرصيد أو الوصول إلى واجهات API.', 'كتب لفريق المنصة: تخصيص، مساعدة، كريدي زايد ولا الوصول للـ API.'],
+  creditsTitle: ['Crédits de la boutique', 'رصيد المتجر', 'كريدي ديال المحل'],
+  creditsLine: ['{{used}} utilisés sur {{limit}}', 'استُخدم {{used}} من {{limit}}', 'تستعملو {{used}} من {{limit}}'],
+  creditsUnlimited: ['{{used}} utilisés · illimité', 'استُخدم {{used}} · غير محدود', 'تستعملو {{used}} · بلا حدود'],
+  creditsLow: ['Il reste peu de crédits. Demandez-en plus ci-dessous.', 'الرصيد على وشك النفاد. اطلب المزيد أدناه.', 'الكريدي قرب يسالي. طلب الزيادة من لتحت.'],
+  creditsOut: ['Crédits épuisés : les rendus IA sont en pause. Demandez-en plus ci-dessous.', 'نفد الرصيد: توليد الذكاء الاصطناعي متوقف. اطلب المزيد أدناه.', 'سالا الكريدي: الذكاء الاصطناعي واقف. طلب الزيادة من لتحت.'],
+  apiTitle: ['Clés IA', 'مفاتيح الذكاء الاصطناعي', 'مفاتيح الذكاء الاصطناعي'],
+  apiOwn: ['Vous gérez vos propres clés dans Modèles IA.', 'تدير مفاتيحك بنفسك في نماذج الذكاء الاصطناعي.', 'نتا اللي كتسير المفاتيح ديالك فـ نماذج الذكاء الاصطناعي.'],
+  apiPlatform: ['Les clés IA sont gérées par la plateforme. Vous n’avez rien à configurer.', 'مفاتيح الذكاء الاصطناعي تديرها المنصة. لا حاجة لأي إعداد.', 'مفاتيح الذكاء الاصطناعي كتسيرها المنصة. ما خاصك تدير والو.'],
+  newTitle: ['Nouvelle demande', 'طلب جديد', 'طلب جديد'],
+  kindCustomize: ['Personnalisation', 'تخصيص', 'تخصيص'],
+  kindSupport: ['Aide', 'مساعدة', 'مساعدة'],
+  kindCredits: ['Plus de crédits', 'المزيد من الرصيد', 'كريدي زايد'],
+  kindApi: ['Accès API', 'الوصول إلى API', 'الوصول للـ API'],
+  kindManage: ['Gestion', 'إدارة', 'تسيير'],
+  subject: ['Sujet', 'الموضوع', 'الموضوع'],
+  message: ['Message', 'الرسالة', 'الرسالة'],
+  send: ['Envoyer', 'إرسال', 'صيفط'],
+  sent: ['Demande envoyée', 'تم إرسال الطلب', 'تصيفط الطلب'],
+  failed: ['Envoi impossible. Réessayez.', 'تعذّر الإرسال. حاول مجددًا.', 'ما تصيفطش. عاود حاول.'],
+  history: ['Vos demandes', 'طلباتك', 'الطلبات ديالك'],
+  empty: ['Aucune demande pour le moment', 'لا توجد طلبات بعد', 'ما كاين حتى طلب باقي'],
+  reply: ['Réponse', 'الرد', 'الجواب'],
+  open: ['En attente', 'قيد الانتظار', 'كيتسنى'],
+  in_progress: ['En cours', 'قيد المعالجة', 'كيتعالج'],
+  done: ['Terminé', 'منجز', 'سالا'],
+  rejected: ['Refusé', 'مرفوض', 'مرفوض'],
+  demo: ['Cette boutique est une démo : les demandes sont désactivées.', 'هذا المتجر نسخة تجريبية: الطلبات معطلة.', 'هاد المحل ديمو: الطلبات موقوفة.'],
+  managedNote: ['Gérées par la plateforme', 'تديرها المنصة', 'كتسيرها المنصة'],
+  creditsExhausted: ['Les crédits de la boutique sont épuisés. Demandez-en plus dans Aide.', 'نفد رصيد المتجر. اطلب المزيد من صفحة المساعدة.', 'سالا كريدي المحل. طلب الزيادة من صفحة المساعدة.'],
+};
+const pick = (i: 0 | 1 | 2) => Object.fromEntries(Object.entries(T).map(([k, r]) => [k, r[i]]));
+export const supportTexts = { fr: pick(0), ar: pick(1), dar: pick(2) };

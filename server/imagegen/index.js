@@ -42,7 +42,7 @@ function capability(engine, model) {
   return { title: model, i2i: !/dall-e-3|schnell|turbo|sdxl-base/i.test(model), refs: 1, free: false };
 }
 
-function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now, media, content, sync } = {}) {
+function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now, media, content, sync, platform } = {}) {
   const cooling = new Map(); // "engine|model" -> until
   const inflight = new Map(); // request id -> promise (one generation per request at a time)
   const perClient = new Map(); // client id -> running count
@@ -55,23 +55,39 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     keysCache = { at: clock(), value };
     return value;
   }
+  /**
+   * Platform-managed store (super admin > APIs): the key comes from the API manager. The store's own stored key and every model key are
+   * ignored (a store cannot make the platform key travel anywhere), the environment key of the deployment stays a valid fallback.
+   */
+  const managedOf = () => (platform ? platform.managed('image') : null);
   async function keyOf(engine, modelKey) {
+    const managed = await managedOf();
+    if (managed) {
+      if (managed.api && managed.api.provider === engine) return { key: managed.api.key, source: 'platform' };
+      return env[ENGINES[engine].env] ? { key: env[ENGINES[engine].env], source: 'env' } : { key: '', source: 'none' };
+    }
     if (typeof modelKey === 'string' && modelKey.trim() && KEY_RE.test(modelKey.trim())) return { key: modelKey.trim(), source: 'model' };
     if (env[ENGINES[engine].env]) return { key: env[ENGINES[engine].env], source: 'env' };
     const key = (await storedKeys())[engine];
     return { key: typeof key === 'string' ? key : '', source: key ? 'db' : 'none' };
   }
-  const baseOf = (engine, model) => String((model?.baseUrl && /^https:\/\//.test(model.baseUrl) ? model.baseUrl : env[ENGINES[engine].baseEnv]) || ENGINES[engine].base).replace(/\/+$/, '');
+  async function baseFor(engine, model) {
+    const managed = await managedOf();
+    // Managed: only the address set in the API manager (or the engine default) is ever used, never a store-typed URL.
+    if (managed) return String((managed.api?.provider === engine && managed.api.base) || env[ENGINES[engine].baseEnv] || ENGINES[engine].base).replace(/\/+$/, '');
+    return String((model?.baseUrl && /^https:\/\//.test(model.baseUrl) ? model.baseUrl : env[ENGINES[engine].baseEnv]) || ENGINES[engine].base).replace(/\/+$/, '');
+  }
 
   /** Engine availability. Never returns a key. */
   async function status() {
     const engines = {};
     for (const name of Object.keys(ENGINES)) { const { source } = await keyOf(name); engines[name] = { label: ENGINES[name].label, configured: source !== 'none', source }; }
-    return { engines, live: Object.values(engines).some(engine => engine.configured), chainI2I: chainOf(true), chainT2I: chainOf(false), rotation: await rotationInfo() };
+    return { managed: !!(await managedOf()), engines, live: Object.values(engines).some(engine => engine.configured), chainI2I: chainOf(true), chainT2I: chainOf(false), rotation: await rotationInfo() };
   }
   /** Write-only: a string stores/replaces a key, an empty string removes it, undefined leaves it alone. */
   async function setKeys(input) {
     if (!input || typeof input !== 'object') throw fail(400, 'INVALID_KEYS');
+    if (await managedOf()) throw fail(403, 'API_MANAGED_BY_PLATFORM');
     const current = { ...(await storedKeys()) };
     for (const name of Object.keys(ENGINES)) {
       const value = input[name];
@@ -99,7 +115,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       const { key } = await keyOf(engine, extra.key);
       if (!key) return;
       if ((cooling.get(`${engine}|${model}`) || 0) > clock()) return;
-      out.push({ engine, model, key, base: baseOf(engine, extra.row), label: extra.label || cap.title, cap, requested: !!extra.row, rowId: extra.row?.id });
+      out.push({ engine, model, key, base: await baseFor(engine, extra.row), label: extra.label || cap.title, cap, requested: !!extra.row, rowId: extra.row?.id });
     };
     // `rows`: the admin's model for the tool, or (rotation) the pool starting at the model whose turn it is; the others are fallbacks.
     for (const row of [].concat(rows || [])) if (row?.engine && ENGINES[row.engine] && row.enabled !== false) await add(row.engine, String(row.modelName || '').trim(), { key: row.apiKey, row, label: row.name });
@@ -437,8 +453,12 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const job = (async () => {
       const request = JSON.parse(found.data);
       let result;
+      // Store allowance: one credit per new generation, taken atomically BEFORE the engine is called and given back if nothing was produced.
+      const metered = !!platform && !(request.aiResult && /^\/api\/media\//.test(request.aiResult) && request.aiModel);
+      if (metered && !(await platform.consume(1))) throw fail(402, 'STORE_CREDITS_EXHAUSTED');
       try { result = await generate({ request, userId: client.id }); }
       catch (error) {
+        if (metered) await platform.refund(1).catch(() => {});
         // Keep what was asked and which models failed: the admin sees it on the request (no result is stored, the client can retry).
         if (error.run) await db.query('UPDATE requests SET data=$1 WHERE tenant_id=:tenant AND id=$2', [JSON.stringify({ ...request, aiRun: error.run }), key]).catch(() => {});
         throw error;

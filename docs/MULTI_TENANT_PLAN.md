@@ -189,3 +189,12 @@ Capabilities: create / edit / suspend / unsuspend / delete tenants (delete needs
 | Q10 | Are demos visible to tenants (a catalogue)? | No: super-admin only; tenants receive instances. Status `published` is reserved for a future catalogue. |
 | Q11 | Per-tenant AI keys. | Yes: each tenant pastes its own; environment keys (`POLLINATIONS_API_KEY` …) are shared platform fallbacks. |
 | Q12 | Tenant limits (rows, storage, requests/min). | Per-tenant rate-limit buckets only; quotas later. |
+
+## Console v2: stores, demos, credits and API manager
+
+- **Flow**: Demo (template) -> Store (one sheet: name, address, optional demo, first administrator, credit limit, API mode) -> more administrators later. Creating a store from a demo is ONE request (`POST /demos/:id/assign` with `owner`, `creditLimit`, `apiMode`).
+- **Administrators**: several per store; sign in with a user name or an e-mail (both optional, a store may have neither e-mail). `admin_id` = username || email || 'admin'.
+- **Credits**: `saas_tenants.credit_limit` (NULL = unlimited) and `credits_used`; one atomic UPDATE per AI generation; refunded when the generation fails; 402 `STORE_CREDITS_EXHAUSTED` when spent.
+- **API manager** (`saas_apis`, super admin only): image / text / other connections; keys are write-only (only `keyHint` is returned). A store with `api_mode='platform'` ignores its own keys and uses the shared default or its linked connection; key routes answer 403 `API_MANAGED_BY_PLATFORM`.
+- **Support page** (`/admin/support`): the store administrator sees credits left, who manages the AI keys, and sends requests (support, credits, api, customize) to the super admin, with replies.
+- **Speed**: demo/seed creation uses bulk multi-row INSERTs (under 40 statements, covered by `scripts/check-platform-server.js`).

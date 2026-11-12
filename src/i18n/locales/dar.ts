@@ -285,6 +285,7 @@ const dar: Dict = {
       dashboard: 'لوحة التحكم',
       requests: 'طلبات التصميم',
       users: 'المستخدمين',
+      support: 'المساعدة',
       credits: 'الكريدي',
       plans: 'عروض برو',
       tabs: 'تبويبات الرئيسية',

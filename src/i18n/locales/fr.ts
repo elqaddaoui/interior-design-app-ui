@@ -284,6 +284,7 @@ const fr = {
       dashboard: 'Tableau de bord',
       requests: 'Demandes de rendu',
       users: 'Utilisateurs',
+      support: 'Aide',
       credits: 'Crédits',
       plans: 'Offres Pro',
       tabs: 'Onglets d’accueil',

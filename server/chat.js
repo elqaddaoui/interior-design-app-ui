@@ -147,7 +147,9 @@ function cleanConfig(input, previous = { position: 'after', freeOff: [], paid: [
   return { position, freeOff, paid };
 }
 
-function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now } = {}) {
+function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now, platform } = {}) {
+  /** Platform-managed store (super admin > APIs): the key comes from the API manager and the store's own keys / paid zone are ignored. */
+  const managedOf = () => (platform ? platform.managed('text') : null);
   /** provider -> { until, reason }: skipped for a while after a failure (a dead provider must not slow every message down). */
   const cooling = new Map();
   /** provider -> { ok, at, reason, model }: what happened on its last real call (this server instance only). */
@@ -171,6 +173,11 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
   async function keyOf(name) {
     const meta = PROVIDERS[name];
     if (!meta.env) return { key: '', source: 'none' };
+    const managed = await managedOf();
+    if (managed) {
+      if (managed.api && managed.api.provider === name) return { key: managed.api.key, source: 'platform' };
+      return env[meta.env] ? { key: env[meta.env], source: 'env' } : { key: '', source: 'none' };
+    }
     if (env[meta.env]) return { key: env[meta.env], source: 'env' };
     const key = (await storedKeys())[name];
     return { key: typeof key === 'string' ? key : '', source: key ? 'db' : 'none' };
@@ -186,7 +193,7 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
 
   /** What the admin page shows. Never returns a key. */
   async function status() {
-    const config = await getConfig(), keys = await paidKeys();
+    const config = await getConfig(), keys = (await managedOf()) ? {} : await paidKeys();
     const free = [];
     for (const [rank, id] of DEFAULT_ORDER.entries()) {
       const { key, source } = await keyOf(id);
@@ -197,11 +204,12 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
       const hasKey = !!keys[p.id], usable = hasKey && p.enabled;
       return { ...p, hasKey, state: stateOf(p.id, usable), last: healthOf(p.id), resting: restingOf(p.id)?.reason || '', url: p.preset === 'custom' ? p.baseUrl : PAID_PRESETS[p.preset].url };
     });
-    return { free, paid: { position: config.position, providers: paid }, presets: Object.fromEntries(Object.entries(PAID_PRESETS).map(([id, v]) => [id, { label: v.label, model: v.model }])), maxPaid: MAX_PAID };
+    return { managed: !!(await managedOf()), free, paid: { position: config.position, providers: paid }, presets: Object.fromEntries(Object.entries(PAID_PRESETS).map(([id, v]) => [id, { label: v.label, model: v.model }])), maxPaid: MAX_PAID };
   }
   /** Write-only free keys: a string stores/replaces a key, an empty string removes it, undefined leaves it alone. */
   async function setKeys(input) {
     if (!input || typeof input !== 'object') throw fail(400, 'INVALID_KEYS');
+    if (await managedOf()) throw fail(403, 'API_MANAGED_BY_PLATFORM');
     const current = { ...(await storedKeys()) };
     for (const name of KEYED) {
       const value = input[name];
@@ -221,6 +229,7 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
    * a string stores/replaces, '' removes, undefined keeps. A provider without a key can never run, whatever its toggle says.
    */
   async function setConfig(input) {
+    if (await managedOf()) throw fail(403, 'API_MANAGED_BY_PLATFORM');
     const previous = await getConfig();
     const next = cleanConfig(input, previous);
     const keys = { ...(await paidKeys()) };
@@ -257,7 +266,9 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
   }
   /** The providers that may run, in order, with the paid zone before or after the free one. */
   async function chainOf(only) {
-    const config = await getConfig(), keys = await paidKeys();
+    const managed = await managedOf();
+    const config = await getConfig(), keys = managed ? {} : await paidKeys();
+    if (managed) config.paid = []; // the store's own paid zone never runs while the platform manages the key
     const freeIds = String(env.CHAT_PROVIDER_ORDER || '').split(',').map(v => v.trim()).filter(v => PROVIDERS[v]).concat(DEFAULT_ORDER).filter((v, i, all) => all.indexOf(v) === i);
     const free = [];
     for (const id of freeIds) {
@@ -269,7 +280,9 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
     const paid = config.paid.filter(p => keys[p.id] && (only || p.enabled)).map(p => ({
       id: p.id, label: p.label, paid: true, url: p.preset === 'custom' ? p.baseUrl : PAID_PRESETS[p.preset].url, key: keys[p.id], models: [p.model], extra: () => ({}), ms: 15000,
     }));
-    const all = config.position === 'before' ? [...paid, ...free] : [...free, ...paid];
+    // A platform "custom" connection (any OpenAI-compatible endpoint set in the API manager) runs before the free providers.
+    if (managed?.api?.provider === 'custom' && managed.api.base && managed.api.model) paid.unshift({ id: 'platform', label: managed.api.label || 'Platform', paid: true, url: `${managed.api.base}/chat/completions`, key: managed.api.key, models: [managed.api.model], extra: () => ({}), ms: 15000 });
+    const all = config.position === 'before' || managed ? [...paid, ...free] : [...free, ...paid];
     return only ? all.filter(entry => entry.id === only) : all;
   }
   /**
@@ -321,4 +334,4 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
   return { reply, status, setKeys, setConfig, getConfig };
 }
 
-module.exports = { createChat, detectLanguage, systemPrompt, clean, PROVIDERS, PAID_PRESETS, DEFAULT_ORDER };
+module.exports = { createChat, detectLanguage, systemPrompt, clean, PROVIDERS, PAID_PRESETS, DEFAULT_ORDER, safeUrl };

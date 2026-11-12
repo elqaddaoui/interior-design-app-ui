@@ -1,44 +1,85 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
-import { sa, saMessage } from '@/superadmin/api';
+import { useLocalSearchParams } from 'expo-router';
+import { loginFields, parseLimit, sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
-import type { Domain, Tenant, TenantAdmin } from '@/superadmin/types';
-import { Badge, Btn, Card, Empty, ErrorLine, Field, Heading, Loading, Row, Secret, Sheet, T, ago, openUrl, statusTone, useLoad } from '@/superadmin/ui';
+import type { ApiConn, ApiKind, Demo, NewAdmin, Tenant, TenantAdmin, Domain } from '@/superadmin/types';
+import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Meter, Notice, Pair, Row, Secret, Segmented, Sheet, T, Tabs, Toolbar, ago, openUrl, statusTone, useLoad } from '@/superadmin/ui';
 
 const slugOf = (name: string) => name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
+const enc = (id: string) => encodeURIComponent(id);
 
-function CreateTenant({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({ name: '', slug: '', ownerEmail: '', ownerName: '', plan: '' });
+/** Credits + API fields shared by "new store" and the store's Credits & APIs tab. */
+function Allowance({ limit, setLimit, mode, setMode }: { limit: string; setLimit: (v: string) => void; mode: 'own' | 'platform'; setMode: (v: 'own' | 'platform') => void }) {
+  return (
+    <View>
+      <Field label="Credit limit (empty = unlimited)" value={limit} onChangeText={v => setLimit(v.replace(/[^0-9]/g, ''))} keyboardType="number-pad" placeholder="Unlimited" {...({ testID: 'sa-t-limit' } as object)} />
+      <T size="xs" weight="bold" color={SA.color.muted} style={{ marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>AI keys</T>
+      <Segmented value={mode} onChange={setMode} testID="sa-t-mode" options={[{ value: 'own', label: 'Store manages its own', testID: 'sa-mode-own' }, { value: 'platform', label: 'Managed by me (API manager)', testID: 'sa-mode-platform' }]} />
+      <Hint>{mode === 'platform' ? ' The store cannot see or change AI keys. It uses the connections you set in APIs.' : ' The store administrator adds its own AI keys in its panel.'}</Hint>
+    </View>
+  );
+}
+
+/** One sheet = a complete store: name, address, optional demo to start from, first administrator, credits, API mode. */
+function CreateTenant({ onClose, onDone, initialDemo }: { onClose: () => void; onDone: () => void; initialDemo?: string }) {
+  const demos = useLoad(() => sa<Demo[]>('/demos'));
+  const [form, setForm] = useState({ name: '', slug: '', login: '', ownerName: '', password: '', plan: '' });
+  const [demoId, setDemoId] = useState(initialDemo || '');
+  const [limit, setLimit] = useState('');
+  const [mode, setMode] = useState<'own' | 'platform'>('own');
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [created, setCreated] = useState<{ slug: string; email: string; password: string | null } | null>(null);
+  const [created, setCreated] = useState<{ tenant: Tenant; admin: NewAdmin } | null>(null);
   const set = (key: keyof typeof form) => (value: string) => setForm(f => ({ ...f, [key]: value, ...(key === 'name' && !touched ? { slug: slugOf(value) } : {}) }));
   const submit = async () => {
     setBusy(true); setError(null);
     try {
-      const r = await sa<{ tenant: Tenant; admin: { email: string; password: string | null } }>('/tenants', { method: 'POST', body: form });
-      setCreated({ slug: r.tenant.slug, email: r.admin.email, password: r.admin.password }); onDone();
+      const policy = { creditLimit: parseLimit(limit), apiMode: mode };
+      const common = { name: form.name, slug: form.slug, plan: form.plan, ...policy };
+      const owner = { ...loginFields(form.login), name: form.ownerName, password: form.password || undefined };
+      // From a demo: ONE request copies the demo into a new independent store and creates its administrator.
+      const r = demoId
+        ? await sa<{ tenant: Tenant; admin: NewAdmin }>(`/demos/${demoId}/assign`, { method: 'POST', body: { ...common, owner } })
+        : await sa<{ tenant: Tenant; admin: NewAdmin }>('/tenants', { method: 'POST', body: { ...common, ownerUsername: (owner as { username?: string }).username, ownerLogin: (owner as { email?: string }).email, ownerName: form.ownerName, password: form.password || undefined } });
+      setCreated(r); onDone();
     } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
   };
+  const published = (demos.data || []);
   return (
-    <Sheet title="New tenant" onClose={onClose} testID="sa-create-tenant">
+    <Sheet title="New store" onClose={onClose} wide testID="sa-create-tenant">
       {created ? (
         <View>
-          <T weight="bold" style={{ marginBottom: SA.space.md }}>Tenant created.</T>
-          <T size="sm" color={SA.color.muted} style={{ marginBottom: SA.space.md }}>Storefront: /{created.slug} - Admin panel: /{created.slug}/admin - Login: {created.email}</T>
-          {created.password ? <Secret label="Admin password" value={created.password} /> : null}
-          <Btn label="Done" onPress={onClose} />
+          <T weight="bold" style={{ marginBottom: SA.space.sm }}>Store created.</T>
+          <Hint>{`Storefront /${created.tenant.slug} · Admin panel /${created.tenant.slug}/admin · Sign in with "${created.admin.email || created.admin.username}"${created.admin.email && created.admin.username !== created.admin.email ? ` or "${created.admin.username}"` : ''}.`}</Hint>
+          {created.admin.password ? <Secret label="Administrator password" value={created.admin.password} /> : <Notice tone="ok">The administrator keeps their existing password.</Notice>}
+          <Row><Btn label="Open admin panel" kind="ghost" onPress={() => openUrl(created.tenant.adminPath)} /><Btn label="Done" onPress={onClose} /></Row>
         </View>
       ) : (
         <View>
-          <Field label="Business name" value={form.name} onChangeText={set('name')} autoCapitalize="words" {...({ testID: 'sa-t-name' } as object)} />
-          <Field label="Address (app.com/…)" value={form.slug} onChangeText={v => { setTouched(true); set('slug')(v.toLowerCase()); }} {...({ testID: 'sa-t-slug' } as object)} />
-          <Field label="Administrator e-mail" value={form.ownerEmail} onChangeText={set('ownerEmail')} keyboardType="email-address" {...({ testID: 'sa-t-email' } as object)} />
-          <Field label="Administrator name (optional)" value={form.ownerName} onChangeText={set('ownerName')} autoCapitalize="words" />
-          <Field label="Plan label (optional)" value={form.plan} onChangeText={set('plan')} />
+          <Pair>
+            <Field label="Business name" value={form.name} onChangeText={set('name')} autoCapitalize="words" {...({ testID: 'sa-t-name' } as object)} />
+            <Field label="Address (app.com/…)" value={form.slug} onChangeText={v => { setTouched(true); set('slug')(v.toLowerCase()); }} {...({ testID: 'sa-t-slug' } as object)} />
+          </Pair>
+          {published.length ? (
+            <View style={{ marginBottom: SA.space.md }}>
+              <T size="xs" weight="bold" color={SA.color.muted} style={{ marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>Start from</T>
+              <Row>
+                <Btn small label="Empty store" kind={!demoId ? 'solid' : 'ghost'} onPress={() => setDemoId('')} />
+                {published.map(d => <Btn key={d.id} small label={d.name} kind={demoId === d.id ? 'solid' : 'ghost'} onPress={() => setDemoId(d.id)} />)}
+              </Row>
+              {demoId ? <Hint>{' A private copy of this demo (content, settings, pictures, sample data). Later edits never reach the demo or other stores.'}</Hint> : null}
+            </View>
+          ) : null}
+          <Pair>
+            <Field label="Administrator sign-in (user name or e-mail, optional)" value={form.login} onChangeText={set('login')} placeholder="admin" {...({ testID: 'sa-t-email' } as object)} />
+            <Field label="Administrator name (optional)" value={form.ownerName} onChangeText={set('ownerName')} autoCapitalize="words" />
+          </Pair>
+          <Field label="Password (empty = generated for you)" value={form.password} onChangeText={set('password')} secureTextEntry />
+          <Allowance limit={limit} setLimit={setLimit} mode={mode} setMode={setMode} />
           <ErrorLine error={error} />
-          <Btn testID="sa-t-create" label="Create tenant" onPress={submit} busy={busy} disabled={!form.name || !form.slug || !form.ownerEmail} />
+          <Btn testID="sa-t-create" label="Create store" onPress={submit} busy={busy} disabled={form.name.trim().length < 2 || form.slug.length < 3} />
         </View>
       )}
     </Sheet>
@@ -47,33 +88,92 @@ function CreateTenant({ onClose, onDone }: { onClose: () => void; onDone: () => 
 
 function Admins({ tenant }: { tenant: Tenant }) {
   const { data, error, reload } = useLoad(() => sa<TenantAdmin[]>(`/tenants/${tenant.id}/admins`));
-  const [email, setEmail] = useState('');
+  const [login, setLogin] = useState('');
+  const [name, setName] = useState('');
   const [secret, setSecret] = useState<{ label: string; value: string } | null>(null);
   const [problem, setProblem] = useState<unknown>(null);
   const act = async (work: () => Promise<unknown>) => { setProblem(null); try { await work(); reload(); } catch (e) { setProblem(saMessage(e)); } };
-  const enc = (id: string) => encodeURIComponent(id);
   return (
     <View>
-      <T weight="bold" style={{ marginBottom: SA.space.sm }}>Administrators</T>
+      <Hint>Several administrators can manage the same store. Each one signs in with a user name or an e-mail.</Hint>
       <ErrorLine error={error || problem} />
       {secret ? <Secret label={secret.label} value={secret.value} /> : null}
       {(data || []).map(a => (
         <View key={a.id} style={{ paddingVertical: SA.space.sm, borderTopWidth: 1, borderColor: SA.color.line }}>
           <Row style={{ justifyContent: 'space-between' }}>
-            <View><T weight="bold" testID="sa-admin-email">{a.email}</T><T size="xs" color={SA.color.muted}>last sign-in {ago(a.lastLoginAt)}</T></View>
+            <View style={{ flexShrink: 1 }}>
+              <T weight="bold" testID="sa-admin-email">{a.username || a.email}</T>
+              <T size="xs" color={SA.color.muted}>{[a.name, a.username && a.email ? a.email : '', `last sign-in ${ago(a.lastLoginAt)}`].filter(Boolean).join(' · ')}</T>
+            </View>
             {a.disabled ? <Badge label="disabled" tone="danger" /> : <Badge label="active" tone="ok" />}
           </Row>
           <Row style={{ marginTop: SA.space.sm }}>
             <Btn small kind="ghost" label={a.disabled ? 'Enable' : 'Disable'} onPress={() => act(() => sa(`/tenants/${tenant.id}/admins/${enc(a.id)}`, { method: 'PATCH', body: { disabled: !a.disabled } }))} />
-            <Btn small kind="ghost" label="Reset password" onPress={() => act(async () => { const r = await sa<{ password: string }>(`/tenants/${tenant.id}/admins/${enc(a.id)}/password`, { method: 'POST', body: {} }); setSecret({ label: `New password for ${a.email}`, value: r.password }); })} />
+            <Btn small kind="ghost" label="Reset password" onPress={() => act(async () => { const r = await sa<{ password: string }>(`/tenants/${tenant.id}/admins/${enc(a.id)}/password`, { method: 'POST', body: {} }); setSecret({ label: `New password for ${a.username || a.email}`, value: r.password }); })} />
             <Btn small kind="danger" label="Remove" onPress={() => act(() => sa(`/tenants/${tenant.id}/admins/${enc(a.id)}`, { method: 'DELETE' }))} />
           </Row>
         </View>
       ))}
-      <Row style={{ marginTop: SA.space.md, alignItems: 'flex-end' }}>
-        <View style={{ flex: 1, minWidth: 200 }}><Field label="Add an administrator (e-mail)" value={email} onChangeText={setEmail} keyboardType="email-address" /></View>
-        <View style={{ marginBottom: SA.space.md }}><Btn label="Add" disabled={!email} onPress={() => act(async () => { const r = await sa<{ password: string | null }>(`/tenants/${tenant.id}/admins`, { method: 'POST', body: { email } }); setEmail(''); if (r.password) setSecret({ label: `Password for ${email}`, value: r.password }); })} /></View>
+      <View style={{ marginTop: SA.space.lg, borderTopWidth: 1, borderColor: SA.color.line, paddingTop: SA.space.lg }}>
+        <T weight="bold" style={{ marginBottom: SA.space.sm }}>Add an administrator</T>
+        <Pair>
+          <Field label="User name or e-mail" value={login} onChangeText={setLogin} placeholder="sara" {...({ testID: 'sa-admin-login' } as object)} />
+          <Field label="Name (optional)" value={name} onChangeText={setName} autoCapitalize="words" />
+        </Pair>
+        <Btn label="Add administrator" disabled={!login.trim()} onPress={() => act(async () => {
+          const r = await sa<{ password: string | null }>(`/tenants/${tenant.id}/admins`, { method: 'POST', body: { ...loginFields(login), name } });
+          if (r.password) setSecret({ label: `Password for ${login.trim()}`, value: r.password });
+          setLogin(''); setName('');
+        })} />
+      </View>
+    </View>
+  );
+}
+
+/** Credits and API source for this store: the two "limits" of a store, in one place. */
+function Plan({ tenant, onChanged }: { tenant: Tenant; onChanged: () => void }) {
+  const apis = useLoad(() => sa<{ apis: ApiConn[] }>('/apis'));
+  const [limit, setLimit] = useState(tenant.creditLimit == null ? '' : String(tenant.creditLimit));
+  const [mode, setMode] = useState<'own' | 'platform'>(tenant.apiMode);
+  const [links, setLinks] = useState<Partial<Record<ApiKind, string>>>(tenant.apiLinks || {});
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState<unknown>(null);
+  const [note, setNote] = useState('');
+  const run = async (key: string, body: object, message: string) => {
+    setBusy(key); setError(null); setNote('');
+    try { await sa(`/tenants/${tenant.id}`, { method: 'PATCH', body }); setNote(message); onChanged(); } catch (e) { setError(saMessage(e)); } finally { setBusy(''); }
+  };
+  const kinds: [ApiKind, string][] = [['image', 'Image AI'], ['text', 'Text AI (assistant)']];
+  return (
+    <View>
+      <T weight="bold" style={{ marginBottom: SA.space.sm }}>Credits</T>
+      <Meter used={tenant.creditsUsed} limit={tenant.creditLimit} testID="sa-t-meter" />
+      <Hint>{' One AI picture = one credit. When the limit is reached the store cannot create new pictures until you raise it.'}</Hint>
+      <Field label="Credit limit (empty = unlimited)" value={limit} onChangeText={v => setLimit(v.replace(/[^0-9]/g, ''))} keyboardType="number-pad" placeholder="Unlimited" {...({ testID: 'sa-t-limit' } as object)} />
+      <Row style={{ marginBottom: SA.space.xl }}>
+        <Btn testID="sa-t-limit-save" label="Save limit" busy={busy === 'limit'} onPress={() => run('limit', { creditLimit: parseLimit(limit) }, 'Limit saved.')} />
+        <Btn label="Reset used to 0" kind="ghost" busy={busy === 'reset'} onPress={() => run('reset', { resetUsed: true }, 'Counter reset.')} />
       </Row>
+      <T weight="bold" style={{ marginBottom: SA.space.sm }}>AI keys</T>
+      <Segmented value={mode} onChange={setMode} options={[{ value: 'own', label: 'Store manages its own' }, { value: 'platform', label: 'Managed by me', testID: 'sa-mode-platform' }]} />
+      <Hint>{mode === 'platform' ? ' API access is removed from the store panel: its administrators cannot see or change keys. Choose which connection it uses below (or leave the shared default).' : ' The store administrator keeps API access in its own panel (AI models, assistant).'}</Hint>
+      {mode === 'platform' ? kinds.map(([kind, label]) => {
+        const list = (apis.data?.apis || []).filter(a => a.kind === kind && a.enabled);
+        return (
+          <View key={kind} style={{ marginBottom: SA.space.md }}>
+            <T size="xs" weight="bold" color={SA.color.muted} style={{ marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</T>
+            {!list.length ? <T size="sm" color={SA.color.warn}>No connection yet. Add one in APIs, or this store will have no AI of this kind.</T> : (
+              <Row>
+                <Btn small label="Shared default" kind={!links[kind] ? 'solid' : 'ghost'} onPress={() => setLinks(l => ({ ...l, [kind]: '' }))} />
+                {list.map(a => <Btn key={a.id} small label={a.label} kind={links[kind] === a.id ? 'solid' : 'ghost'} onPress={() => setLinks(l => ({ ...l, [kind]: a.id }))} />)}
+              </Row>
+            )}
+          </View>
+        );
+      }) : null}
+      <ErrorLine error={error} />
+      {note ? <T size="sm" color={SA.color.ok} style={{ marginBottom: SA.space.md }}>{note}</T> : null}
+      <Btn testID="sa-t-mode-save" label="Save AI keys" busy={busy === 'mode'} onPress={() => run('mode', { apiMode: mode, ...(mode === 'platform' ? { apiLinks: Object.fromEntries(Object.entries(links).map(([k, v]) => [k, v || null])) } : {}) }, 'Saved.')} />
     </View>
   );
 }
@@ -84,10 +184,9 @@ function Domains({ tenant }: { tenant: Tenant }) {
   const [problem, setProblem] = useState<unknown>(null);
   const act = async (work: () => Promise<unknown>) => { setProblem(null); try { await work(); reload(); } catch (e) { setProblem(saMessage(e)); } };
   return (
-    <View style={{ marginTop: SA.space.lg }}>
-      <T weight="bold" style={{ marginBottom: SA.space.sm }}>Custom domains</T>
+    <View>
+      <Hint>A custom domain only works after its DNS TXT record is found.</Hint>
       <ErrorLine error={error || problem} />
-      {!(data || []).length ? <T size="sm" color={SA.color.muted}>None. A domain only works after its DNS TXT record is found.</T> : null}
       {(data || []).map(d => (
         <View key={d.domain} style={{ paddingVertical: SA.space.sm, borderTopWidth: 1, borderColor: SA.color.line }}>
           <Row style={{ justifyContent: 'space-between' }}><T weight="bold">{d.domain}</T><Badge label={d.verified ? 'verified' : 'pending'} tone={d.verified ? 'ok' : 'warn'} /></Row>
@@ -107,7 +206,7 @@ function Domains({ tenant }: { tenant: Tenant }) {
   );
 }
 
-function Manage({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () => void; onChanged: () => void }) {
+function Details({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () => void; onChanged: () => void }) {
   const [name, setName] = useState(tenant.name);
   const [plan, setPlan] = useState(tenant.plan);
   const [notes, setNotes] = useState(tenant.notes);
@@ -122,13 +221,14 @@ function Manage({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () =>
   };
   const isDefault = tenant.kind === 'default';
   return (
-    <Sheet title={tenant.name} onClose={onClose} wide testID="sa-tenant-sheet">
+    <View>
       <Row style={{ marginBottom: SA.space.lg }}>
-        <Badge label={tenant.status} tone={statusTone(tenant.status)} /><Badge label={tenant.kind} />
         <Btn small kind="ghost" label="Open storefront" onPress={() => openUrl(tenant.path)} /><Btn small kind="ghost" label="Open admin panel" onPress={() => openUrl(tenant.adminPath)} />
       </Row>
-      <Field label="Name" value={name} onChangeText={setName} autoCapitalize="words" />
-      {!isDefault ? <Field label="Address" value={slug} onChangeText={setSlug} /> : null}
+      <Pair>
+        <Field label="Name" value={name} onChangeText={setName} autoCapitalize="words" />
+        {!isDefault ? <Field label="Address" value={slug} onChangeText={setSlug} /> : <View />}
+      </Pair>
       <Field label="Plan label" value={plan} onChangeText={setPlan} />
       <Field label="Internal notes" value={notes} onChangeText={setNotes} multiline />
       <ErrorLine error={error} />
@@ -137,42 +237,51 @@ function Manage({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () =>
         {saved ? <T size="sm" color={SA.color.ok}>Saved.</T> : null}
         {!isDefault ? <Btn testID="sa-t-suspend" label={tenant.status === 'suspended' ? 'Unsuspend' : 'Suspend'} kind={tenant.status === 'suspended' ? 'ghost' : 'danger'} busy={busy === 'suspend'} onPress={() => run('suspend', () => sa(`/tenants/${tenant.id}/${tenant.status === 'suspended' ? 'unsuspend' : 'suspend'}`, { method: 'POST', body: {} }), true)} /> : null}
       </Row>
-      <Admins tenant={tenant} />
-      <Domains tenant={tenant} />
       {!isDefault ? (
-        <View style={{ marginTop: SA.space.xl, borderTopWidth: 1, borderColor: SA.color.danger, paddingTop: SA.space.lg }}>
-          <T weight="bold" color={SA.color.danger}>Delete this tenant</T>
+        <View style={{ borderTopWidth: 1, borderColor: SA.color.dangerSoft, paddingTop: SA.space.lg }}>
+          <T weight="bold" color={SA.color.danger}>Delete this store</T>
           <T size="sm" color={SA.color.muted} style={{ marginVertical: SA.space.sm }}>Removes its content, clients, requests, sessions, media and administrators for good. Type {`"${tenant.slug}"`} to confirm.</T>
           <Field label="Type the address" value={confirm} onChangeText={setConfirm} {...({ testID: 'sa-t-confirm' } as object)} />
-          <Btn testID="sa-t-delete" label="Delete tenant" kind="danger" disabled={confirm !== tenant.slug} busy={busy === 'delete'} onPress={() => run('delete', () => sa(`/tenants/${tenant.id}`, { method: 'DELETE', body: { confirmSlug: confirm } }), true)} />
+          <Btn testID="sa-t-delete" label="Delete store" kind="danger" disabled={confirm !== tenant.slug} busy={busy === 'delete'} onPress={() => run('delete', () => sa(`/tenants/${tenant.id}`, { method: 'DELETE', body: { confirmSlug: confirm } }), true)} />
         </View>
       ) : null}
+    </View>
+  );
+}
+
+type TabKey = 'details' | 'admins' | 'plan' | 'domains';
+function Manage({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () => void; onChanged: () => void }) {
+  const [tab, setTab] = useState<TabKey>('admins');
+  return (
+    <Sheet title={tenant.name} onClose={onClose} wide testID="sa-tenant-sheet">
+      <Row style={{ marginBottom: SA.space.md }}><Badge label={tenant.status} tone={statusTone(tenant.status)} />{tenant.kind === 'default' ? <Badge label="default" tone="accent" /> : null}<T size="sm" color={SA.color.muted}>{tenant.path}</T></Row>
+      <Tabs value={tab} onChange={setTab} tabs={[{ value: 'admins', label: 'Administrators', testID: 'sa-tab-admins' }, { value: 'plan', label: 'Credits & APIs', testID: 'sa-tab-plan' }, { value: 'domains', label: 'Domains', testID: 'sa-tab-domains' }, { value: 'details', label: 'Settings', testID: 'sa-tab-details' }]} />
+      {tab === 'admins' ? <Admins tenant={tenant} /> : tab === 'plan' ? <Plan tenant={tenant} onChanged={onChanged} /> : tab === 'domains' ? <Domains tenant={tenant} /> : <Details tenant={tenant} onClose={onClose} onChanged={onChanged} />}
     </Sheet>
   );
 }
 
 export default function Tenants() {
+  const params = useLocalSearchParams<{ new?: string; demo?: string }>();
   const { data, error, loading, reload } = useLoad(() => sa<Tenant[]>('/tenants'));
-  const [creating, setCreating] = useState(false);
-  const [open, setOpen] = useState<Tenant | null>(null);
+  const [creating, setCreating] = useState(params.new === '1' || !!params.demo); // opened by a link (Overview, Demos)
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const open = (data || []).find(t => t.id === openId) || null; // always the freshest copy after a save
+  const shown = useMemo(() => (data || []).filter(t => !query.trim() || `${t.name} ${t.slug} ${t.ownerEmail}`.toLowerCase().includes(query.trim().toLowerCase())), [data, query]);
   return (
     <View>
-      <Heading title="Tenants" hint="Each tenant has its own storefront, admin panel and data at /address, or on its own domain." right={<Btn testID="sa-new-tenant" label="New tenant" onPress={() => setCreating(true)} />} />
+      <Heading title="Stores" hint="Each store has its own storefront, admin panel, data, credits and AI keys, at /address or on its own domain." right={<Btn testID="sa-new-tenant" label="New store" onPress={() => setCreating(true)} />} />
       <ErrorLine error={error} />
-      {loading && !data ? <Loading /> : !data?.length ? <Empty>No tenant yet.</Empty> : data.map(t => (
-        <Card key={t.id}>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <View style={{ flexShrink: 1 }}>
-              <Row><T weight="bold" testID="sa-tenant-name">{t.name}</T><Badge label={t.status} tone={statusTone(t.status)} />{t.kind === 'default' ? <Badge label="default" tone="accent" /> : null}{t.sourceDemoId ? <Badge label="from demo" tone="accent" /> : null}</Row>
-              <T size="sm" color={SA.color.muted}>{t.path} · {t.ownerEmail || 'no owner'}{t.plan ? ` · ${t.plan}` : ''}</T>
-              {t.counts ? <T size="xs" color={SA.color.muted}>{t.counts.clients} clients · {t.counts.requests} requests · {t.counts.admins} admins{t.counts.openRequests ? ` · ${t.counts.openRequests} open change requests` : ''}</T> : null}
-            </View>
-            <Btn testID="sa-manage" label="Manage" kind="ghost" small onPress={() => setOpen(t)} />
-          </Row>
-        </Card>
+      {(data || []).length > 6 ? <Toolbar><View style={{ flex: 1, minWidth: 200 }}><Field label="Search" value={query} onChangeText={setQuery} placeholder="Name or address" /></View></Toolbar> : null}
+      {loading && !data ? <Loading /> : !shown.length ? <Empty>{data?.length ? 'No match.' : 'No store yet.'}</Empty> : shown.map(t => (
+        <ListRow key={t.id} testID="sa-manage" titleTestID="sa-tenant-name" title={t.name} onPress={() => setOpenId(t.id)}
+          meta={<Row style={{ gap: 4 }}><Badge label={t.status} tone={statusTone(t.status)} />{t.kind === 'default' ? <Badge label="default" tone="accent" /> : null}{t.sourceDemoId ? <Badge label="from demo" tone="accent" /> : null}{t.apiMode === 'platform' ? <Badge label="API managed" tone="accent" /> : null}</Row>}
+          sub={`${t.path} · ${t.counts ? `${t.counts.admins} admin${t.counts.admins === 1 ? '' : 's'} · ${t.counts.clients} clients` : ''}${t.counts?.openRequests ? ` · ${t.counts.openRequests} open request${t.counts.openRequests > 1 ? 's' : ''}` : ''}`}
+          right={<View style={{ minWidth: 150 }}><Meter used={t.creditsUsed} limit={t.creditLimit} /></View>} />
       ))}
-      {creating ? <CreateTenant onClose={() => setCreating(false)} onDone={reload} /> : null}
-      {open ? <Manage tenant={open} onClose={() => setOpen(null)} onChanged={reload} /> : null}
+      {creating ? <CreateTenant initialDemo={params.demo} onClose={() => setCreating(false)} onDone={reload} /> : null}
+      {open ? <Manage tenant={open} onClose={() => setOpenId(null)} onChanged={reload} /> : null}
     </View>
   );
 }

@@ -4,27 +4,28 @@ import { useRouter } from 'expo-router';
 import { sa } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import type { Stats } from '@/superadmin/types';
-import { Card, ErrorLine, Heading, Loading, Row, T, useLoad, Btn } from '@/superadmin/ui';
+import { Btn, ErrorLine, Heading, Loading, Notice, Row, Stat, useLoad } from '@/superadmin/ui';
 
+/** Home: five numbers and the three things you do most. */
 export default function Overview() {
   const router = useRouter();
+  const go = (href: string) => () => router.push(href as never);
   const { data, error, loading } = useLoad(() => sa<Stats>('/stats'));
-  const tiles: [string, number | undefined, string][] = [
-    ['Tenants', data?.tenants, 'kpi-tenants'], ['Active', data?.active, 'kpi-active'], ['Suspended', data?.suspended, 'kpi-suspended'],
-    ['Demos', data?.demos, 'kpi-demos'], ['Assigned instances', data?.assignments, 'kpi-assignments'], ['Open requests', data?.openRequests, 'kpi-requests'], ['Clients (all tenants)', data?.clients, 'kpi-clients'],
-  ];
   return (
     <View>
-      <Heading title="Overview" hint="Every storefront and admin panel on this platform. Each tenant is isolated: its own data, sessions, media and settings." right={<Row><Btn label="New tenant" onPress={() => router.push('/super-admin/tenants' as never)} /><Btn label="Demos" kind="ghost" onPress={() => router.push('/super-admin/demos' as never)} /></Row>} />
+      <Heading title="Overview" hint="Your stores at a glance. Everything starts from a store: add its demo, its administrators, its credits and its APIs in one place."
+        right={<Row><Btn testID="sa-home-new" label="New store" onPress={go('/super-admin/tenants?new=1')} /><Btn label="New demo" kind="ghost" onPress={go('/super-admin/demos?new=1')} /></Row>} />
       <ErrorLine error={error} />
       {loading && !data ? <Loading /> : (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.md }}>
-          {tiles.map(([label, value, id]) => (
-            <Card key={id} style={{ width: 200, marginBottom: 0 }}>
-              <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</T>
-              <T size="xl" weight="bold" testID={id} style={{ marginTop: 6 }}>{String(value ?? 0)}</T>
-            </Card>
-          ))}
+        <View>
+          {data && data.openRequests > 0 ? <Notice tone="warn" onPress={go('/super-admin/requests')}>{data.openRequests} open request{data.openRequests > 1 ? 's' : ''} from store administrators. Tap to answer.</Notice> : null}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.md }}>
+            <Stat label="Stores" value={data?.tenants ?? 0} hint={`${data?.active ?? 0} active · ${data?.suspended ?? 0} suspended`} testID="kpi-tenants" onPress={go('/super-admin/tenants')} />
+            <Stat label="Demos" value={data?.demos ?? 0} hint={`${data?.assignments ?? 0} copied to stores`} testID="kpi-demos" onPress={go('/super-admin/demos')} />
+            <Stat label="Open requests" value={data?.openRequests ?? 0} testID="kpi-requests" onPress={go('/super-admin/requests')} />
+            <Stat label="Credits used" value={data?.creditsUsed ?? 0} hint={`${data?.clients ?? 0} clients in all stores`} testID="kpi-credits" />
+            <Stat label="API connections" value={data?.apis ?? 0} hint={`${data?.platformManaged ?? 0} store${data?.platformManaged === 1 ? '' : 's'} use them`} testID="kpi-apis" onPress={go('/super-admin/apis')} />
+          </View>
         </View>
       )}
     </View>

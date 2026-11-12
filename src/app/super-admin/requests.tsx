@@ -3,9 +3,10 @@ import { View } from 'react-native';
 import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import type { ChangeRequest } from '@/superadmin/types';
-import { Badge, Btn, Card, Empty, ErrorLine, Field, Heading, Loading, Row, Sheet, T, ago, openUrl, statusTone, useLoad } from '@/superadmin/ui';
+import { Badge, Btn, Empty, ErrorLine, Field, Heading, ListRow, Loading, Notice, Row, Sheet, T, Tabs, ago, openUrl, statusTone, useLoad } from '@/superadmin/ui';
 
 const FILTERS = ['open', 'in_progress', 'done', 'rejected', ''] as const;
+const KIND_LABEL: Record<string, string> = { customize: 'Customisation', manage: 'Management', support: 'Support', credits: 'More credits', api: 'API access' };
 
 function Detail({ item, onClose, onChanged }: { item: ChangeRequest; onClose: () => void; onChanged: () => void }) {
   const [response, setResponse] = useState(item.response);
@@ -28,8 +29,9 @@ function Detail({ item, onClose, onChanged }: { item: ChangeRequest; onClose: ()
   const demo = item.tenantKind === 'demo';
   return (
     <Sheet title={item.title} onClose={onClose} wide testID="sa-request-sheet">
-      <Row style={{ marginBottom: SA.space.md }}><Badge label={item.status} tone={statusTone(item.status)} /><Badge label={item.kind} /><T size="sm" color={SA.color.muted}>{item.tenantName} /{item.tenantSlug} · {item.adminId} · {ago(item.createdAt)}</T></Row>
+      <Row style={{ marginBottom: SA.space.md }}><Badge label={item.status} tone={statusTone(item.status)} /><Badge label={KIND_LABEL[item.kind] || item.kind} tone="accent" /><T size="sm" color={SA.color.muted}>{item.tenantName} /{item.tenantSlug} · {item.adminId} · {ago(item.createdAt)}</T></Row>
       <T style={{ marginBottom: SA.space.lg }} selectable>{item.body}</T>
+      {item.kind === 'credits' || item.kind === 'api' ? <Notice tone="accent">{item.kind === 'credits' ? 'To grant credits, open the store in Stores, then Credits & APIs, and raise its limit.' : 'To change API access, open the store in Stores, then Credits & APIs, and choose who manages the AI keys.'}</Notice> : null}
       <Field label="Reply to the administrator" value={response} onChangeText={setResponse} multiline />
       <Row style={{ marginBottom: SA.space.lg }}>
         <Btn label="Save reply" kind="ghost" busy={busy === item.status} onPress={() => status(item.status)} />
@@ -58,16 +60,13 @@ export default function Requests() {
   const { data, error, loading, reload } = useLoad(() => sa<ChangeRequest[]>(`/requests${filter ? `?status=${filter}` : ''}`), [filter]);
   return (
     <View>
-      <Heading title="Requests" hint="Customisation, management and support requests from tenant administrators. Each one belongs to one tenant; changes you apply go to that tenant only." />
-      <Row style={{ marginBottom: SA.space.lg }}>{FILTERS.map(value => <Btn key={value || 'all'} testID={`sa-filter-${value || 'all'}`} label={value ? value.replace('_', ' ') : 'all'} kind={filter === value ? 'solid' : 'ghost'} small onPress={() => setFilter(value)} />)}</Row>
+      <Heading title="Requests" hint="Messages sent by store administrators from their panel: customisation, support, more credits, API access. Changes you apply go to that store only." />
+      <Tabs value={filter} onChange={setFilter} tabs={FILTERS.map(value => ({ value, label: value ? value.replace('_', ' ') : 'all', testID: `sa-filter-${value || 'all'}` }))} />
       <ErrorLine error={error} />
       {loading && !data ? <Loading /> : !data?.length ? <Empty>No request here.</Empty> : data.map(item => (
-        <Card key={item.id}>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <View style={{ flexShrink: 1 }}><T weight="bold" testID="sa-request-title">{item.title}</T><T size="sm" color={SA.color.muted}>{item.tenantName} /{item.tenantSlug} · {item.kind} · {ago(item.createdAt)}</T></View>
-            <Row><Badge label={item.status} tone={statusTone(item.status)} /><Btn label="Open" small kind="ghost" onPress={() => setOpen(item)} /></Row>
-          </Row>
-        </Card>
+        <ListRow key={item.id} title={item.title} titleTestID="sa-request-title" onPress={() => setOpen(item)}
+          meta={<Row style={{ gap: 4 }}><Badge label={item.status} tone={statusTone(item.status)} /><Badge label={KIND_LABEL[item.kind] || item.kind} /></Row>}
+          sub={`${item.tenantName} /${item.tenantSlug} · ${ago(item.createdAt)}`} />
       ))}
       {open ? <Detail item={open} onClose={() => setOpen(null)} onChanged={() => { reload(); }} /> : null}
     </View>

@@ -9,7 +9,7 @@ export default function Audit() {
   const { data, error, loading } = useLoad(() => sa<AuditRow[]>('/audit?limit=200'));
   return (
     <View>
-      <Heading title="Audit log" hint="Every action taken in this console, newest first." />
+      <Heading title="Activity" hint="Every action taken in this console, newest first." />
       <ErrorLine error={error} />
       {loading && !data ? <Loading /> : !data?.length ? <Empty>Nothing yet.</Empty> : (
         <Card style={{ padding: 0 }}>

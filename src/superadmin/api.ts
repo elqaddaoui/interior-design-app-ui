@@ -28,5 +28,14 @@ const MESSAGES: Record<string, string> = {
   WRONG_CURRENT_PASSWORD: 'The current password is not correct.', INVALID_LOGIN: 'Use 3 to 190 characters: letters, digits and . _ @ + - (an e-mail address works).',
   SAME_PASSWORD: 'The new password must be different from the current one.', NOTHING_TO_CHANGE: 'Nothing to change.', ACCOUNT_DISABLED: 'This account is disabled.',
   OWNER_EMAIL_REQUIRED: 'The chosen administrator has no valid e-mail.', NOT_FOUND: 'Not found.',
+  INVALID_USERNAME: 'User name: 3 to 40 letters, digits, dot, dash or underscore (no spaces, no @).', INVALID_CREDIT_LIMIT: 'Credits must be a whole number from 0 to 100 000 000, or empty for unlimited.',
+  INVALID_API_MODE: 'Unknown API mode.', INVALID_API_LINKS: 'Invalid API selection.', API_NOT_FOUND: 'This API connection no longer exists.', INVALID_PROVIDER: 'Choose a provider from the list.',
+  INVALID_KEY: 'The key looks wrong (12 to 300 letters, digits, dot, dash or underscore).', INVALID_URL: 'Use a public https address.', INVALID_MODEL: 'A model name is required for this provider.',
+  TOO_MANY_APIS: 'Thirty connections of one kind at most.', DEFAULT_REQUIRED: 'Choose another connection as the default instead.', INVALID_KIND: 'Unknown kind.',
 };
 export const saMessage = (error: unknown) => (error instanceof SaError ? (MESSAGES[error.code] || error.code) : 'Something went wrong.');
+
+/** One "sign-in" box for an administrator: an e-mail (has @) or a user name; empty = none given (the server then uses "admin"). */
+export const loginFields = (value: string) => { const v = value.trim(); return !v ? {} : v.includes('@') ? { email: v } : { username: v }; };
+/** Whole-number credit limit from a text box: '' = unlimited (null); anything else must be a whole number (the server validates again). */
+export const parseLimit = (value: string) => (value.trim() === '' ? null : Number(value.trim()));
