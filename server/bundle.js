@@ -17,12 +17,15 @@ const { createCampaigns } = require('./campaigns');
 const { createChat } = require('./chat');
 const { createAssistant } = require('./assistant');
 const { createImageGen } = require('./imagegen');
+const { createPlatform } = require('./platform');
 
 const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))]);
 
 function createBundles({ db, env = process.env, senders, media: mediaOptions = {}, chatFetch, imageFetch } = {}) {
   // One S3 client for the whole process: tenants differ by object-key prefix, not by credentials.
   const storage = 'storage' in mediaOptions ? mediaOptions.storage : createR2Storage(env);
+  // Allowances + API manager (platform tables). Tenant modules only get `platform.forTenant(id)`: a handle fixed to their own tenant.
+  const platform = createPlatform(db, { env });
   const cache = new Map();
   const max = Math.max(5, Math.min(2000, Number(env.TENANT_CACHE) || 200));
 
@@ -40,8 +43,9 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     const admins = createAdmins(tdb, { env, sync, media });
     // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
     const campaigns = createCampaigns(tdb, notifier, { sync, settings: () => content.getDoc('settings') });
-    const imagegen = createImageGen(tdb, { env, media, content, sync, ...(imageFetch ? { fetch: imageFetch } : {}) });
-    const chat = createChat(tdb, { env, ...(chatFetch ? { fetch: chatFetch } : {}) });
+    const own = platform.forTenant(tenantId, { onChange: () => sync.bump('credits') });
+    const imagegen = createImageGen(tdb, { env, media, content, sync, platform: own, ...(imageFetch ? { fetch: imageFetch } : {}) });
+    const chat = createChat(tdb, { env, platform: own, ...(chatFetch ? { fetch: chatFetch } : {}) });
     const assistant = createAssistant(tdb, { chat, content });
 
     /** Queue a notification. `kind`: request (new demand -> admins) | lead (new client -> admins) | ready (design delivered -> its owner). */
@@ -73,7 +77,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
         }
       } catch { console.warn('Notification queue temporarily unavailable'); }
     }
-    return { tenantId, db: tdb, notifier, clients, sync, content, media, admins, campaigns, imagegen, chat, assistant, enqueue, pump };
+    return { tenantId, db: tdb, notifier, clients, sync, content, media, admins, campaigns, imagegen, chat, assistant, enqueue, pump, platform: own };
   }
 
   return {
@@ -90,6 +94,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     drop: tenantId => void cache.delete(tenantId),
     loaded: () => [...cache.keys()],
     storage,
+    platform,
     /**
      * Tenants that have work for the background timer: a notification job due, or a campaign that can still fire (the default tenant is
      * always included, which keeps the single-tenant behaviour). Suspended tenants are skipped. Reads the raw database on purpose: this

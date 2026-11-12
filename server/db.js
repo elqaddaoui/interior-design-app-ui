@@ -132,13 +132,22 @@ CREATE TABLE IF NOT EXISTS saas_super_sessions (token_hash TEXT PRIMARY KEY, sup
 CREATE TABLE IF NOT EXISTS saas_demos (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', tenant_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'draft', version BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS saas_assignments (id TEXT PRIMARY KEY, demo_id TEXT NOT NULL, tenant_id TEXT NOT NULL UNIQUE, owner_email TEXT NOT NULL DEFAULT '', demo_version BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL, created_by TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS saas_assignments_demo ON saas_assignments(demo_id);
-CREATE TABLE IF NOT EXISTS saas_requests (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, admin_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'customize', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', response TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
-CREATE INDEX IF NOT EXISTS saas_requests_tenant ON saas_requests(tenant_id, created_at DESC);
+-- Store themes: a UI-only snapshot (colours, fonts, branding, home / tools / explore content; never client data, keys or admins) taken from a
+-- tenant's store. A new demo starts from one. source_tenant_id is kept only to refresh the snapshot and to find the pictures it references.
+CREATE TABLE IF NOT EXISTS saas_themes (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_tenant_id TEXT, snapshot TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS saas_audit (id TEXT PRIMARY KEY, at BIGINT NOT NULL, actor TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, tenant_id TEXT, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS saas_audit_at ON saas_audit(at DESC);
+-- Per-store allowance (AI credits; NULL = unlimited) and API policy: 'own' = the store's administrators manage their own keys,
+-- 'platform' = keys come from the API manager. api_links maps a kind (image / text) to one saas_apis id; no link = the shared default.
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS credit_limit BIGINT;
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS credits_used BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS api_mode TEXT NOT NULL DEFAULT 'own';
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS api_links TEXT NOT NULL DEFAULT '{}';
+-- API manager: one row per provider connection (secret key stored, never returned by any route).
+CREATE TABLE IF NOT EXISTS saas_apis (id TEXT PRIMARY KEY, kind TEXT NOT NULL, provider TEXT NOT NULL DEFAULT '', label TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '', base_url TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
-const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_requests', 'saas_audit'];
+const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis'];
 
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 /** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */

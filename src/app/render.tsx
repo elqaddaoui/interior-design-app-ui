@@ -77,7 +77,7 @@ export default function RenderPage() {
       // `fresh` marks a just-claimed result: the result page sends Back to Home instead of the editable wizard.
       router.replace({ pathname: '/result/[id]', params: { id: hist.id, fresh: '1' } });
     } catch (error) {
-      if (error instanceof BackendError && error.status === 402) { router.replace({ pathname: '/pro', params: { generation: '1' } }); return; }
+      if (error instanceof BackendError && error.status === 402 && error.code !== 'STORE_CREDITS_EXHAUSTED') { router.replace({ pathname: '/pro', params: { generation: '1' } }); return; }
       if (!signal.current.cancelled) setFailed(true);
     }
   };

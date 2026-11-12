@@ -96,4 +96,19 @@ export function applyFavicon(href: string) {
   let link = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
   if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
   link.type = 'image/png'; link.href = href;
+  // iOS / Android home-screen icon follows the same artwork.
+  let touch = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+  if (!touch) { touch = document.createElement('link'); touch.rel = 'apple-touch-icon'; document.head.appendChild(touch); }
+  touch.href = href;
+}
+/** A store's identity in the browser tab: its own favicon and name (the platform default stays when it has none). */
+export function applyStoreIdentity(b: { appName?: string; favicon?: string }) {
+  if (!canExport) return;
+  const name = (b.appName ?? '').trim();
+  if (name) {
+    document.title = name;
+    const t = document.querySelector<HTMLMetaElement>('meta[name="apple-mobile-web-app-title"]');
+    if (t) t.content = name.slice(0, 12);
+  }
+  if (b.favicon) applyFavicon(b.favicon);
 }

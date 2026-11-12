@@ -25,8 +25,14 @@ function createContent(db, sync, mediaOptions = {}) {
     await db.tx(async q => {
       const claimed = await q("INSERT INTO settings(tenant_id,key,value) VALUES(:tenant,'content_seeded',$1) ON CONFLICT (tenant_id,key) DO NOTHING RETURNING key", [String(now)]);
       if (!claimed.length) return;
-      for (const [coll, rows] of Object.entries(seed.collections)) for (const row of rows) await q('INSERT INTO content_items(tenant_id,coll,id,data,updated_at) VALUES(:tenant,$1,$2,$3,$4) ON CONFLICT DO NOTHING', [coll, row.id, JSON.stringify(row), now]);
-      for (const [name, doc] of Object.entries(seed.docs)) await q('INSERT INTO content_docs(tenant_id,name,data,updated_at) VALUES(:tenant,$1,$2,$3) ON CONFLICT DO NOTHING', [name, JSON.stringify(doc), now]);
+      // Multi-row inserts (a few statements instead of one per row): creating a store or a demo used to take seconds on a remote database.
+      const items = Object.entries(seed.collections).flatMap(([coll, rows]) => rows.map(row => [coll, row.id, JSON.stringify(row), now]));
+      for (let i = 0; i < items.length; i += 200) {
+        const part = items.slice(i, i + 200);
+        await q(`INSERT INTO content_items(tenant_id,coll,id,data,updated_at) VALUES ${part.map((_, n) => `(:tenant,$${n * 4 + 1},$${n * 4 + 2},$${n * 4 + 3},$${n * 4 + 4})`).join(',')} ON CONFLICT DO NOTHING`, part.flat());
+      }
+      const docs = Object.entries(seed.docs).map(([name, doc]) => [name, JSON.stringify(doc), now]);
+      if (docs.length) await q(`INSERT INTO content_docs(tenant_id,name,data,updated_at) VALUES ${docs.map((_, n) => `(:tenant,$${n * 3 + 1},$${n * 3 + 2},$${n * 3 + 3})`).join(',')} ON CONFLICT DO NOTHING`, docs.flat());
     });
   })().then(migrateMedia).catch(error => { seeded = undefined; throw error; });
 

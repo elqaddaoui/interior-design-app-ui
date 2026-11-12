@@ -4,6 +4,7 @@ import { AdminAvatar } from '@/components/admin/AdminAvatar';
 import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
 import { LANGS, useLang, useT } from '@/i18n';
+import { useAdminInstance } from '@/store/useAdminInstance';
 import { useAdminProfile } from '@/store/useAdminProfile';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -35,6 +36,9 @@ export function AccountMenu({ anchor, onClose, onGo, onOpenApp, onLogout, fallba
   const { style, colors } = useTheme();
   const { width, height } = useWindowDimensions();
   const profile = useAdminProfile((s) => s.profile);
+  // The credits shown are the STORE's allowance (what the platform gave this store, minus every picture its clients and administrators
+  // generated). The administrator's own personal figure only applies when the store has no limit. (A hook: it must stay above the early return.)
+  const store = useAdminInstance((s) => s.instance?.credits);
   useEffect(() => {
     if (Platform.OS !== 'web' || !anchor) return;
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose(); } };
@@ -49,7 +53,8 @@ export function AccountMenu({ anchor, onClose, onGo, onOpenApp, onLogout, fallba
   const bottom = Math.max(8, height - anchor.y + 8);
   const name = (profile?.name || '').trim() || fallbackName;
   const sub = profile?.title || profile?.email || profile?.username || t('ac.administrator');
-  const credits = profile?.credits;
+  const storeLimited = !!store && store.limit != null;
+  const credits = storeLimited ? store.left : profile?.credits;
   const unlimited = credits == null;
   const run = (fn: () => void) => () => { onClose(); setTimeout(fn, 0); };
 
@@ -74,7 +79,7 @@ export function AccountMenu({ anchor, onClose, onGo, onOpenApp, onLogout, fallba
             {/* credits */}
             <View testID="account-menu-credits" className="mx-3.5 mb-3 flex-row items-center rounded-2xl bg-soft" style={{ paddingHorizontal: 12, height: 44, gap: 10 }}>
               <Icon name="star-circle-outline" size={21} tone="primary" />
-              <Txt numberOfLines={1} className="flex-1 font-extrabold text-[14px]">{unlimited ? t('ac.creditsUnlimited') : t('ac.credits', { n: credits })}</Txt>
+              <Txt numberOfLines={1} className="flex-1 font-extrabold text-[14px]">{unlimited ? t('ac.creditsUnlimited') : storeLimited ? t('ac.creditsStore', { left: store.left, limit: store.limit }) : t('ac.credits', { n: credits })}</Txt>
               {unlimited ? <Icon name="infinity" size={20} tone="primary" /> : null}
             </View>
 

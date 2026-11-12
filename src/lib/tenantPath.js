@@ -42,7 +42,13 @@ function shellScript() {
   // A tenant under a slug gets ITS web-app manifest (name, start_url, scope) from its own API: written before the static manifest link, and the first one wins.
   return `(function(){var R=${JSON.stringify([...RESERVED])},p=location.pathname,s=p.split('/')[1]||'',b=${SLUG.toString()}.test(s)&&R.indexOf(s)<0?s:'';` +
     `window.__DWIRA_BASE__=b;window.__DWIRA_ROUTE=b?(p.slice(b.length+1)||'/'):p;window.__DWIRA_PFX='dwira:v1:'+(b?'t:'+b+':':'');` +
-    `if(b)document.write('<link rel="manifest" href="/'+b+'/api/manifest.webmanifest">')})();`;
+    `if(b)document.write('<link rel="manifest" href="/'+b+'/api/manifest.webmanifest">');` +
+    // The Super admin console has its own identity in the tab (icon, title, manifest) from the first paint: the static shell tags are replaced.
+    `if(p==='/super-admin'||p.indexOf('/super-admin/')===0){document.write('<link rel="manifest" href="/icons/superadmin.webmanifest">');` +
+    `document.addEventListener('DOMContentLoaded',function(){var d=document,x=d.querySelectorAll('link[rel~="icon"],link[rel="apple-touch-icon"]'),i;` +
+    `for(i=0;i<x.length;i++)x[i].remove();` +
+    `d.head.insertAdjacentHTML('beforeend','<link rel="icon" type="image/png" sizes="32x32" href="/icons/superadmin-32.png"><link rel="apple-touch-icon" href="/icons/superadmin-180.png"><meta name="theme-color" content="#4F46E5">');` +
+    `d.title='Platform console'})}})();`;
 }
 
 module.exports = { baseFromPath, withBase, stripBase, storagePrefix, isForeignKey, mediaUrl, canonicalMediaUrl, mapStrings, shellScript };
