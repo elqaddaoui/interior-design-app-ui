@@ -276,15 +276,35 @@ test('the API manager and policy are for the super admin only; a tenant payload 
   assert.equal(stats.apis, 1);
 });
 
-test('requests from the store admin: new kinds (credits / api) are accepted and the super admin answers', async () => {
-  const { api, backend } = await setup();
-  const t = (await api('/tenants', { method: 'POST', body: { name: 'Ask', slug: 'ask-shop' } })).body;
+test('the store admin sees its own credit limit (session + sync), kept current as credits are used; the console sets it at demo creation', async () => {
+  const { api, backend, db } = await setup();
+  const t = (await api('/tenants', { method: 'POST', body: { name: 'Ask', slug: 'ask-shop', creditLimit: 5 } })).body;
   const owner = await login(backend, 'ask-shop', 'admin', t.admin.password);
-  for (const kind of ['credits', 'api', 'support']) assert.equal((await call(backend, '/ask-shop/api/admin/change-requests', { method: 'POST', headers: owner, body: { kind, title: `More ${kind}`, body: 'Please help us' } })).status, 201, kind);
-  assert.equal((await call(backend, '/ask-shop/api/admin/change-requests', { method: 'POST', headers: owner, body: { kind: 'other', title: 'xxx', body: 'yyy' } })).status, 400);
-  const mine = await call(backend, '/ask-shop/api/admin/change-requests', { headers: owner });
-  assert.equal(mine.body.length, 3);
-  const answered = await api(`/requests/${mine.body[0].id}`, { method: 'PATCH', body: { status: 'done', response: 'Done: limit raised' } });
-  assert.equal(answered.body.response, 'Done: limit raised');
-  assert.equal((await call(backend, '/ask-shop/api/admin/change-requests', { headers: owner })).body.find(r => r.id === mine.body[0].id).response, 'Done: limit raised');
+  const first = (await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body;
+  assert.deepEqual(first.instance.credits, { limit: 5, used: 0, left: 5 });
+  const v1 = (await call(backend, '/ask-shop/api/sync', { headers: owner })).body.credits;
+  assert.equal(typeof v1, 'number');
+  // Using a credit moves the sync version, so every open admin screen re-reads the allowance.
+  const platform = backend.bundles.get(t.tenant.id).platform;
+  assert.equal(await platform.consume(2), true);
+  const v2 = (await call(backend, '/ask-shop/api/sync', { headers: owner })).body.credits;
+  assert.ok(v2 > v1, 'consume bumps the credits version');
+  assert.deepEqual((await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body.instance.credits, { limit: 5, used: 2, left: 3 });
+  await platform.refund(1);
+  assert.ok((await call(backend, '/ask-shop/api/sync', { headers: owner })).body.credits > v2, 'refund bumps it too');
+  // Raising the limit in the console is visible at once, and never leaks to anonymous sync or another store.
+  await api(`/tenants/${t.tenant.id}`, { method: 'PATCH', body: { creditLimit: 50 } });
+  assert.equal((await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body.instance.credits.limit, 50);
+  assert.equal((await call(backend, '/ask-shop/api/sync')).body.credits, null, 'anonymous visitors see no credits version');
+  assert.equal((await call(backend, '/api/admin/session', { headers: owner })).status, 401);
+  // A demo is created with its own limit; its admin sees it.
+  const demo = (await api('/demos', { method: 'POST', body: { name: 'Limit Demo', creditLimit: 12 } })).body;
+  assert.equal(demo.demo.creditLimit, 12);
+  const demoAdmin = await login(backend, demo.demo.slug, 'admin', demo.admin.password);
+  assert.equal((await call(backend, `/${demo.demo.slug}/api/admin/session`, { headers: demoAdmin })).body.instance.credits.limit, 12);
+  const unlimited = (await api('/demos', { method: 'POST', body: { name: 'Free Demo', creditLimit: '' } })).body;
+  assert.equal(unlimited.demo.creditLimit, null);
+  // The old request endpoints are gone.
+  assert.equal((await call(backend, '/ask-shop/api/admin/change-requests', { headers: owner })).status, 404);
+  void db;
 });

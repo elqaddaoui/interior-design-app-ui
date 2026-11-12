@@ -1,9 +1,58 @@
 import React, { useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { sa, saMessage } from '@/superadmin/api';
-import { useSuper } from '@/superadmin/session';
-import { SA } from '@/superadmin/tokens';
+import { Icon } from '@/superadmin/icons';
+import { useSaTheme, useSuper } from '@/superadmin/session';
+import { SA, SA_THEMES, type SaTheme } from '@/superadmin/tokens';
 import { Badge, Btn, Card, ErrorLine, Field, Heading, Loading, Row, T, ago, useLoad } from '@/superadmin/ui';
+
+/** One palette swatch: a miniature of the console in that theme (page, panel, text lines, accent button). Drawn from the theme's own colours. */
+function Swatch({ theme, on, onPress }: { theme: SaTheme; on: boolean; onPress: () => void }) {
+  const c = theme.color;
+  return (
+    <Pressable testID={`sa-theme-${theme.id}`} accessibilityRole="radio" accessibilityState={{ checked: on }} accessibilityLabel={`${theme.label}${theme.eyeFriendly ? ', eye-friendly' : ''}`} onPress={onPress}
+      style={{ flexGrow: 1, flexBasis: 150, minWidth: 140, maxWidth: 220, padding: SA.space.sm, borderRadius: SA.radius.lg, borderWidth: 2, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: SA.color.panel }}>
+      <View style={{ height: 74, borderRadius: SA.radius.md, backgroundColor: c.bg, borderWidth: 1, borderColor: c.line, padding: 8 }}>
+        <View style={{ flexDirection: 'row', gap: 6, flex: 1 }}>
+          <View style={{ width: 22, borderRadius: 4, backgroundColor: c.panel, borderWidth: 1, borderColor: c.line }} />
+          <View style={{ flex: 1, borderRadius: 4, backgroundColor: c.panel, borderWidth: 1, borderColor: c.line, padding: 5, gap: 4 }}>
+            <View style={{ height: 5, width: '70%', borderRadius: 3, backgroundColor: c.text }} />
+            <View style={{ height: 4, width: '45%', borderRadius: 3, backgroundColor: c.muted }} />
+            <View style={{ height: 9, width: 34, borderRadius: 4, backgroundColor: c.accent, marginTop: 'auto' }} />
+          </View>
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: SA.space.sm, gap: 6 }}>
+        <View style={{ flexShrink: 1 }}>
+          <T size="sm" weight="bold" numberOfLines={1}>{theme.label}</T>
+          {theme.eyeFriendly ? <T size="xs" color={SA.color.muted}>Eye-friendly</T> : null}
+        </View>
+        {on ? <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: SA.color.accent, alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={13} color={SA.color.onAccent} /></View> : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function ThemePicker() {
+  const theme = useSaTheme(s => s.theme), setTheme = useSaTheme(s => s.setTheme);
+  const group = (title: string, hint: string, dark: boolean) => (
+    <View style={{ marginBottom: SA.space.lg }}>
+      <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{title}</T>
+      <T size="xs" color={SA.color.muted} style={{ marginBottom: SA.space.sm }}>{hint}</T>
+      <View accessibilityRole="radiogroup" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.md }}>
+        {SA_THEMES.filter(x => x.dark === dark).map(x => <Swatch key={x.id} theme={x} on={theme === x.id} onPress={() => setTheme(x.id)} />)}
+      </View>
+    </View>
+  );
+  return (
+    <Card>
+      <T size="lg" weight="bold" style={{ marginBottom: 4 }}>Appearance</T>
+      <T size="sm" color={SA.color.muted} style={{ marginBottom: SA.space.lg }} testID="sa-theme-info">Only changes how this console looks, on this device. It is not stored on the server and never touches any store.</T>
+      {group('Dark', 'High contrast. Graphite, Forest, Ember and Ocean are softer on the eyes at night.', true)}
+      {group('Light', 'Bright, high-contrast surfaces for daytime.', false)}
+    </Card>
+  );
+}
 
 type Account = { email: string; isDefault: boolean; passwordChangedAt: number | null; lastLoginAt: number | null };
 
@@ -37,6 +86,7 @@ export default function Settings() {
   return (
     <View>
       <Heading title="Settings" hint="Your platform login. It is stored in the database, so it follows the app to every deployment." />
+      <ThemePicker />
       <ErrorLine error={loadError} />
       {loading && !data ? <Loading /> : (
         <Card>

@@ -69,18 +69,19 @@ function createPlatform(db, { env = process.env, clock = Date.now } = {}) {
   }
 
   /** One atomic step: take `n` credits unless that would pass the store's limit. */
-  async function consume(tenantId, n = 1) {
-    if ((await db.query('UPDATE saas_tenants SET credits_used=credits_used+$2 WHERE id=$1 AND (credit_limit IS NULL OR credits_used+$2<=credit_limit) RETURNING credits_used', [tenantId, n])).length) return true;
+  async function consume(tenantId, n = 1, onChange) {
+    if ((await db.query('UPDATE saas_tenants SET credits_used=credits_used+$2 WHERE id=$1 AND (credit_limit IS NULL OR credits_used+$2<=credit_limit) RETURNING credits_used', [tenantId, n])).length) { await onChange?.(); return true; }
     // Refused only when the store exists and is at its limit. No registry row (e.g. a bare single-tenant database) = nothing to meter.
     return !(await db.query('SELECT 1 FROM saas_tenants WHERE id=$1', [tenantId])).length;
   }
-  const refund = (tenantId, n = 1) => db.query('UPDATE saas_tenants SET credits_used=GREATEST(0, credits_used-$2) WHERE id=$1', [tenantId, n]);
+  /** `onChange` (given by the store's bundle) bumps the store's own 'credits' sync version, so its open admin screens re-read the allowance. */
+  const refund = async (tenantId, n = 1, onChange) => { await db.query('UPDATE saas_tenants SET credits_used=GREATEST(0, credits_used-$2) WHERE id=$1', [tenantId, n]); await onChange?.(); };
 
   /** The handle tenant modules receive. The id is fixed at construction (bundle.js), so no caller can name another tenant. */
-  const forTenant = tenantId => ({
+  const forTenant = (tenantId, { onChange } = {}) => ({
     managed: kind => managed(tenantId, kind),
-    consume: n => consume(tenantId, n),
-    refund: n => refund(tenantId, n),
+    consume: n => consume(tenantId, n, onChange),
+    refund: n => refund(tenantId, n, onChange),
   });
 
   /** What the store's own administrators may see about their allowance and API policy (no keys, no other store). */

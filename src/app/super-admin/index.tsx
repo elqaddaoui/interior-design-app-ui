@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { sa } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import type { Stats } from '@/superadmin/types';
-import { Btn, ErrorLine, Heading, Loading, Notice, Row, Stat, useLoad } from '@/superadmin/ui';
+import { Btn, ErrorLine, Heading, Loading, Row, Stat, useLoad } from '@/superadmin/ui';
 
 /** Home: five numbers and the three things you do most. */
 export default function Overview() {
@@ -18,11 +18,10 @@ export default function Overview() {
       <ErrorLine error={error} />
       {loading && !data ? <Loading /> : (
         <View>
-          {data && data.openRequests > 0 ? <Notice tone="warn" onPress={go('/super-admin/requests')}>{data.openRequests} open request{data.openRequests > 1 ? 's' : ''} from store administrators. Tap to answer.</Notice> : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.md }}>
             <Stat label="Stores" value={data?.tenants ?? 0} hint={`${data?.active ?? 0} active · ${data?.suspended ?? 0} suspended`} testID="kpi-tenants" onPress={go('/super-admin/tenants')} />
             <Stat label="Demos" value={data?.demos ?? 0} hint={`${data?.assignments ?? 0} copied to stores`} testID="kpi-demos" onPress={go('/super-admin/demos')} />
-            <Stat label="Open requests" value={data?.openRequests ?? 0} testID="kpi-requests" onPress={go('/super-admin/requests')} />
+            <Stat label="Store themes" value={data?.themes ?? 0} hint="saved looks for new demos" testID="kpi-themes" onPress={go('/super-admin/themes')} />
             <Stat label="Credits used" value={data?.creditsUsed ?? 0} hint={`${data?.clients ?? 0} clients in all stores`} testID="kpi-credits" />
             <Stat label="API connections" value={data?.apis ?? 0} hint={`${data?.platformManaged ?? 0} store${data?.platformManaged === 1 ? '' : 's'} use them`} testID="kpi-apis" onPress={go('/super-admin/apis')} />
           </View>

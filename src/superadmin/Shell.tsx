@@ -2,19 +2,20 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
-import { SA } from './tokens';
-import { useSuper } from './session';
+import { SA, SA_THEMES } from './tokens';
+import { useSuper, useSaTheme } from './session';
+import { Icon, IconBtn, type IconName } from './icons';
 import { saMessage } from './api';
-import { Btn, Card, ErrorLine, Field, Loading, Notice, T } from './ui';
+import { Btn, Card, ErrorLine, Field, Loading, Notice, Row, T } from './ui';
 
-const NAV: { href: string; label: string; testID: string }[] = [
-  { href: '/super-admin', label: 'Overview', testID: 'sa-nav-overview' },
-  { href: '/super-admin/tenants', label: 'Tenants', testID: 'sa-nav-tenants' },
-  { href: '/super-admin/demos', label: 'Demos', testID: 'sa-nav-demos' },
-  { href: '/super-admin/apis', label: 'APIs', testID: 'sa-nav-apis' },
-  { href: '/super-admin/requests', label: 'Requests', testID: 'sa-nav-requests' },
-  { href: '/super-admin/audit', label: 'Activity', testID: 'sa-nav-audit' },
-  { href: '/super-admin/settings', label: 'Settings', testID: 'sa-nav-settings' },
+const NAV: { href: string; label: string; testID: string; icon: IconName }[] = [
+  { href: '/super-admin', label: 'Overview', testID: 'sa-nav-overview', icon: 'viewDashboardOutline' },
+  { href: '/super-admin/tenants', label: 'Tenants', testID: 'sa-nav-tenants', icon: 'domain' },
+  { href: '/super-admin/demos', label: 'Demos', testID: 'sa-nav-demos', icon: 'viewGridOutline' },
+  { href: '/super-admin/themes', label: 'Store themes', testID: 'sa-nav-themes', icon: 'paletteOutline' },
+  { href: '/super-admin/apis', label: 'APIs', testID: 'sa-nav-apis', icon: 'lockOutline' },
+  { href: '/super-admin/audit', label: 'Activity', testID: 'sa-nav-audit', icon: 'formatListBulleted' },
+  { href: '/super-admin/settings', label: 'Settings', testID: 'sa-nav-settings', icon: 'cogOutline' },
 ];
 
 function Login() {
@@ -45,21 +46,27 @@ function Login() {
 
 export function SuperShell({ children }: { children: React.ReactNode }) {
   const { state, email, isDefault, check, logout } = useSuper();
+  const theme = useSaTheme(s => s.theme), setTheme = useSaTheme(s => s.setTheme);
   const path = usePathname();
   const router = useRouter();
   const { width } = useWindowDimensions();
   useEffect(() => { void check(); }, [check]);
-  useEffect(() => { if (Platform.OS === 'web' && typeof document !== 'undefined') { document.title = 'Super admin'; document.body.style.backgroundColor = SA.color.bg; } }, []);
+  useEffect(() => { if (Platform.OS === 'web' && typeof document !== 'undefined') { document.title = 'Super admin'; document.body.style.backgroundColor = SA.color.bg; } }, [theme]);
   if (state === 'checking') return <View style={{ flex: 1, backgroundColor: SA.color.bg, justifyContent: 'center' }}><Loading /></View>;
   if (state !== 'in') return <Login />;
   const wide = width >= SA.wide;
+  const dark = SA_THEMES.find(x => x.id === theme)?.dark;
+  // One tap between a light and a dark palette (the full list is in Settings).
+  const flip = () => setTheme(dark ? 'daylight' : 'graphite');
+  const flipBtn = <IconBtn testID="sa-theme-flip" icon={dark ? 'whiteBalanceSunny' : 'weatherNight'} label={dark ? 'Switch to a light theme' : 'Switch to a dark theme'} onPress={flip} size={36} />;
   const active = (href: string) => (href === '/super-admin' ? path === href : path.startsWith(href));
   const go = (href: string) => router.push(href as never);
   const links = NAV.map(item => {
     const on = active(item.href);
     return (
       <Pressable key={item.href} testID={item.testID} accessibilityRole="link" onPress={() => go(item.href)}
-        style={{ paddingVertical: 8, paddingHorizontal: 12, borderRadius: SA.radius.md, backgroundColor: on ? SA.color.accentSoft : 'transparent' }}>
+        style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: SA.radius.md, backgroundColor: on ? SA.color.accentSoft : 'transparent', flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40 }}>
+        <Icon name={item.icon} size={18} color={on ? SA.color.accent : SA.color.muted} />
         <T size="sm" weight={on ? 'bold' : 'medium'} color={on ? SA.color.accent : SA.color.muted}>{item.label}</T>
       </Pressable>
     );
@@ -72,14 +79,14 @@ export function SuperShell({ children }: { children: React.ReactNode }) {
           <View style={{ gap: 2, marginTop: SA.space.lg }}>{links}</View>
           <View style={{ marginTop: 'auto', paddingTop: SA.space.md, gap: SA.space.sm }}>
             <T size="xs" color={SA.color.muted} numberOfLines={1}>{email}</T>
-            <Btn testID="sa-signout" label="Sign out" kind="ghost" small onPress={() => { void logout(); }} />
+            <Row>{flipBtn}<Btn testID="sa-signout" label="Sign out" kind="ghost" small icon="logout" onPress={() => { void logout(); }} /></Row>
           </View>
         </View>
       ) : (
         <View style={{ borderBottomWidth: 1, borderColor: SA.color.line, backgroundColor: SA.color.panel, paddingTop: SA.space.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: SA.space.md, gap: SA.space.md }}>
             <T size="xs" weight="bold" color={SA.color.accent} style={{ letterSpacing: 2, textTransform: 'uppercase' }}>Platform console</T>
-            <Btn testID="sa-signout" label="Sign out" kind="ghost" small onPress={() => { void logout(); }} />
+            <Row style={{ flexWrap: 'nowrap' }}>{flipBtn}<Btn testID="sa-signout" label="Sign out" kind="ghost" small icon="logout" onPress={() => { void logout(); }} /></Row>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: SA.space.sm, paddingVertical: SA.space.sm, gap: 2 }}>{links}</ScrollView>
         </View>
@@ -91,7 +98,7 @@ export function SuperShell({ children }: { children: React.ReactNode }) {
               <T size="sm" weight="bold" color={SA.color.warn}>You are using the factory login (superadmin / superadmin). Tap here, then choose your own login and password.</T>
             </Notice>
           ) : null}
-          {children}
+          <React.Fragment key={theme}>{children}</React.Fragment>
         </View>
       </ScrollView>
     </View>

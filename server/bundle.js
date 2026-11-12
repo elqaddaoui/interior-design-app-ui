@@ -43,7 +43,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     const admins = createAdmins(tdb, { env, sync, media });
     // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
     const campaigns = createCampaigns(tdb, notifier, { sync, settings: () => content.getDoc('settings') });
-    const own = platform.forTenant(tenantId);
+    const own = platform.forTenant(tenantId, { onChange: () => sync.bump('credits') });
     const imagegen = createImageGen(tdb, { env, media, content, sync, platform: own, ...(imageFetch ? { fetch: imageFetch } : {}) });
     const chat = createChat(tdb, { env, platform: own, ...(chatFetch ? { fetch: chatFetch } : {}) });
     const assistant = createAssistant(tdb, { chat, content });
@@ -77,7 +77,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
         }
       } catch { console.warn('Notification queue temporarily unavailable'); }
     }
-    return { tenantId, db: tdb, notifier, clients, sync, content, media, admins, campaigns, imagegen, chat, assistant, enqueue, pump };
+    return { tenantId, db: tdb, notifier, clients, sync, content, media, admins, campaigns, imagegen, chat, assistant, enqueue, pump, platform: own };
   }
 
   return {

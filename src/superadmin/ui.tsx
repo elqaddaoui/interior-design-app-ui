@@ -5,19 +5,20 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps, type ViewStyle } from 'react-native';
 import { SA } from './tokens';
-import { saMessage } from './api';
+import { sa, saMessage } from './api';
+import { Icon, type IconName } from './icons';
 
 const font = Platform.OS === 'web' ? { fontFamily: SA.family } : {};
 export function T({ children, size = 'md', weight = 'regular', color = SA.color.text, style, numberOfLines, testID, selectable }: { children: React.ReactNode; size?: keyof typeof SA.font.size; weight?: keyof typeof SA.font.weight; color?: string; style?: object; numberOfLines?: number; testID?: string; selectable?: boolean }) {
   return <Text testID={testID} selectable={selectable} numberOfLines={numberOfLines} style={[font, { fontSize: SA.font.size[size], fontWeight: SA.font.weight[weight], color }, style]}>{children}</Text>;
 }
-export function Btn({ label, onPress, kind = 'solid', disabled, busy, small, testID }: { label: string; onPress: () => void; kind?: 'solid' | 'ghost' | 'danger'; disabled?: boolean; busy?: boolean; small?: boolean; testID?: string }) {
+export function Btn({ label, onPress, kind = 'solid', disabled, busy, small, testID, icon }: { label: string; onPress: () => void; kind?: 'solid' | 'ghost' | 'danger'; disabled?: boolean; busy?: boolean; small?: boolean; testID?: string; icon?: IconName }) {
   const solid = kind === 'solid', danger = kind === 'danger';
-  const bg = solid ? SA.color.accent : SA.color.panel, fg = solid ? SA.color.onAccent : danger ? SA.color.danger : SA.color.text;
+  const bg = solid ? SA.color.accent : danger ? SA.color.dangerSoft : SA.color.panel, fg = solid ? SA.color.onAccent : danger ? SA.color.danger : SA.color.text;
   return (
     <Pressable testID={testID} accessibilityRole="button" accessibilityLabel={label} disabled={disabled || busy} onPress={onPress}
-      style={({ pressed }) => [s.btn, { backgroundColor: bg, borderColor: solid ? SA.color.accent : danger ? SA.color.dangerSoft : SA.color.line, opacity: disabled ? 0.45 : pressed ? 0.8 : 1, paddingVertical: small ? 6 : 10, paddingHorizontal: small ? 10 : 16 }]}>
-      {busy ? <ActivityIndicator size="small" color={fg} /> : <T size={small ? 'xs' : 'sm'} weight="bold" color={fg}>{label}</T>}
+      style={({ pressed }) => [st().btn, { backgroundColor: bg, borderColor: solid ? SA.color.accent : danger ? SA.color.danger : SA.color.line, opacity: disabled ? 0.45 : pressed ? 0.8 : 1, paddingVertical: small ? 6 : 10, paddingHorizontal: small ? 10 : 16 }]}>
+      {busy ? <ActivityIndicator size="small" color={fg} /> : <>{icon ? <Icon name={icon} size={small ? 14 : 16} color={fg} /> : null}<T size={small ? 'xs' : 'sm'} weight="bold" color={fg}>{label}</T></>}
     </Pressable>
   );
 }
@@ -27,12 +28,12 @@ export function Field({ label, error, ...p }: TextInputProps & { label: string; 
       <T size="xs" weight="bold" color={SA.color.muted} style={{ marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</T>
       <TextInput placeholderTextColor={SA.color.muted} autoCapitalize="none" autoCorrect={false} accessibilityLabel={label}
         {...(Platform.OS === 'web' ? ({ autoComplete: p.secureTextEntry ? 'new-password' : 'off' } as object) : {})}
-        {...p} style={[s.input, font, p.multiline ? { minHeight: 90, textAlignVertical: 'top' } : null, error ? { borderColor: SA.color.danger } : null]} />
+        {...p} style={[st().input, font, p.multiline ? { minHeight: 90, textAlignVertical: 'top' } : null, error ? { borderColor: SA.color.danger } : null]} />
       {error ? <T size="xs" color={SA.color.danger} style={{ marginTop: 4 }}>{error}</T> : null}
     </View>
   );
 }
-export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) { return <View style={[s.card, style]}>{children}</View>; }
+export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) { return <View style={[st().card, style]}>{children}</View>; }
 export function Badge({ label, tone = 'muted' }: { label: string; tone?: 'ok' | 'warn' | 'danger' | 'muted' | 'accent' }) {
   const color = { ok: SA.color.ok, warn: SA.color.warn, danger: SA.color.danger, muted: SA.color.muted, accent: SA.color.accent }[tone];
   const bg = { ok: SA.color.okSoft, warn: SA.color.warnSoft, danger: SA.color.dangerSoft, muted: SA.color.panel2, accent: SA.color.accentSoft }[tone];
@@ -48,16 +49,16 @@ export function Heading({ title, hint, right }: { title: string; hint?: string; 
     </View>
   );
 }
-export function Sheet({ title, onClose, children, wide, testID }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; testID?: string }) {
+export function Sheet({ title, onClose, children, wide, testID }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean | 'xl'; testID?: string }) {
   const { width } = useWindowDimensions();
   const phone = width < SA.wide;
   return (
     <Modal transparent animationType={phone ? 'slide' : 'fade'} onRequestClose={onClose} visible>
-      <View style={[s.overlay, phone ? { padding: 0, justifyContent: 'flex-end' } : null]}>
-        <View testID={testID} style={[s.sheet, { maxWidth: phone ? undefined : wide ? 760 : 520 }, phone ? { maxHeight: '94%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 } : null]}>
+      <View style={[st().overlay, phone ? { padding: 0, justifyContent: 'flex-end' } : null]}>
+        <View testID={testID} style={[st().sheet, { maxWidth: phone ? undefined : wide === 'xl' ? 1040 : wide ? 760 : 520 }, phone ? { maxHeight: '94%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 } : null]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SA.space.md, padding: SA.space.lg, borderBottomWidth: 1, borderColor: SA.color.line }}>
             <View style={{ flexShrink: 1 }}><T size="lg" weight="bold" numberOfLines={1}>{title}</T></View>
-            <Btn label="Close" kind="ghost" small onPress={onClose} />
+            <Btn label="Close" kind="ghost" small icon="close" onPress={onClose} testID="sa-sheet-close" />
           </View>
           <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ padding: SA.space.lg, paddingBottom: SA.space.xxl }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
         </View>
@@ -120,7 +121,7 @@ export function Notice({ tone = 'accent', children, testID, onPress }: { tone?: 
 /** A number with a caption (dashboard tile). */
 export function Stat({ label, value, hint, testID, onPress }: { label: string; value: string | number; hint?: string; testID?: string; onPress?: () => void }) {
   const body = (
-    <View style={[s.card, { marginBottom: 0, minWidth: 150, flexGrow: 1, flexBasis: 150 }]}>
+    <View style={[st().card, { marginBottom: 0, minWidth: 150, flexGrow: 1, flexBasis: 150 }]}>
       <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</T>
       <T size="xl" weight="bold" testID={testID} style={{ marginTop: 6 }}>{String(value)}</T>
       {hint ? <T size="xs" color={SA.color.muted} style={{ marginTop: 2 }}>{hint}</T> : null}
@@ -144,7 +145,7 @@ export function Toolbar({ children }: { children: React.ReactNode }) { return <V
 /** A list row: title, subtitle, optional trailing content. Tappable when `onPress` is given. */
 export function ListRow({ title, sub, meta, right, onPress, testID, titleTestID }: { title: string; sub?: string; meta?: React.ReactNode; right?: React.ReactNode; onPress?: () => void; testID?: string; titleTestID?: string }) {
   const body = (
-    <View style={[s.card, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SA.space.md, flexWrap: 'wrap' }]}>
+    <View style={[st().card, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SA.space.md, flexWrap: 'wrap' }]}>
       <View style={{ flexShrink: 1, flexGrow: 1, minWidth: 200 }}>
         <Row><T weight="bold" testID={titleTestID} numberOfLines={1}>{title}</T>{meta}</Row>
         {sub ? <T size="sm" color={SA.color.muted} style={{ marginTop: 2 }} numberOfLines={2}>{sub}</T> : null}
@@ -177,10 +178,27 @@ export const ago = (at: number | null | undefined) => {
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 };
 export const openUrl = (path: string) => { if (Platform.OS === 'web') (globalThis as any).window?.open?.(path, '_blank', 'noopener'); };
+/**
+ * Opens a store's admin panel already signed in, with no password: asks the server for a one-time code (valid 60 s, tied to this
+ * store and its first active administrator) and sends a new tab to `<admin>/login?handoff=<code>`. The tab is opened first, inside
+ * the tap, because browsers block pop-ups that open after an await. Returns an error message, or '' when fine.
+ */
+export async function openAdminSession(tenantId: string, next?: string): Promise<string> {
+  const win = Platform.OS === 'web' ? (globalThis as any).window?.open?.('', '_blank') : null;
+  try {
+    const result = await sa<{ url: string }>(`/tenants/${encodeURIComponent(tenantId)}/handoff`, { method: 'POST', body: next ? { next } : {} });
+    if (win) { win.opener = null; win.location.href = result.url; }
+    return '';
+  } catch (error) {
+    try { win?.close?.(); } catch { /* already closed */ }
+    return saMessage(error);
+  }
+}
 
-const s = StyleSheet.create({
-  btn: { borderWidth: 1, borderRadius: SA.radius.md, alignItems: 'center', justifyContent: 'center', minHeight: 34 },
-  input: { backgroundColor: SA.color.panel, borderColor: SA.color.line, borderWidth: 1, borderRadius: SA.radius.md, color: SA.color.text, paddingHorizontal: SA.space.md, paddingVertical: 10, fontSize: SA.font.size.md },
+/** Built on every render from the live palette, so a theme change shows at once (module-level StyleSheet.create would freeze the first palette). */
+const st = () => StyleSheet.create({
+  btn: { borderWidth: 1, borderRadius: SA.radius.md, alignItems: 'center', justifyContent: 'center', minHeight: 36, flexDirection: 'row', gap: 6 },
+  input: { backgroundColor: SA.color.panel, borderColor: SA.color.line, borderWidth: 1, borderRadius: SA.radius.md, color: SA.color.text, paddingHorizontal: SA.space.md, paddingVertical: 10, fontSize: SA.font.size.md, minHeight: 42 },
   card: { backgroundColor: SA.color.panel, borderColor: SA.color.line, borderWidth: 1, borderRadius: SA.radius.lg, padding: SA.space.lg, marginBottom: SA.space.md },
   overlay: { flex: 1, backgroundColor: SA.color.overlay, alignItems: 'center', justifyContent: 'center', padding: SA.space.lg },
   sheet: { width: '100%', maxHeight: '90%', backgroundColor: SA.color.panel, borderColor: SA.color.line, borderWidth: 1, borderRadius: SA.radius.lg, overflow: 'hidden' },

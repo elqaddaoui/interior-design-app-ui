@@ -10,6 +10,7 @@ import { AdminAvatar } from '@/components/admin/AdminAvatar';
 import { AccountMenu, type Anchor } from '@/components/admin/AccountMenu';
 import { RightClick, type MenuItem } from '@/components/admin/ContextMenu';
 import { useAdminProfile } from '@/store/useAdminProfile';
+import { creditsLevel, creditsRatio, useAdminInstance } from '@/store/useAdminInstance';
 import { ADMIN_GROUPS, ADMIN_NAV, type NavItem } from '@/lib/adminNav';
 import { MENU_GEO, activeKey, menuPositions } from '@/lib/menuLayout';
 import { useT } from '@/i18n';
@@ -17,6 +18,38 @@ import { useStore } from '@/store/useStore';
 import { useTheme } from '@/theme/ThemeProvider';
 import type { AdminMenuDesign } from '@/data/types';
 import type { Href } from 'expo-router';
+
+/**
+ * The store's AI-credit allowance: shown in the menu so the limit the platform set for this store is always in view. Rail = a ring-less
+ * dot-and-number; expanded = label, bar and "used / limit". Colours are theme tokens (bar on surface2, text fg / muted), danger when out.
+ */
+function CreditsMeter({ fade, rail }: { fade: object; rail: object }) {
+  const { t } = useT();
+  const { colors } = useTheme();
+  const credits = useAdminInstance((s) => s.instance?.credits);
+  if (!credits) return null;
+  const level = creditsLevel(credits), ratio = creditsRatio(credits);
+  const unlimited = credits.limit == null;
+  const bar = level === 'out' ? colors.danger : level === 'low' ? colors.ink : colors.primary;
+  const line = unlimited ? t('sp.creditsUnlimited', { used: credits.used }) : t('sp.creditsLine', { used: credits.used, limit: credits.limit });
+  const note = level === 'out' ? t('sp.creditsOut') : level === 'low' ? t('sp.creditsLow') : '';
+  return (
+    <View testID="admin-credits" accessibilityLabel={`${t('sp.creditsTitle')}: ${line}`} style={{ paddingHorizontal: 12, paddingBottom: 10 }}>
+      <View className="rounded-2xl bg-surface2" style={{ padding: 10, gap: 6 }}>
+        <View className="flex-row items-center" style={{ gap: 8 }}>
+          <Icon name="star-circle-outline" size={18} tone={level === 'out' ? 'danger' : 'fg'} />
+          <Animated.View style={[{ flex: 1, minWidth: 0 }, fade]}><Txt numberOfLines={1} className="font-extrabold text-[12px]">{t('sp.creditsTitle')}</Txt></Animated.View>
+          <Animated.View pointerEvents="none" style={[{ position: 'absolute', start: 0, end: 0, alignItems: 'center' }, rail]}><Txt className="font-extrabold text-[10px]" style={{ color: level === 'out' ? colors.danger : colors.fg }}>{unlimited ? '∞' : credits.left}</Txt></Animated.View>
+        </View>
+        <Animated.View style={[{ gap: 6 }, fade]}>
+          {unlimited ? null : <View testID="admin-credits-bar" style={{ height: 6, borderRadius: 3, backgroundColor: colors.line, overflow: 'hidden' }}><View style={{ height: 6, width: `${Math.max(ratio > 0 ? 4 : 0, Math.round(ratio * 100))}%`, backgroundColor: bar, borderRadius: 3 }} /></View>}
+          <Txt testID="admin-credits-text" numberOfLines={2} className="text-muted text-[11px] font-semibold">{line}</Txt>
+          {note ? <Txt testID="admin-credits-note" numberOfLines={2} className="text-[11px] font-bold" style={{ color: level === 'out' ? colors.danger : colors.fg }}>{note}</Txt> : null}
+        </Animated.View>
+      </View>
+    </View>
+  );
+}
 
 /**
  * The admin side menu: three animated designs, one geometry.
@@ -177,8 +210,10 @@ export function AdminMenu({ collapsed, design, anim, fill, insetTop = 0, onNavig
         </View>
       </RememberScroll>
 
+      {/* credit allowance of this store */}
+      <View style={{ borderTopWidth: 1, borderColor: colors.line, paddingTop: 10 }}><CreditsMeter fade={fade} rail={rail} /></View>
       {/* account: one compact row, the rest lives in its popover */}
-      <View style={{ padding: 12, borderTopWidth: 1, borderColor: colors.line }}>
+      <View style={{ padding: 12, paddingTop: 0 }}>
         <View ref={account} collapsable={false}>
           <Pressable testID="admin-account" accessibilityRole="button" accessibilityLabel={t('dx.shell.admin')} {...(Platform.OS === 'web' ? ({ 'aria-haspopup': 'menu', title: t('dx.shell.admin') } as object) : {})} onPress={openAccount}
             className="flex-row items-center rounded-2xl hover:bg-surface2 active:bg-surface2 overflow-hidden" style={{ height: 52, paddingStart: 5, paddingEnd: 8, gap: 10 }}>

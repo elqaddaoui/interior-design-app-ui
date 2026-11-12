@@ -83,6 +83,8 @@ const T: Record<string, Row> = {
   adminSignIn: ['Se connecter', 'تسجيل الدخول', 'دخل'],
   adminInvalid: ['Identifiants invalides', 'بيانات غير صحيحة', 'المعلومات غالطة'],
   adminForbidden: ['Ce compte n’a pas accès à l’administration', 'هذا الحساب ليس له صلاحية الإدارة', 'هاد الحساب ما عندوش صلاحية الإدارة'],
+  handoffOpening: ['Ouverture de l’administration…', 'جارٍ فتح لوحة الإدارة…', 'كنحلو لوحة الإدارة…'],
+  handoffFailed: ['Ce lien d’accès a expiré. Reconnectez-vous ou rouvrez-le depuis la console.', 'انتهت صلاحية رابط الدخول. سجّل الدخول أو افتحه من جديد من لوحة المنصة.', 'الرابط سالا. دخل بالإيميل ولا عاود حلو من لوحة المنصة.'],
   adminDemo: ['Démo : admin / admin', 'تجريبي: admin / admin', 'تجريبي: admin / admin'],
   adminLimited: ['Trop de tentatives. Réessayez dans quelques minutes.', 'محاولات كثيرة. أعد المحاولة بعد دقائق.', 'محاولات بزاف. عاود من بعد شي دقايق.'],
   adminOfflineErr: ['Serveur injoignable. Vérifiez votre connexion.', 'تعذّر الوصول إلى الخادم. تحقق من الاتصال.', 'السيرفر ما كيجاوبش. شوف الكونيكسيون.'],

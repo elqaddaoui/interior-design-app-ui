@@ -4,7 +4,8 @@ import { useLocalSearchParams } from 'expo-router';
 import { loginFields, parseLimit, sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import type { ApiConn, ApiKind, Demo, NewAdmin, Tenant, TenantAdmin, Domain } from '@/superadmin/types';
-import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Meter, Notice, Pair, Row, Secret, Segmented, Sheet, T, Tabs, Toolbar, ago, openUrl, statusTone, useLoad } from '@/superadmin/ui';
+import { IconBtn } from '@/superadmin/icons';
+import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Meter, Notice, Pair, Row, Secret, Segmented, Sheet, T, Tabs, Toolbar, ago, openAdminSession, openUrl, statusTone, useLoad } from '@/superadmin/ui';
 
 const slugOf = (name: string) => name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
 const enc = (id: string) => encodeURIComponent(id);
@@ -223,7 +224,7 @@ function Details({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () =
   return (
     <View>
       <Row style={{ marginBottom: SA.space.lg }}>
-        <Btn small kind="ghost" label="Open storefront" onPress={() => openUrl(tenant.path)} /><Btn small kind="ghost" label="Open admin panel" onPress={() => openUrl(tenant.adminPath)} />
+        <Btn small kind="ghost" icon="storefrontOutline" label="Open storefront" onPress={() => openUrl(tenant.path)} /><Btn small kind="ghost" icon="shieldAccountOutline" label="Open admin panel (signed in)" onPress={() => { void openAdminSession(tenant.id); }} />
       </Row>
       <Pair>
         <Field label="Name" value={name} onChangeText={setName} autoCapitalize="words" />
@@ -240,7 +241,7 @@ function Details({ tenant, onClose, onChanged }: { tenant: Tenant; onClose: () =
       {!isDefault ? (
         <View style={{ borderTopWidth: 1, borderColor: SA.color.dangerSoft, paddingTop: SA.space.lg }}>
           <T weight="bold" color={SA.color.danger}>Delete this store</T>
-          <T size="sm" color={SA.color.muted} style={{ marginVertical: SA.space.sm }}>Removes its content, clients, requests, sessions, media and administrators for good. Type {`"${tenant.slug}"`} to confirm.</T>
+          <T size="sm" color={SA.color.muted} style={{ marginVertical: SA.space.sm }}>Removes its content, clients, sessions, media and administrators for good. Type {`"${tenant.slug}"`} to confirm.</T>
           <Field label="Type the address" value={confirm} onChangeText={setConfirm} {...({ testID: 'sa-t-confirm' } as object)} />
           <Btn testID="sa-t-delete" label="Delete store" kind="danger" disabled={confirm !== tenant.slug} busy={busy === 'delete'} onPress={() => run('delete', () => sa(`/tenants/${tenant.id}`, { method: 'DELETE', body: { confirmSlug: confirm } }), true)} />
         </View>
@@ -267,18 +268,28 @@ export default function Tenants() {
   const [creating, setCreating] = useState(params.new === '1' || !!params.demo); // opened by a link (Overview, Demos)
   const [openId, setOpenId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [problem, setProblem] = useState('');
+  const quickAdmin = async (t: Tenant) => { setProblem(await openAdminSession(t.id)); };
   const open = (data || []).find(t => t.id === openId) || null; // always the freshest copy after a save
   const shown = useMemo(() => (data || []).filter(t => !query.trim() || `${t.name} ${t.slug} ${t.ownerEmail}`.toLowerCase().includes(query.trim().toLowerCase())), [data, query]);
   return (
     <View>
       <Heading title="Stores" hint="Each store has its own storefront, admin panel, data, credits and AI keys, at /address or on its own domain." right={<Btn testID="sa-new-tenant" label="New store" onPress={() => setCreating(true)} />} />
-      <ErrorLine error={error} />
+      <ErrorLine error={error || problem} />
       {(data || []).length > 6 ? <Toolbar><View style={{ flex: 1, minWidth: 200 }}><Field label="Search" value={query} onChangeText={setQuery} placeholder="Name or address" /></View></Toolbar> : null}
       {loading && !data ? <Loading /> : !shown.length ? <Empty>{data?.length ? 'No match.' : 'No store yet.'}</Empty> : shown.map(t => (
         <ListRow key={t.id} testID="sa-manage" titleTestID="sa-tenant-name" title={t.name} onPress={() => setOpenId(t.id)}
           meta={<Row style={{ gap: 4 }}><Badge label={t.status} tone={statusTone(t.status)} />{t.kind === 'default' ? <Badge label="default" tone="accent" /> : null}{t.sourceDemoId ? <Badge label="from demo" tone="accent" /> : null}{t.apiMode === 'platform' ? <Badge label="API managed" tone="accent" /> : null}</Row>}
-          sub={`${t.path} · ${t.counts ? `${t.counts.admins} admin${t.counts.admins === 1 ? '' : 's'} · ${t.counts.clients} clients` : ''}${t.counts?.openRequests ? ` · ${t.counts.openRequests} open request${t.counts.openRequests > 1 ? 's' : ''}` : ''}`}
-          right={<View style={{ minWidth: 150 }}><Meter used={t.creditsUsed} limit={t.creditLimit} /></View>} />
+          sub={`${t.path} · ${t.counts ? `${t.counts.admins} admin${t.counts.admins === 1 ? '' : 's'} · ${t.counts.clients} clients` : ''}`}
+          right={
+            <Row style={{ gap: SA.space.md, flexWrap: 'wrap' }}>
+              <View style={{ minWidth: 140 }}><Meter used={t.creditsUsed} limit={t.creditLimit} /></View>
+              <Row style={{ gap: 6, flexWrap: 'nowrap' }}>
+                <IconBtn testID="sa-quick-store" icon="storefrontOutline" label={`Open the storefront of ${t.name}`} onPress={() => openUrl(t.path)} />
+                <IconBtn testID="sa-quick-admin" icon="shieldAccountOutline" label={`Open the admin dashboard of ${t.name} (signed in)`} disabled={t.status === 'suspended'} tone="accent" onPress={() => { void quickAdmin(t); }} />
+                <IconBtn testID="sa-quick-manage" icon="cogOutline" label={`Manage ${t.name}`} onPress={() => setOpenId(t.id)} />
+              </Row>
+            </Row>} />
       ))}
       {creating ? <CreateTenant initialDemo={params.demo} onClose={() => setCreating(false)} onDone={reload} /> : null}
       {open ? <Manage tenant={open} onClose={() => setOpenId(null)} onChanged={reload} /> : null}
