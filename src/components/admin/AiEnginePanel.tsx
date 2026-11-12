@@ -16,7 +16,7 @@ import { SettingAnchor } from '@/components/admin/AudienceBadge';
 
 type Engine = { label: string; configured: boolean; source: 'env' | 'db' | 'model' | 'none' };
 type Rotation = { on: boolean; ids: string[]; pool: { id: string; name: string; engine: string; modelName: string }[]; next: string; active: boolean };
-type Status = { engines: Record<string, Engine>; live: boolean; chainI2I: string[]; chainT2I: string[]; rotation?: Rotation };
+type Status = { managed?: boolean; engines: Record<string, Engine>; live: boolean; chainI2I: string[]; chainT2I: string[]; rotation?: Rotation };
 const NAMES = ['pollinations', 'openai'] as const;
 
 /**
@@ -109,7 +109,8 @@ export function AiEnginePanel() {
       <Txt className="text-[15px] font-extrabold">{t('admin.ai.title')}</Txt>
       <Txt className="text-[12px] text-muted mt-0.5 mb-3">{t('admin.ai.hint')}</Txt>
       {!settled ? <AdminLoading testID="ai-loading" /> : null}
-      {status && !status.live ? <Txt testID="ai-no-engine" className="text-[12px] text-danger mb-3">{t('admin.ai.noEngine')}</Txt> : null}
+      {status?.managed ? <Txt testID="ai-managed" className="text-[12px] text-muted mb-3">{t('sp.apiPlatform')}</Txt> : null}
+      {status && !status.live && !status.managed ? <Txt testID="ai-no-engine" className="text-[12px] text-danger mb-3">{t('admin.ai.noEngine')}</Txt> : null}
       {settled ? NAMES.map((name) => {
         const e = status?.engines[name];
         return (
@@ -119,7 +120,7 @@ export function AiEnginePanel() {
               <Txt className="font-bold flex-1">{t(`admin.ai.${name}`)}</Txt>
               <Txt testID={`ai-engine-${name}`} className="text-[12px] text-muted">{t(e?.configured ? 'admin.assistant.provOn' : 'admin.assistant.provOff')}{e?.configured ? ` · ${t(e.source === 'env' ? 'admin.assistant.srcEnv' : 'admin.assistant.srcDb')}` : ''}</Txt>
             </View>
-            {e?.source === 'env' ? <Txt className="text-[12px] text-muted">{t('admin.assistant.keyEnv')}</Txt> : (
+            {status?.managed ? <Txt testID={`ai-managed-${name}`} className="text-[12px] text-muted">{t('sp.managedNote')}</Txt> : e?.source === 'env' ? <Txt className="text-[12px] text-muted">{t('admin.assistant.keyEnv')}</Txt> : (
               <View className="flex-row items-center gap-2">
                 <View className="flex-1"><Input tight testID={`ai-key-${name}`} value={keys[name] ?? ''} onChangeText={(v) => setKeys((k) => ({ ...k, [name]: v.trim() }))} placeholder={t('admin.assistant.keyPlaceholder')} autoCapitalize="none" autoCorrect={false} secureTextEntry /></View>
                 <Button testID={`ai-key-save-${name}`} size="sm" title={t('admin.assistant.keySave')} disabled={!keys[name] || busy === name} loading={busy === name} onPress={() => write(name, keys[name])} />

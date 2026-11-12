@@ -298,7 +298,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         if (url.pathname === '/api/user/session' && req.method === 'GET') return json(200, { user: requireUser(), prefs: await content.clientPrefs(client.id) });
         // ---- Sync, shared content and preferences ----
         if (url.pathname === '/api/sync' && req.method === 'GET') {
-          const keys = ['content', ...(session ? ['requests', 'clients', 'chats', 'campaigns', `a:${adminId}`] : []), ...(client ? [`c:${client.id}`, ...['conversations', 'history', 'requests'].map(part => `c:${client.id}:${part}`)] : []), ...(clientHash && !client ? [`g:${clientHash}`] : [])];
+          const keys = ['content', ...(session ? ['requests', 'clients', 'chats', 'campaigns', 'credits', `a:${adminId}`] : []), ...(client ? [`c:${client.id}`, ...['conversations', 'history', 'requests'].map(part => `c:${client.id}:${part}`)] : []), ...(clientHash && !client ? [`g:${clientHash}`] : [])];
           const versions = await sync.read(keys);
           if (env.VERCEL) {
             // Serverless has no background timer (cron is only daily): any open app retries failed notifications and drives
@@ -308,7 +308,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
             await withTimeout(campaigns.tick({ budgetMs: 6000 }), 8000);
           }
           // Long-running server: the background timer below does both, so a poll costs only the version read.
-          return json(200, { content: versions.content, campaigns: session ? versions.campaigns : null, requests: session ? versions.requests : null, clients: session ? versions.clients : null, chats: session ? versions.chats : null, admin: session ? versions[`a:${adminId}`] : null, client: client ? versions[`c:${client.id}`] : null, parts: client ? Object.fromEntries(['conversations', 'history', 'requests'].map(part => [part, versions[`c:${client.id}:${part}`]])) : null, guest: clientHash && !client ? versions[`g:${clientHash}`] : null, user: client ? { id: client.id, blocked: !!client.blocked } : null, isAdmin: !!session });
+          return json(200, { content: versions.content, campaigns: session ? versions.campaigns : null, requests: session ? versions.requests : null, clients: session ? versions.clients : null, chats: session ? versions.chats : null, credits: session ? versions.credits : null, admin: session ? versions[`a:${adminId}`] : null, client: client ? versions[`c:${client.id}`] : null, parts: client ? Object.fromEntries(['conversations', 'history', 'requests'].map(part => [part, versions[`c:${client.id}:${part}`]])) : null, guest: clientHash && !client ? versions[`g:${clientHash}`] : null, user: client ? { id: client.id, blocked: !!client.blocked } : null, isAdmin: !!session });
         }
         if (url.pathname === '/api/prefs') {
           const asAdmin = url.searchParams.get('as') === 'admin';
@@ -628,7 +628,22 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           const profile = await admins.get(identity);
           return json(200, { ok: true, user: { id: 'usr_admin', name: profile.name || 'Admin' }, ...(req.headers['x-dwira-native'] === '1' ? { token } : {}) });
         }
-        if (req.method === 'GET' && url.pathname === '/api/admin/session') { admin(); return json(200, { ok: true, prefs: await content.adminPrefs(adminId), profile: await admins.get(adminId) }); }
+        if (req.method === 'GET' && url.pathname === '/api/admin/session') {
+          admin();
+          // `instance`: this store's own allowance (credit limit / used / left) so the admin menu can show it. Nothing about other stores.
+          return json(200, { ok: true, prefs: await content.adminPrefs(adminId), profile: await admins.get(adminId), instance: await superAdmin.platformInfo(resolved.tenant.id) });
+        }
+        // ---- Hand-off from the Super Admin console: a one-time code (60 s, bound to THIS store) becomes a normal admin session, no second login. ----
+        if (req.method === 'POST' && url.pathname === '/api/admin/handoff') {
+          const body = await readBody(req);
+          const identity = await superAdmin.redeemHandoff(resolved.tenant.id, body?.code);
+          if (!identity) throw fail(401, 'HANDOFF_INVALID');
+          const token = crypto.randomBytes(32).toString('hex');
+          await db.query('DELETE FROM admin_sessions WHERE tenant_id=:tenant AND expires_at<=$1', [now]);
+          await db.query('INSERT INTO admin_sessions(tenant_id,token_hash,expires_at,admin_id,created_at,ua) VALUES(:tenant,$1,$2,$3,$4,$5)', [hash(token), now + 7 * 86400000, identity, now, String(req.headers['user-agent'] || '').slice(0, 300)]);
+          res.setHeader('Set-Cookie', cookie('dwira_admin', token, 604800));
+          return json(200, { ok: true, ...(req.headers['x-dwira-native'] === '1' ? { token } : {}) });
+        }
         // ---- Administrator account (profile, password, signed-in devices) ----
         if (url.pathname === '/api/admin/account') {
           admin();
@@ -651,19 +666,12 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           return json(200, { ok: true });
         }
 
-        // ---- This tenant's own change requests to the platform operator (customise / manage / support). The tenant id comes from the
-        // resolved tenant, never from the body, so an administrator can only read and write the requests of their own instance. ----
+        // ---- This store's own allowance and API policy (read-only). The tenant id comes from the resolved tenant, never from the request. ----
         if (url.pathname === '/api/admin/instance' && req.method === 'GET') {
           admin();
           const { tenant } = resolved;
-          return json(200, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, status: tenant.status, base: resolved.base });
-        }
-        if (url.pathname === '/api/admin/change-requests') {
-          admin();
-          if (resolved.tenant.kind === 'default' && !resolved.tenant.id) throw fail(404, 'NOT_FOUND');
-          if (req.method === 'GET') return json(200, await superAdmin.requestsOfTenant(resolved.tenant.id));
-          if (req.method === 'POST') return json(201, await superAdmin.submitRequest(resolved.tenant, adminId, await readBody(req)));
-          throw fail(405, 'Method not allowed');
+          // Allowance + API policy of THIS store only (the tenant id is the resolved one). No key, no other store.
+          return json(200, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, status: tenant.status, base: resolved.base, ...(await superAdmin.platformInfo(tenant.id)) });
         }
 
         // ---- Notifications for new requests ----
@@ -710,10 +718,13 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           requireUser();
           const body = await readBody(req), input = validateDemand({ ...body, userId: client.id, name: client.name, whatsapp: client.whatsapp });
           if (typeof body.id !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(body.id)) throw fail(400, 'Stable request ID required');
+          // The store's own allowance is checked BEFORE the client's balance is touched: a store that is out of credits must not burn the
+          // client's free design or credit on a render that can never run. A retry of a request that already exists is never blocked.
+          const known = (await db.query('SELECT 1 FROM requests WHERE tenant_id=:tenant AND user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0];
+          if (!known && !(await bundle.platform.hasRoom(1))) throw fail(402, 'STORE_CREDITS_EXHAUSTED');
           await clients.claim(client, body.id);
           // The photo is stored as media (R2 or the database fallback); the request row keeps only its /api/media URL.
           // Skipped for a retry of a request that already exists (idempotent, no duplicate upload work).
-          const known = (await db.query('SELECT 1 FROM requests WHERE tenant_id=:tenant AND user_id=$1 AND client_request_id=$2', [client.id, body.id]))[0];
           if (!known) input.photoUri = (await media.externalize({ photoUri: input.photoUri }, { remote: 'report', svg: false })).value.photoUri;
           const request = { ...input, id: crypto.randomUUID(), clientHash, clientRequestId: body.id };
           const inserted = await db.query('INSERT INTO requests(tenant_id,id,user_id,client_request_id,created_at,data) VALUES(:tenant,$1,$2,$3,$4,$5) ON CONFLICT (user_id, client_request_id) DO NOTHING RETURNING id', [request.id, client.id, body.id, request.createdAt, JSON.stringify(request)]);

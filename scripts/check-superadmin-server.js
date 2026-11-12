@@ -1,5 +1,5 @@
 /**
- * Super admin, demos, ownership and change requests (docs/MULTI_TENANT_PLAN.md phases 4-6), driven through the real request handler.
+ * Super admin, demos, store themes, hand-off and ownership (docs/MULTI_TENANT_PLAN.md phases 4-6), driven through the real request handler.
  * The leak matrix at the bottom proves a tenant can neither reach the platform API nor read / write another tenant's data or requests.
  */
 const test = require('node:test');
@@ -231,7 +231,7 @@ test('demos: a demo is a template tenant with sample data; assigning it creates 
 
   // Storefront + admin dashboard + sample data exist for the template.
   assert.ok((await call(backend, `/${demo.slug}/api/content`)).body.collections.tools.length > 0);
-  const demoCookie = await tenantLogin(backend, demo.slug, made.body.admin.email, made.body.admin.password);
+  const demoCookie = await tenantLogin(backend, demo.slug, made.body.admin.id, made.body.admin.password);
   const sampleRequests = await call(backend, `/${demo.slug}/api/requests`, { headers: demoCookie });
   assert.equal(sampleRequests.body.length, 5);
   assert.equal((await call(backend, `/${demo.slug}/api/admin/clients`, { headers: demoCookie })).body.length, 4);
@@ -301,7 +301,7 @@ test('assigning to an EXISTING admin re-uses their login; AI provider keys never
   const { api, backend, db } = await setup();
   const owner = await newTenant(api, 'ownerhome', { ownerEmail: 'boss@ownerhome.test' });
   const { demo, admin: demoAdmin } = (await api('/demos', { method: 'POST', body: { name: 'Keys Demo' } })).body;
-  const cookie = await tenantLogin(backend, demo.slug, demoAdmin.email, demoAdmin.password);
+  const cookie = await tenantLogin(backend, demo.slug, demoAdmin.id, demoAdmin.password);
   // Put a provider key into the template: in a model entry and in the image-keys setting.
   const models = (await call(backend, `/${demo.slug}/api/admin/content/models`, { headers: cookie })).status;
   await call(backend, `/${demo.slug}/api/admin/content/models/m-secret`, { method: 'PUT', headers: cookie, body: { name: 'Secret model', provider: 'x', apiKey: 'sk-TEMPLATE-SECRET-123456' } });
@@ -322,56 +322,107 @@ test('assigning to an EXISTING admin re-uses their login; AI provider keys never
   assert.ok(!dump.includes('SECRET'), 'no secret string anywhere in the instance');
 });
 
-test('change requests: an admin files them for THEIR instance only; the super admin lists, answers, and applies to that tenant only', async () => {
+test('store themes: a UI-only snapshot of the SELECTED tenants; a new demo starts from it; no client data, key or admin travels', async () => {
   const { api, backend, db } = await setup();
-  const { demo, admin: demoAdmin } = (await api('/demos', { method: 'POST', body: { name: 'Req Demo' } })).body;
-  const a = (await api(`/demos/${demo.id}/assign`, { method: 'POST', body: { slug: 'req-a', owner: { email: 'a@req.test' } } })).body;
-  const b = (await api(`/demos/${demo.id}/assign`, { method: 'POST', body: { slug: 'req-b', owner: { email: 'b@req.test' } } })).body;
-  const ca = await tenantLogin(backend, 'req-a', 'a@req.test', a.admin.password);
-  const cb = await tenantLogin(backend, 'req-b', 'b@req.test', b.admin.password);
-  const cd = await tenantLogin(backend, demo.slug, demoAdmin.email, demoAdmin.password);
+  const a = await newTenant(api, 'theme-a'), b = await newTenant(api, 'theme-b'), c = await newTenant(api, 'theme-c');
+  const ca = await tenantLogin(backend, 'theme-a', 'owner@theme-a.test', a.admin.password);
+  // Store A gets its own look, a secret model key and a real client; B and C stay default.
+  await call(backend, '/theme-a/api/admin/doc/theme', { method: 'PATCH', headers: ca, body: { active: 'emerald' } });
+  await call(backend, '/theme-a/api/admin/doc/branding', { method: 'PATCH', headers: ca, body: { appName: 'Emerald Atelier' } });
+  await call(backend, '/theme-a/api/admin/doc/settings', { method: 'PATCH', headers: ca, body: { arabicFont: 'Cairo', notifyAdmins: false, defaultFreeCredits: 9 } });
+  await call(backend, '/theme-a/api/admin/content/models/mdl_secret', { method: 'PUT', headers: ca, body: { name: 'Secret', provider: 'X', modelName: 'x', apiKey: 'SUPERSECRETKEY', enabled: true } });
+  await db.query("INSERT INTO clients(tenant_id,id,phone,name,credits,free_used,created_at) VALUES($1,'client-a-1','+212611111111','Real Customer',1,0,1)", [a.tenant.id]);
 
-  assert.equal((await call(backend, '/req-a/api/admin/change-requests')).status, 401, 'needs an admin session');
-  assert.equal((await call(backend, '/req-a/api/admin/change-requests', { method: 'POST', headers: ca, body: { title: 'x', body: 'y' } })).status, 400);
-  const filed = await call(backend, '/req-a/api/admin/change-requests', { method: 'POST', headers: ca, body: { kind: 'customize', title: 'Change the logo', body: 'Please use our blue logo', tenantId: b.tenant.id, tenant_id: b.tenant.id } });
-  assert.equal(filed.status, 201, JSON.stringify(filed.body));
-  assert.equal(filed.body.tenantId, a.tenant.id, 'the tenant comes from the session, never from the body');
-  assert.equal((await call(backend, '/req-a/api/admin/change-requests', { method: 'POST', headers: ca, body: { kind: 'hack', title: 'abc', body: 'abc' } })).status, 400);
-  await call(backend, '/req-b/api/admin/change-requests', { method: 'POST', headers: cb, body: { kind: 'support', title: 'B question', body: 'How do I add a tool?' } });
-  assert.equal((await call(backend, '/req-demo-nope/api/admin/change-requests')).status, 404);
-  assert.equal((await call(backend, `/${demo.slug}/api/admin/change-requests`, { method: 'POST', headers: cd, body: { title: 'Demo asks', body: 'Demo asks' } })).status, 403, 'a demo template cannot file requests');
+  assert.equal((await api('/themes', { method: 'POST', body: { tenantIds: [] } })).status, 400, 'a tenant must be selected');
+  assert.equal((await api('/themes', { method: 'POST', body: { tenantIds: ['nope'] } })).status, 404);
+  const made = await api('/themes', { method: 'POST', body: { tenantIds: [a.tenant.id, b.tenant.id] } });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal(made.body.length, 2, 'only the two selected stores; C is not a theme');
+  const themeA = made.body.find(t => t.sourceTenantId === a.tenant.id);
+  assert.equal(themeA.preview.appName, 'Emerald Atelier');
+  assert.equal(themeA.preview.themeId, 'emerald');
+  assert.equal(themeA.preview.dark, true);
+  assert.equal(themeA.preview.colors.primary, '#34D399');
+  assert.ok(themeA.counts.tools >= 1 && themeA.preview.tools.length >= 1);
+  const stored = (await db.query('SELECT snapshot FROM saas_themes WHERE id=$1', [themeA.id]))[0].snapshot;
+  for (const word of ['SUPERSECRETKEY', 'Real Customer', '+212611111111', 'owner@theme-a.test', 'pw_hash', 'notifyAdmins', 'defaultFreeCredits']) assert.ok(!stored.includes(word), `${word} must not be in a theme`);
+  assert.ok(stored.includes('"arabicFont":"Cairo"'), 'font choice travels');
+  assert.ok(!JSON.stringify((await api('/themes')).body).includes('SUPERSECRETKEY'));
+  assert.equal((await api('/themes')).body.length, 2);
 
-  // Each tenant sees only its own.
-  const seenA = (await call(backend, '/req-a/api/admin/change-requests', { headers: ca })).body;
-  const seenB = (await call(backend, '/req-b/api/admin/change-requests', { headers: cb })).body;
-  assert.deepEqual(seenA.map(r => r.title), ['Change the logo']);
-  assert.deepEqual(seenB.map(r => r.title), ['B question']);
-  // One tenant's admin token cannot be used on the other's endpoint.
-  assert.equal((await call(backend, '/req-b/api/admin/change-requests', { headers: ca })).status, 401);
+  // A demo created from the theme shows the theme's look, with its own (empty of client data) store and a credit limit.
+  const created = await api('/demos', { method: 'POST', body: { name: 'Emerald Demo', themeId: themeA.id, creditLimit: 25 } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.demo.creditLimit, 25);
+  const content = (await call(backend, `/${created.body.demo.slug}/api/content`)).body;
+  assert.equal(content.docs.theme.active, 'emerald');
+  assert.equal(content.docs.branding.appName, 'Emerald Atelier');
+  assert.equal(content.docs.settings.arabicFont, 'Cairo');
+  assert.equal(content.docs.settings.defaultFreeCredits, 1, 'behaviour settings are not part of a theme');
+  assert.ok(!JSON.stringify(content).includes('SUPERSECRETKEY'));
+  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM clients WHERE tenant_id=$1 AND phone='+212611111111'", [created.body.demo.tenantId]))[0].n, 0, 'no client of the source store');
+  assert.equal((await api('/demos', { method: 'POST', body: { name: 'Bad Theme Demo', themeId: 'th_000000000000' } })).status, 404, 'unknown theme is refused before anything is created');
+  assert.equal((await api('/demos', { method: 'POST', body: { name: 'Bad Limit', creditLimit: -3 } })).status, 400);
+  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM saas_demos WHERE name IN ('Bad Theme Demo','Bad Limit')"))[0].n, 0);
+  // A theme is a snapshot: later edits to the source do not move it, until it is refreshed.
+  await call(backend, '/theme-a/api/admin/doc/branding', { method: 'PATCH', headers: ca, body: { appName: 'Renamed Later' } });
+  assert.equal((await api(`/themes/${themeA.id}`)).body.preview.appName, 'Emerald Atelier');
+  assert.equal((await api(`/themes/${themeA.id}/refresh`, { method: 'POST' })).body.preview.appName, 'Renamed Later');
+  assert.equal((await api(`/themes/${themeA.id}`, { method: 'PATCH', body: { name: 'Emerald v2' } })).body.name, 'Emerald v2');
+  // Deleting the theme or its source never touches demos made from it.
+  assert.equal((await api(`/themes/${themeA.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await api(`/themes/${themeA.id}`)).status, 404);
+  assert.equal((await call(backend, `/${created.body.demo.slug}/api/content`)).body.docs.branding.appName, 'Emerald Atelier');
+  assert.ok((await api('/audit')).body.some(row => row.action === 'theme.create'));
+  // A tenant admin cannot list or create themes.
+  assert.ok([401, 404].includes((await call(backend, '/api/super-admin/themes', { headers: ca })).status));
+});
 
-  // The super admin sees both, answers, and applies A's request.
-  const all = (await api('/requests')).body;
-  assert.equal(all.length, 2);
-  assert.ok(all.every(r => r.tenantSlug));
-  assert.equal((await api(`/requests/${filed.body.id}`, { method: 'PATCH', body: { status: 'in_progress', response: 'On it' } })).body.status, 'in_progress');
-  assert.equal((await call(backend, '/req-a/api/admin/change-requests', { headers: ca })).body[0].response, 'On it');
-  const beforeB = JSON.stringify((await call(backend, '/req-b/api/content')).body.docs);
-  const beforeDemo = JSON.stringify((await call(backend, `/${demo.slug}/api/content`)).body.docs);
-  const applied = await api(`/requests/${filed.body.id}/apply`, { method: 'POST', body: { docs: { branding: { appName: 'Blue Logo Co' } }, markDone: true, tenantId: b.tenant.id } });
-  assert.equal(applied.status, 200, JSON.stringify(applied.body));
-  assert.equal(applied.body.tenantId, a.tenant.id, 'applied to the request owner, whatever the payload says');
-  assert.equal((await call(backend, '/req-a/api/content')).body.docs.branding.appName, 'Blue Logo Co');
-  assert.equal(JSON.stringify((await call(backend, '/req-b/api/content')).body.docs), beforeB, 'tenant B untouched');
-  assert.equal(JSON.stringify((await call(backend, `/${demo.slug}/api/content`)).body.docs), beforeDemo, 'the original demo untouched');
-  assert.equal((await call(backend, '/req-a/api/admin/change-requests', { headers: ca })).body[0].status, 'done');
-  assert.equal((await api(`/requests/${filed.body.id}/apply`, { method: 'POST', body: {} })).status, 400, 'nothing to apply');
+test('hand-off: the console opens a store admin with a one-time code, no second login; the code is bound to that store and dies after one use', async () => {
+  const { api, backend } = await setup();
+  const a = await newTenant(api, 'hand-a'), b = await newTenant(api, 'hand-b');
+  const made = await api(`/tenants/${a.tenant.id}/handoff`, { method: 'POST', body: {} });
+  assert.equal(made.status, 200, JSON.stringify(made.body));
+  assert.match(made.body.code, /^[a-f0-9]{64}$/);
+  assert.ok(made.body.url.startsWith('/hand-a/admin/login?handoff='), made.body.url);
+  // The wrong store refuses it, and that burns it.
+  assert.equal((await call(backend, '/hand-b/api/admin/handoff', { method: 'POST', headers: native, body: { code: made.body.code } })).status, 401);
+  assert.equal((await call(backend, '/hand-a/api/admin/handoff', { method: 'POST', headers: native, body: { code: made.body.code } })).status, 401, 'a code used on the wrong store is spent');
+  // The right store accepts a fresh one exactly once and returns a working admin session.
+  const fresh = (await api(`/tenants/${a.tenant.id}/handoff`, { method: 'POST', body: { next: '/admin/theme' } })).body;
+  assert.ok(fresh.url.includes('next=%2Fadmin%2Ftheme'));
+  const redeemed = await call(backend, '/hand-a/api/admin/handoff', { method: 'POST', headers: native, body: { code: fresh.code } });
+  assert.equal(redeemed.status, 200, JSON.stringify(redeemed.body));
+  assert.ok(redeemed.body.token);
+  const session = await call(backend, '/hand-a/api/admin/session', { headers: { ...native, ...bearer(redeemed.body.token) } });
+  assert.equal(session.status, 200);
+  assert.equal((await call(backend, '/hand-b/api/admin/session', { headers: { ...native, ...bearer(redeemed.body.token) } })).status, 401, 'the session is the store\'s own');
+  assert.equal((await call(backend, '/hand-a/api/admin/handoff', { method: 'POST', headers: native, body: { code: fresh.code } })).status, 401, 'one use only');
+  // Expired / forged / malformed codes.
+  assert.equal((await call(backend, '/hand-a/api/admin/handoff', { method: 'POST', headers: native, body: { code: 'f'.repeat(64) } })).status, 401);
+  assert.equal((await call(backend, '/hand-a/api/admin/handoff', { method: 'POST', headers: native, body: { code: 'nope' } })).status, 401);
+  assert.equal((await call(backend, '/hand-a/api/admin/handoff', { method: 'POST', headers: native, body: {} })).status, 401);
+  // Next paths stay inside the admin, a suspended or admin-less store has no hand-off, and only the console can ask.
+  assert.ok((await api(`/tenants/${a.tenant.id}/handoff`, { method: 'POST', body: { next: 'https://evil.test' } })).body.url.endsWith(`handoff=${(await api(`/tenants/${a.tenant.id}/handoff`, { method: 'POST', body: {} })).body.code}`) === false);
+  const evil = (await api(`/tenants/${a.tenant.id}/handoff`, { method: 'POST', body: { next: '//evil.test' } })).body;
+  assert.ok(!evil.url.includes('next='), 'an outside path is dropped');
+  assert.equal((await api(`/tenants/${b.tenant.id}/suspend`, { method: 'POST', body: {} })).status, 200);
+  assert.equal((await api(`/tenants/${b.tenant.id}/handoff`, { method: 'POST', body: {} })).status, 409);
+  assert.equal((await call(backend, `/api/super-admin/tenants/${a.tenant.id}/handoff`, { method: 'POST', body: {} })).status, 401, 'no console session, no hand-off');
+  const ca = await tenantLogin(backend, 'hand-a', 'owner@hand-a.test', a.admin.password);
+  assert.equal((await call(backend, `/api/super-admin/tenants/${a.tenant.id}/handoff`, { method: 'POST', headers: ca, body: {} })).status, 401, 'a tenant admin cannot mint codes');
+  assert.equal((await api('/tenants/t_nope/handoff', { method: 'POST', body: {} })).status, 404);
+});
 
-  // A request that somehow belongs to a demo template can never be applied.
-  const now = Date.now();
-  await db.query("INSERT INTO saas_requests(id,tenant_id,admin_id,kind,title,body,status,response,created_at,updated_at) VALUES('rq_demo',$1,'x','customize','t','b','open','',$2,$2)", [demo.tenantId, now]);
-  assert.equal((await api('/requests/rq_demo/apply', { method: 'POST', body: { docs: { branding: { appName: 'Hijack' } } } })).status, 409);
-  assert.notEqual((await call(backend, `/${demo.slug}/api/content`)).body.docs.branding.appName, 'Hijack');
-  assert.ok((await api('/audit')).body.some(row => row.action === 'request.apply' && row.tenantId === a.tenant.id));
+test('requests are gone: no console route, no store route, no counter in stats or tenants', async () => {
+  const { api, backend } = await setup();
+  const a = await newTenant(api, 'gone-a');
+  const ca = await tenantLogin(backend, 'gone-a', 'owner@gone-a.test', a.admin.password);
+  for (const url of ['/requests', '/requests/rq_x', '/requests/rq_x/apply']) assert.equal((await api(url)).status, 404, url);
+  assert.equal((await call(backend, '/gone-a/api/admin/change-requests', { headers: ca })).status, 404);
+  assert.equal((await call(backend, '/gone-a/api/admin/change-requests', { method: 'POST', headers: ca, body: { title: 'abc', body: 'abc' } })).status, 404);
+  assert.ok(!('openRequests' in (await api('/stats')).body));
+  assert.ok(!JSON.stringify((await api('/tenants')).body).includes('openRequests'));
 });
 
 test('leak matrix: a tenant admin cannot reach the platform API, other tenants, or the default tenant, through any route family', async () => {
@@ -383,7 +434,7 @@ test('leak matrix: a tenant admin cannot reach the platform API, other tenants, 
   await call(backend, '/api/admin/login', { method: 'POST', headers: native, body: { email: 'admin', password: 'admin' } });
 
   // 1. Tenant admins hold no platform power, on any host form.
-  for (const url of ['/api/super-admin/tenants', '/leak-a/api/super-admin/tenants', '/api/super-admin/stats', '/api/super-admin/requests', '/api/super-admin/audit']) {
+  for (const url of ['/api/super-admin/tenants', '/leak-a/api/super-admin/tenants', '/api/super-admin/stats', '/api/super-admin/themes', '/api/super-admin/audit']) {
     assert.ok([401, 404].includes((await call(backend, url, { headers: ca })).status), url);
     assert.ok([401, 404].includes((await call(backend, url, { headers: { 'x-super-token': ca.authorization.slice(7) } })).status), url);
   }
@@ -395,7 +446,7 @@ test('leak matrix: a tenant admin cannot reach the platform API, other tenants, 
   assert.equal((await call(backend, '/super-admin', { host: 'brand-a.com' })).status, 404);
   assert.equal((await call(backend, '/api/content', { host: 'brand-a.com' })).body.docs.branding.appName !== 'B-ONLY-NAME', true);
   // 3. Same token, other tenant: never.
-  for (const url of ['/api/admin/session', '/api/admin/clients', '/api/requests', '/api/admin/account', '/api/admin/change-requests']) {
+  for (const url of ['/api/admin/session', '/api/admin/clients', '/api/requests', '/api/admin/account', '/api/admin/instance']) {
     assert.equal((await call(backend, `/leak-b${url}`, { headers: ca })).status, 401, `A's token on B ${url}`);
     assert.equal((await call(backend, url, { headers: ca })).status, 401, `A's token on default ${url}`);
   }

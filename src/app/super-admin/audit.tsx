@@ -2,6 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { sa } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
+import { tr } from '@/superadmin/i18n';
 import type { AuditRow } from '@/superadmin/types';
 import { Card, Empty, ErrorLine, Heading, Loading, T, useLoad } from '@/superadmin/ui';
 
@@ -9,9 +10,9 @@ export default function Audit() {
   const { data, error, loading } = useLoad(() => sa<AuditRow[]>('/audit?limit=200'));
   return (
     <View>
-      <Heading title="Audit log" hint="Every action taken in this console, newest first." />
+      <Heading title={tr('Activity')} hint={tr('Every action taken in this console, newest first.')} />
       <ErrorLine error={error} />
-      {loading && !data ? <Loading /> : !data?.length ? <Empty>Nothing yet.</Empty> : (
+      {loading && !data ? <Loading /> : !data?.length ? <Empty>{tr('Nothing yet.')}</Empty> : (
         <Card style={{ padding: 0 }}>
           {data.map((row, i) => (
             <View key={row.id} testID="sa-audit-row" style={{ flexDirection: 'row', gap: SA.space.md, padding: SA.space.md, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line, flexWrap: 'wrap' }}>

@@ -27,6 +27,7 @@ import { resolveTokens } from '@/theme/tokens';
 import { BootOverlay } from '@/components/BootOverlay';
 import { defaultSettings, defaultTheme } from '@/data/mock/seed';
 import { isSuperAdminPath } from '@/superadmin/paths';
+import { applyStoreIdentity } from '@/lib/brand/export';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 // The Super Admin console (/super-admin) is not a tenant: it never loads tenant content, theme, loader or branding.
@@ -142,6 +143,10 @@ function TenantRoot() {
     boot.configure(loaderConfig(settings, tokens));
   }, [contentReady, settings, theme]);
   useEffect(() => { if (ok) boot.shown(home); }, [ok, home]);
+  // Each store shows its own name and favicon in the browser tab (set from its published branding).
+  const brandName = useStore((s) => s.doc.branding.appName);
+  const brandIcon = useStore((s) => s.doc.branding.favicon);
+  useEffect(() => { if (contentReady) applyStoreIdentity({ appName: brandName, favicon: brandIcon }); }, [contentReady, brandName, brandIcon]);
   // Real-time sync + database-backed preferences start as soon as the first screen is up.
   useEffect(() => {
     if (!ok) return;

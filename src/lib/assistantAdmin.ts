@@ -33,7 +33,7 @@ export type ProvState = 'off' | 'cooling' | 'ready' | 'active' | 'failed';
 export interface Last { ok: boolean; at: number; reason: string; model: string }
 export interface FreeProvider { id: string; label: string; rank: number; configured: boolean; source: 'env' | 'db' | 'none'; enabled: boolean; needsKey: boolean; models: string[]; state: ProvState; last: Last | null; resting: string }
 export interface PaidProvider { id: string; label: string; preset: string; baseUrl: string; model: string; enabled: boolean; hasKey: boolean; state: ProvState; last: Last | null; resting: string; url: string }
-export interface ChatStatus { free: FreeProvider[]; paid: { position: 'before' | 'after'; providers: PaidProvider[] }; presets: Record<string, { label: string; model: string }>; maxPaid: number }
+export interface ChatStatus { managed?: boolean; free: FreeProvider[]; paid: { position: 'before' | 'after'; providers: PaidProvider[] }; presets: Record<string, { label: string; model: string }>; maxPaid: number }
 
 /** What the owner edits. `key` on a paid provider is write-only: undefined = keep, '' = remove, text = replace. */
 export interface PaidDraft { id: string; label: string; preset: string; baseUrl: string; model: string; enabled: boolean; hasKey: boolean; key?: string }

@@ -117,6 +117,18 @@ export async function backendLogin(email: string, password: string): Promise<Log
     return { ok: false, reason: 'unreachable' };
   }
 }
+/** Sign in with the one-time code the Super Admin console hands over (opens the store's admin without a second login). */
+export async function backendHandoff(code: string): Promise<boolean> {
+  try {
+    const result = await api<{ ok: true; token?: string }>('/admin/handoff', { method: 'POST', body: { code } });
+    if (Platform.OS !== 'web' && result.token) {
+      const { setItemAsync } = await import('expo-secure-store');
+      await setItemAsync('dwira-backend-session', result.token);
+    }
+    useLocal.getState().set({ adminOffline: false });
+    return true;
+  } catch { return false; }
+}
 export async function backendLogout() {
   useLocal.getState().set({ adminOffline: false });
   if (!backendEnabled) return;

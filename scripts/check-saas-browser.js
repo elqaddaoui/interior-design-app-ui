@@ -117,7 +117,7 @@ async function storefrontMatchesDatabase(page, prefix, label) {
     await sa.getByTestId('sa-nav-tenants').click();
     await sa.getByTestId('sa-new-tenant').click();
     await sa.getByTestId('sa-t-name').fill('Atlas Interiors');
-    await sa.getByTestId('sa-t-email').fill('owner@atlas.test');
+    await sa.getByTestId('sa-t-email').fill('owner@atlas.test'); // sign-in may be a user name or an e-mail; both are optional
     await sa.getByTestId('sa-t-create').click();
     const password = (await sa.getByTestId('sa-secret').first().innerText()).trim();
     assert.ok(password.length >= 12, 'password generated');
@@ -166,11 +166,12 @@ async function storefrontMatchesDatabase(page, prefix, label) {
     await sa.getByText('Done', { exact: true }).first().click();
     await sa.getByTestId('sa-create-demo').waitFor({ state: 'detached' });
     await shot(sa, '09b-super-admin-demos');
+    // One sheet creates the store, copies the demo into it and creates its administrator.
     await sa.getByTestId('sa-demo-assign').first().click();
-    const sheet = sa.getByTestId('sa-assign-sheet');
-    await sheet.locator('input').first().fill('Demo For Zoe');
-    await sa.getByTestId('sa-a-email').fill('zoe@example.test');
-    await sa.getByTestId('sa-a-assign').click();
+    await sa.getByTestId('sa-create-tenant').waitFor({ timeout: 20000 });
+    await sa.getByTestId('sa-t-name').fill('Demo For Zoe');
+    await sa.getByTestId('sa-t-email').fill('zoe');
+    await sa.getByTestId('sa-t-create').click();
     await sa.getByTestId('sa-secret').first().waitFor({ timeout: 30000 });
     await shot(sa, '10-super-admin-demo-assigned');
     const instance = (await sa.evaluate(async () => (await fetch('/api/super-admin/tenants', { credentials: 'include' })).json()));
