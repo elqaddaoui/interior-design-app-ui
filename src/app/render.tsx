@@ -8,6 +8,7 @@ import { services } from '@/data/repositories';
 import { useT } from '@/i18n';
 import { Button } from '@/components/ui/Button';
 import { Screen } from '@/components/ui/Screen';
+import { Txt } from '@/components/ui/Txt';
 import { RenderingView } from '@/components/result/RenderingView';
 import { useUserSession } from '@/store/useUserSession';
 import { BackendError } from '@/lib/backend';
@@ -22,6 +23,7 @@ export default function RenderPage() {
   useWizardGuard();
   const [state, setState] = useState({ progress: 0, stage: 0 });
   const [failed, setFailed] = useState(false);
+  const [aiMessage, setAiMessage] = useState('');
   const started = useRef(false);
   const signal = useRef({ cancelled: false });
 
@@ -35,7 +37,7 @@ export default function RenderPage() {
       user = (await freshUser()) ?? user;
       if (needsPro(user)) { router.replace({ pathname: '/pro', params: { generation: '1' } }); return; }
     }
-    setFailed(false);
+    setFailed(false); setAiMessage('');
     signal.current = { cancelled: false };
     try {
       // Every generation is a request the admin is notified about. The server spends the free design or a
@@ -78,6 +80,7 @@ export default function RenderPage() {
       router.replace({ pathname: '/result/[id]', params: { id: hist.id, fresh: '1' } });
     } catch (error) {
       if (error instanceof BackendError && error.status === 402 && error.code !== 'STORE_CREDITS_EXHAUSTED') { router.replace({ pathname: '/pro', params: { generation: '1' } }); return; }
+      if (error instanceof BackendError && (error.code === 'AI_PAUSED' || error.code === 'AI_DISABLED_DEMO')) setAiMessage(t(error.code === 'AI_PAUSED' ? 'sp.aiPaused' : 'sp.aiDemoOff'));
       if (!signal.current.cancelled) setFailed(true);
     }
   };
@@ -115,6 +118,7 @@ export default function RenderPage() {
       <View className="flex-1 justify-center py-6">
         <RenderingView photo={w.photoUri} progress={state.progress} stage={state.stage} />
         <View className="mt-8 items-center gap-3">
+          {failed && aiMessage ? <Txt testID="render-ai-off" className="text-center text-[13px] font-semibold px-4">{aiMessage}</Txt> : null}
           {failed ? <Button testID="render-retry" title={t('common.retry')} onPress={() => { setState({ progress: 0, stage: 0 }); run(); }} /> : null}
           <Button testID="render-cancel" variant="ghost" title={t('render.cancel')} onPress={cancel} />
         </View>

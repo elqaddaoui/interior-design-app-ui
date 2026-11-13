@@ -350,10 +350,10 @@ test('store themes: a UI-only snapshot of the SELECTED tenants; a new demo start
   assert.ok(!JSON.stringify((await api('/themes')).body).includes('SUPERSECRETKEY'));
   assert.equal((await api('/themes')).body.length, 2);
 
-  // A demo created from the theme shows the theme's look, with its own (empty of client data) store and a credit limit.
-  const created = await api('/demos', { method: 'POST', body: { name: 'Emerald Demo', themeId: themeA.id, creditLimit: 25 } });
+  // A demo created from the theme shows the theme's look, with its own (empty of client data) store. It has no credit limit.
+  const created = await api('/demos', { method: 'POST', body: { name: 'Emerald Demo', themeId: themeA.id } });
   assert.equal(created.status, 201, JSON.stringify(created.body));
-  assert.equal(created.body.demo.creditLimit, 25);
+  assert.equal(created.body.demo.creditLimit, undefined);
   const content = (await call(backend, `/${created.body.demo.slug}/api/content`)).body;
   assert.equal(content.docs.theme.active, 'emerald');
   assert.equal(content.docs.branding.appName, 'Emerald Atelier');
@@ -362,8 +362,7 @@ test('store themes: a UI-only snapshot of the SELECTED tenants; a new demo start
   assert.ok(!JSON.stringify(content).includes('SUPERSECRETKEY'));
   assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM clients WHERE tenant_id=$1 AND phone='+212611111111'", [created.body.demo.tenantId]))[0].n, 0, 'no client of the source store');
   assert.equal((await api('/demos', { method: 'POST', body: { name: 'Bad Theme Demo', themeId: 'th_000000000000' } })).status, 404, 'unknown theme is refused before anything is created');
-  assert.equal((await api('/demos', { method: 'POST', body: { name: 'Bad Limit', creditLimit: -3 } })).status, 400);
-  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM saas_demos WHERE name IN ('Bad Theme Demo','Bad Limit')"))[0].n, 0);
+  assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM saas_demos WHERE name IN ('Bad Theme Demo')"))[0].n, 0);
   // A theme is a snapshot: later edits to the source do not move it, until it is refreshed.
   await call(backend, '/theme-a/api/admin/doc/branding', { method: 'PATCH', headers: ca, body: { appName: 'Renamed Later' } });
   assert.equal((await api(`/themes/${themeA.id}`)).body.preview.appName, 'Emerald Atelier');

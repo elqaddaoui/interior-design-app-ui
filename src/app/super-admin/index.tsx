@@ -22,8 +22,9 @@ export default function Overview() {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.md }}>
             <Stat label={tr('Client Stores')} value={data?.tenants ?? 0} hint={tr('{active} active · {suspended} suspended', { active: data?.active ?? 0, suspended: data?.suspended ?? 0 })} testID="kpi-tenants" onPress={go('/super-admin/tenants')} />
             <Stat label={tr('Demos')} value={data?.demos ?? 0} hint={tr('{n} copied to stores', { n: data?.assignments ?? 0 })} testID="kpi-demos" onPress={go('/super-admin/demos')} />
-            <Stat label={tr('Clone Existing Store')} value={data?.themes ?? 0} hint={tr('saved looks for new demos')} testID="kpi-themes" onPress={go('/super-admin/themes')} />
             <Stat label={tr('Credits used')} value={data?.creditsUsed ?? 0} hint={tr('{n} clients in all stores', { n: data?.clients ?? 0 })} testID="kpi-credits" />
+            <Stat label={tr('API calls (24 h)')} value={data?.calls24h ?? 0} hint={tr('{n} demos with the API on', { n: data?.demosAiOn ?? 0 })} testID="kpi-calls" onPress={go('/super-admin/apis?tab=usage')} />
+            <Stat label={tr('API warnings')} value={data?.alerts ?? 0} hint={tr(data?.alerts ? 'unusual use to review' : 'nothing unusual')} testID="kpi-alerts" onPress={go('/super-admin/apis?tab=alerts')} />
             <Stat label={tr('API connections')} value={data?.apis ?? 0} hint={tr(data?.platformManaged === 1 ? '{n} store uses them' : '{n} stores use them', { n: data?.platformManaged ?? 0 })} testID="kpi-apis" onPress={go('/super-admin/apis')} />
           </View>
         </View>

@@ -105,10 +105,10 @@ const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve 
  * background, so /api/health answers 503 `database: "starting"` and every other /api route 503 with a clear message.
  * Without it (Vercel, tests) the backend is always ready and behaves exactly as before.
  */
-function createBackend({ env = process.env, db = createDb(env), dnsResolver, senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, isReady = () => true } = {}) {
+function createBackend({ env = process.env, db = createDb(env), dnsResolver, senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, mailer, isReady = () => true } = {}) {
   // `db` is the RAW database: only the tenant registry, the background sweep and the platform tables use it. Every request works on the
   // modules of ONE tenant (server/bundle.js), each built on a tenant-bound handle (server/scope.js) that cannot read another tenant's rows.
-  const bundles = createBundles({ db, env, senders, media: mediaOptions, chatFetch, imageFetch });
+  const bundles = createBundles({ db, env, senders, media: mediaOptions, chatFetch, imageFetch, mailer });
   const rawDb = db; // `handle` shadows `db` with the tenant-bound handle; the registry check below needs the raw one
   const tenants = createTenants({ db, env, resolveTxt: dnsResolver });
   // Platform back office: the only code that touches the saas_* tables with the raw database (server/superadmin.js).
@@ -550,7 +550,15 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           throw fail(405, 'Method not allowed');
         }
         // Automatic translation of admin content (fr / ar / Moroccan Darija) through free keyless providers; admin only.
-        if (url.pathname === '/api/admin/translate' && req.method === 'POST') { admin(); return json(200, await translator(await readBody(req))); }
+        if (url.pathname === '/api/admin/translate' && req.method === 'POST') {
+          admin();
+          await bundle.platform.gate('text', 'translate'); // a demo (AI switch off) or a paused store reaches no translation provider
+          const result = await translator(await readBody(req));
+          // An answer served from the translator's memory made no outgoing call: only real provider calls are counted.
+          const used = Object.values(result?.provider || {});
+          if (used.length) await bundle.platform.record({ kind: 'text', op: 'translate', provider: used[0], units: used.length, ok: Object.keys(result?.translations || {}).length > 0 });
+          return json(200, result);
+        }
         const contentDoc = url.pathname.match(/^\/api\/admin\/doc\/([A-Za-z]+)$/);
         if (contentDoc && req.method === 'PATCH') { admin(); return json(200, await content.patchDoc(contentDoc[1], await readBody(req))); }
         const creditClient = url.pathname.match(/^\/api\/admin\/clients\/([a-f0-9-]+)$/);
@@ -798,7 +806,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         res.writeHead(suspended ? 503 : 404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(suspended ? 'This site is temporarily unavailable.' : 'Not found');
       }
-      if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error', ...(error.code === 'TENANT_SUSPENDED' || error.code === 'TENANT_NOT_FOUND' ? { code: error.code } : {}) }); else res.end();
+      if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error', ...(error.code === 'TENANT_SUSPENDED' || error.code === 'TENANT_NOT_FOUND' ? { code: error.code } : {}), ...(error.message === 'STORE_POOL_EXCEEDED' ? { available: error.available, requested: error.requested } : {}) }); else res.end();
     }
   }
   const server = http.createServer(handle);

@@ -35,6 +35,7 @@ function call(backend, url, { method = 'GET', body, headers = {}, host = 'app.te
 }
 const native = { 'x-dwira-native': '1' };
 const bearer = token => ({ authorization: `Bearer ${token}` });
+const core = c => ({ limit: c.limit, used: c.used, left: c.left });
 const png = (w = 640, h = 480) => { const b = Buffer.alloc(64, 1); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b); b.writeUInt32BE(13, 8); b.write('IHDR', 12, 'latin1'); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
 const photoUri = `data:image/png;base64,${png().toString('base64')}`;
 
@@ -65,10 +66,10 @@ const login = async (backend, slug, user, password) => {
   return r.status === 200 ? { ...bearer(r.body.token), ...native } : null;
 };
 /** A signed-in end client of one store with credits to spend. */
-async function clientOf(backend, slug, tenantId) {
+async function clientOf(backend, slug, tenantId, credits = 50) {
   const who = await call(backend, `/${slug}/api/user/login`, { method: 'POST', headers: native, body: { name: 'Design Client', phone: '0661000077' } });
   assert.equal(who.status, 200, JSON.stringify(who.body));
-  await backend.bundles.get(tenantId).clients.grant(who.body.user.id, 50);
+  await backend.bundles.get(tenantId).clients.grant(who.body.user.id, credits);
   return { 'x-user-token': who.body.token, 'x-demand-token': 'a'.repeat(64), ...native };
 }
 let claimCounter = 0;
@@ -151,7 +152,7 @@ test('credit limit: a store stops at its limit (402), a refused render takes not
     const owner = await login(backend, slug, 'admin', slug === 'credit-a' ? a.admin.password : b.admin.password);
     assert.equal((await call(backend, `/${slug}/api/admin/ai/keys`, { method: 'PATCH', headers: owner, body: { pollinations: 'sk_store_key_123456' } })).status, 200);
   }
-  const ca = await clientOf(backend, 'credit-a', a.tenant.id), cb = await clientOf(backend, 'credit-b', b.tenant.id);
+  const ca = await clientOf(backend, 'credit-a', a.tenant.id, 2), cb = await clientOf(backend, 'credit-b', b.tenant.id);
   assert.equal((await render(backend, 'credit-a', ca)).status, 200);
   assert.equal((await render(backend, 'credit-a', ca)).status, 200);
   const calls = imageApi.calls.length;
@@ -166,10 +167,11 @@ test('credit limit: a store stops at its limit (402), a refused render takes not
   // The store's admin sees its own allowance only.
   const owner = await login(backend, 'credit-a', 'admin', a.admin.password);
   const info = await call(backend, '/credit-a/api/admin/instance', { headers: owner });
-  assert.deepEqual(info.body.credits, { limit: 2, used: 2, left: 0 });
+  assert.deepEqual(core(info.body.credits), { limit: 2, used: 2, left: 0 });
   assert.equal(info.body.apiMode, 'own');
-  // Raise the limit: rendering works again.
+  // Raise the limit: rendering works again (the client is given the new credit out of the same pool).
   assert.equal((await api(`/tenants/${a.tenant.id}`, { method: 'PATCH', body: { creditLimit: 3 } })).body.creditLimit, 3);
+  await backend.bundles.get(a.tenant.id).clients.grant((await backend.db.query('SELECT id FROM clients WHERE tenant_id=$1', [a.tenant.id]))[0].id, 1);
   assert.equal((await render(backend, 'credit-a', ca)).status, 200);
   assert.equal((await render(backend, 'credit-a', ca)).status, 402);
   assert.equal((await api(`/tenants/${a.tenant.id}`, { method: 'PATCH', body: { resetUsed: true } })).body.creditsUsed, 0);
@@ -185,12 +187,12 @@ test('a store out of credits refuses a new request up front: the client keeps th
   const t = (await api('/tenants', { method: 'POST', body: { name: 'Meter', slug: 'meter-shop', creditLimit: 1 } })).body;
   const owner = await login(backend, 'meter-shop', 'admin', t.admin.password);
   assert.equal((await call(backend, '/meter-shop/api/admin/ai/keys', { method: 'PATCH', headers: owner, body: { pollinations: 'sk_store_key_123456' } })).status, 200);
-  const c = await clientOf(backend, 'meter-shop', t.tenant.id);
+  const c = await clientOf(backend, 'meter-shop', t.tenant.id, 1);
   const readClient = async () => (await backend.db.query('SELECT credits, free_used FROM clients WHERE tenant_id=$1 AND name=$2', [t.tenant.id, 'Design Client']))[0];
   const before = await readClient();
   assert.equal((await render(backend, 'meter-shop', c)).status, 200);
   let info = await call(backend, '/meter-shop/api/admin/instance', { headers: owner });
-  assert.deepEqual(info.body.credits, { limit: 1, used: 1, left: 0 }, 'the store allowance falls with every generation');
+  assert.deepEqual(core(info.body.credits), { limit: 1, used: 1, left: 0 }, 'the store allowance falls with every generation');
   const afterOne = await readClient();
   assert.notDeepEqual(afterOne, before, 'the first generation spent one of the client\'s own credits');
   const id = 'platform-claim-exhausted';
@@ -206,7 +208,7 @@ test('a failed generation gives the credit back', async () => {
   const t = (await api('/tenants', { method: 'POST', body: { name: 'Refund', slug: 'refund-shop', creditLimit: 5 } })).body;
   const owner = await login(backend, 'refund-shop', 'admin', t.admin.password);
   await call(backend, '/refund-shop/api/admin/ai/keys', { method: 'PATCH', headers: owner, body: { pollinations: 'sk_store_key_123456' } });
-  const client = await clientOf(backend, 'refund-shop', t.tenant.id);
+  const client = await clientOf(backend, 'refund-shop', t.tenant.id, 5);
   const out = await render(backend, 'refund-shop', client);
   assert.notEqual(out.status, 200);
   assert.equal((await api(`/tenants/${t.tenant.id}`)).body.creditsUsed, 0, 'nothing was produced, nothing is charged');
@@ -303,7 +305,7 @@ test('the store admin sees its own credit limit (session + sync), kept current a
   const t = (await api('/tenants', { method: 'POST', body: { name: 'Ask', slug: 'ask-shop', creditLimit: 5 } })).body;
   const owner = await login(backend, 'ask-shop', 'admin', t.admin.password);
   const first = (await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body;
-  assert.deepEqual(first.instance.credits, { limit: 5, used: 0, left: 5 });
+  assert.deepEqual(core(first.instance.credits), { limit: 5, used: 0, left: 5 });
   const v1 = (await call(backend, '/ask-shop/api/sync', { headers: owner })).body.credits;
   assert.equal(typeof v1, 'number');
   // Using a credit moves the sync version, so every open admin screen re-reads the allowance.
@@ -311,7 +313,7 @@ test('the store admin sees its own credit limit (session + sync), kept current a
   assert.equal(await platform.consume(2), true);
   const v2 = (await call(backend, '/ask-shop/api/sync', { headers: owner })).body.credits;
   assert.ok(v2 > v1, 'consume bumps the credits version');
-  assert.deepEqual((await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body.instance.credits, { limit: 5, used: 2, left: 3 });
+  assert.deepEqual(core((await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body.instance.credits), { limit: 5, used: 2, left: 3 });
   await platform.refund(1);
   assert.ok((await call(backend, '/ask-shop/api/sync', { headers: owner })).body.credits > v2, 'refund bumps it too');
   // Raising the limit in the console is visible at once, and never leaks to anonymous sync or another store.
@@ -319,13 +321,11 @@ test('the store admin sees its own credit limit (session + sync), kept current a
   assert.equal((await call(backend, '/ask-shop/api/admin/session', { headers: owner })).body.instance.credits.limit, 50);
   assert.equal((await call(backend, '/ask-shop/api/sync')).body.credits, null, 'anonymous visitors see no credits version');
   assert.equal((await call(backend, '/api/admin/session', { headers: owner })).status, 401);
-  // A demo is created with its own limit; its admin sees it.
+  // A demo has no credit limit at all (it is gated instead: see the demo gate tests).
   const demo = (await api('/demos', { method: 'POST', body: { name: 'Limit Demo', creditLimit: 12 } })).body;
-  assert.equal(demo.demo.creditLimit, 12);
+  assert.equal(demo.demo.creditLimit, undefined);
   const demoAdmin = await login(backend, demo.demo.slug, 'admin', demo.admin.password);
-  assert.equal((await call(backend, `/${demo.demo.slug}/api/admin/session`, { headers: demoAdmin })).body.instance.credits.limit, 12);
-  const unlimited = (await api('/demos', { method: 'POST', body: { name: 'Free Demo', creditLimit: '' } })).body;
-  assert.equal(unlimited.demo.creditLimit, null);
+  assert.equal((await call(backend, `/${demo.demo.slug}/api/admin/session`, { headers: demoAdmin })).body.instance.credits.limit, null);
   // The old request endpoints are gone.
   assert.equal((await call(backend, '/ask-shop/api/admin/change-requests', { headers: owner })).status, 404);
   void db;

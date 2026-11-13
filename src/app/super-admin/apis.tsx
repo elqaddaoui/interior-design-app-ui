@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
 import type { ApiCatalog, ApiConn, ApiKind } from '@/superadmin/types';
-import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Notice, Row, Segmented, Sheet, T, useLoad } from '@/superadmin/ui';
+import { ApiAlerts } from '@/superadmin/ApiAlerts';
+import { ApiUsage } from '@/superadmin/ApiUsage';
+import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Notice, Row, Segmented, Sheet, T, Tabs, useLoad } from '@/superadmin/ui';
 
 const KIND_LABEL: Record<ApiKind, string> = { image: 'Images', text: 'Text / chat', other: 'Other' };
 const KIND_HINT: Record<ApiKind, string> = {
@@ -74,7 +77,7 @@ function Connection({ conn, onEdit, onChanged }: { conn: ApiConn; onEdit: () => 
   );
 }
 
-export default function Apis() {
+function Manager() {
   const { data, error, loading, reload } = useLoad(() => sa<{ apis: ApiConn[]; catalog: ApiCatalog }>('/apis'));
   const [editor, setEditor] = useState<{ kind: ApiKind; conn: ApiConn | null } | null>(null);
   const kinds: ApiKind[] = ['image', 'text', 'other'];
@@ -96,6 +99,27 @@ export default function Apis() {
         );
       })}
       {editor && data ? <Editor kind={editor.kind} conn={editor.conn} catalog={data.catalog} onClose={() => setEditor(null)} onDone={reload} /> : null}
+    </View>
+  );
+}
+
+type Tab = 'manager' | 'usage' | 'alerts';
+
+export default function Apis() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ tab?: string }>();
+  const tab: Tab = params.tab === 'usage' || params.tab === 'alerts' ? params.tab : 'manager';
+  const open = useLoad(() => sa<{ alerts: unknown[]; open: number }>('/alerts?status=open'));
+  const warnings = open.data?.open || 0;
+  return (
+    <View>
+      <Tabs<Tab> value={tab} onChange={v => router.setParams({ tab: v === 'manager' ? undefined : v })}
+        tabs={[
+          { value: 'manager', label: tr('API manager'), testID: 'sa-apitab-manager' },
+          { value: 'usage', label: tr('Consumption'), testID: 'sa-apitab-usage' },
+          { value: 'alerts', label: warnings ? tr('Warnings ({n})', { n: warnings }) : tr('Warnings'), testID: 'sa-apitab-alerts' },
+        ]} />
+      {tab === 'usage' ? <ApiUsage /> : tab === 'alerts' ? <ApiAlerts /> : <Manager />}
     </View>
   );
 }

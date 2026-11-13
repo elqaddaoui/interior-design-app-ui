@@ -6,6 +6,10 @@ import * as Font from 'expo-font';
 /** Assets stay bundled for offline/native use, but only requested families are loaded. */
 const sources: Record<string, number> = {
   Inter: Platform.OS === 'web' ? require('../../assets/fonts/web/Inter.woff2') : require('../../assets/fonts/Inter.ttf'), Tajawal: Platform.OS === 'web' ? require('../../assets/fonts/web/Tajawal.woff2') : require('../../assets/fonts/Tajawal.ttf'),
+  // Tajawal ships one file per weight (the 400 file alone makes browsers fake bold, which looks thin and wide): Txt picks the real weight.
+  TajawalMedium: Platform.OS === 'web' ? require('../../assets/fonts/web/TajawalMedium.woff2') : require('../../assets/fonts/TajawalMedium.ttf'),
+  TajawalBold: Platform.OS === 'web' ? require('../../assets/fonts/web/TajawalBold.woff2') : require('../../assets/fonts/TajawalBold.ttf'),
+  TajawalExtraBold: Platform.OS === 'web' ? require('../../assets/fonts/web/TajawalExtraBold.woff2') : require('../../assets/fonts/TajawalExtraBold.ttf'),
   Roboto: Platform.OS === 'web' ? require('../../assets/fonts/web/Roboto.woff2') : require('../../assets/fonts/Roboto.ttf'), Poppins: Platform.OS === 'web' ? require('../../assets/fonts/web/Poppins.woff2') : require('../../assets/fonts/Poppins.ttf'),
   Montserrat: Platform.OS === 'web' ? require('../../assets/fonts/web/Montserrat.woff2') : require('../../assets/fonts/Montserrat.ttf'), Lato: Platform.OS === 'web' ? require('../../assets/fonts/web/Lato.woff2') : require('../../assets/fonts/Lato.ttf'),
   Cairo: Platform.OS === 'web' ? require('../../assets/fonts/web/Cairo.woff2') : require('../../assets/fonts/Cairo.ttf'), 'IBM Plex Sans Arabic': Platform.OS === 'web' ? require('../../assets/fonts/web/IBMPlexSansArabic.woff2') : require('../../assets/fonts/IBMPlexSansArabic.ttf'),

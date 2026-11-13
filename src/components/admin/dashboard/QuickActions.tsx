@@ -21,7 +21,7 @@ function TileButton({ tile }: { tile: Tile }) {
       <View className={`w-8 h-8 rounded-xl items-center justify-center ${tile.hot && live ? 'bg-primary' : 'bg-surface'}`}>
         <Icon name={tile.icon} size={17} tone={tile.hot && live ? 'onprimary' : 'fg'} />
       </View>
-      <Txt numberOfLines={2} className="flex-1 text-[13px] leading-[17px] font-bold">{tile.label}</Txt>
+      <Txt numberOfLines={2} className="flex-1 text-[12.5px] leading-[16px] font-bold">{tile.label}</Txt>
       {live ? <View className={`min-w-[22px] h-[22px] px-1.5 rounded-full items-center justify-center ${tile.hot ? 'bg-danger' : 'bg-ink'}`}><Txt className="text-white text-[11px] font-extrabold" style={tile.hot ? undefined : { color: undefined }}>{tile.badge! > 99 ? '99+' : tile.badge}</Txt></View> : null}
     </Pressable>
   );

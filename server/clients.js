@@ -14,18 +14,39 @@ const CCOLS = COLS.split(',').map(c => 'c.' + c).join(',');
  * the user sees, a target of 0 also consumes the unused free design; any other target keeps it and stores the remainder.
  */
 const balance = (row, shown) => (!row.free_used && shown <= 0 ? { credits: 0, freeUsed: 1 } : { credits: Math.max(0, shown - (row.free_used ? 0 : 1)), freeUsed: row.free_used });
-const fail = (status, code) => Object.assign(new Error(code), { status });
+const fail = (status, code, extra) => Object.assign(new Error(code), { status }, extra);
+const shownOf = row => row.credits + (row.free_used ? 0 : 1);
 const toUser = row => row && ({ id: row.id, name: row.name, whatsapp: row.phone, credits: row.credits + (row.free_used ? 0 : 1), freeUsed: row.free_used, leadDone: true, role: 'user', blocked: !!row.blocked, createdAt: row.created_at });
 
 /** Phone-based client profiles, sessions, free/paid entitlement claims and per-client history/chat space. */
-function createClients(db) {
+function createClients(db, { pool } = {}) {
+  /**
+   * The store's SHARED credit pool (server/platform.js `budget`): all clients of a store draw from ONE limit, so the credits handed out
+   * (every displayed balance) plus the credits already spent on generations may not pass it. `pool` is absent for a bare database (no limit).
+   * Returns the credits that can still be handed out (null = unlimited). Runs inside the caller's transaction, after `lockPool`.
+   */
+  async function available(q) {
+    const budget = pool ? await pool.budget(q) : { limit: null, used: 0 };
+    if (budget.limit == null) return null;
+    const given = Number((await q('SELECT COALESCE(SUM(credits + CASE WHEN free_used=0 THEN 1 ELSE 0 END),0) AS n FROM clients WHERE tenant_id=:tenant'))[0].n);
+    return Math.max(0, budget.limit - budget.used - given);
+  }
+  /** Two administrators granting at the same moment must not both pass the check. */
+  const lockPool = q => (pool ? q('SELECT pg_advisory_xact_lock(hashtext($1))', [`pool:${db.tenantId}`]) : null);
+  const refuseOver = async (q, extra) => {
+    const room = await available(q);
+    if (room != null && extra > room) throw fail(409, 'STORE_POOL_EXCEEDED', { available: room, requested: extra });
+  };
   const byId = async (id, q = db.query) => (await q('SELECT ' + COLS + ' FROM clients WHERE tenant_id=:tenant AND id=$1', [id]))[0];
   async function login(name, input, defaultCredits = 1) {
     const canonical = canonicalPhone(input);
     if (!/^\+[1-9]\d{5,14}$/.test(canonical) || typeof name !== 'string' || name.trim().length < 2 || name.length > 120) throw fail(400, 'INVALID_PROFILE');
     // Atomic upsert: two simultaneous first logins for one phone cannot create two profiles.
     // The admin's "default credits" setting is the balance a new client starts with (free design included).
-    const start = balance({ free_used: 0 }, Number.isSafeInteger(defaultCredits) && defaultCredits >= 0 ? Math.min(defaultCredits, MAX_CREDITS) : 1);
+    let wanted = Number.isSafeInteger(defaultCredits) && defaultCredits >= 0 ? Math.min(defaultCredits, MAX_CREDITS) : 1;
+    // Shared pool: a new client only starts with what the store can still hand out (0 when it is used up: the profile is still created).
+    if (pool && !(await db.query('SELECT 1 FROM clients WHERE tenant_id=:tenant AND phone=$1', [canonical])).length) wanted = Math.min(wanted, (await db.tx(async q => { await lockPool(q); return available(q); })) ?? wanted);
+    const start = balance({ free_used: 0 }, wanted);
     const created = (await db.query('INSERT INTO clients(tenant_id,id,phone,name,created_at,credits,free_used) VALUES(:tenant,$1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,phone) DO NOTHING RETURNING id', [crypto.randomUUID(), canonical, name.trim(), Date.now(), start.credits, start.freeUsed])).length > 0;
     const row = (await db.query('SELECT ' + COLS + ' FROM clients WHERE tenant_id=:tenant AND phone=$1', [canonical]))[0];
     if (row.blocked) throw fail(403, 'ACCOUNT_BLOCKED');
@@ -149,17 +170,25 @@ function createClients(db) {
       const row = await byId(id);
       if (!row) throw fail(404, 'NOT_FOUND');
       if (!Number.isSafeInteger(credits) || credits < 0 || credits > MAX_CREDITS) throw fail(400, 'INVALID_CREDITS');
-      const next = balance(row, credits);
-      await db.query('UPDATE clients SET credits=$1, free_used=$2 WHERE tenant_id=:tenant AND id=$3', [next.credits, next.freeUsed, id]);
-      return toUser(await byId(id));
+      return db.tx(async q => {
+        await lockPool(q);
+        const current = (await q('SELECT ' + COLS + ' FROM clients WHERE tenant_id=:tenant AND id=$1 FOR UPDATE', [id]))[0];
+        if (!current) throw fail(404, 'NOT_FOUND');
+        const next = balance(current, credits);
+        await refuseOver(q, credits - shownOf(current));
+        await q('UPDATE clients SET credits=$1, free_used=$2 WHERE tenant_id=:tenant AND id=$3', [next.credits, next.freeUsed, id]);
+        return toUser(await byId(id, q));
+      });
     },
     /** Admin edit of one client. Only whitelisted fields; credits are the displayed balance (free design included). */
     update: async (id, patch) => {
       if (patch.credits !== undefined && (!Number.isSafeInteger(patch.credits) || patch.credits < 0 || patch.credits > MAX_CREDITS)) throw fail(400, 'INVALID_CREDITS');
       if (patch.blocked !== undefined && typeof patch.blocked !== 'boolean') throw fail(400, 'INVALID_BLOCKED');
       return db.tx(async q => {
+        if (patch.credits !== undefined) await lockPool(q);
         const row = (await q('SELECT ' + COLS + ' FROM clients WHERE tenant_id=:tenant AND id=$1 FOR UPDATE', [id]))[0];
         if (!row) throw fail(404, 'NOT_FOUND');
+        if (patch.credits !== undefined) await refuseOver(q, patch.credits - shownOf(row));
         if (patch.credits !== undefined) { const next = balance(row, patch.credits); await q('UPDATE clients SET credits=$1, free_used=$2 WHERE tenant_id=:tenant AND id=$3', [next.credits, next.freeUsed, id]); }
         if (patch.blocked !== undefined) await q('UPDATE clients SET blocked=$1 WHERE tenant_id=:tenant AND id=$2', [patch.blocked ? 1 : 0, id]);
         return toUser(await byId(id, q));
@@ -177,16 +206,23 @@ function createClients(db) {
       }
       const unique = [...new Set(ids)];
       return db.tx(async q => {
+        if (action === 'credits') await lockPool(q);
         const rows = [];
         for (const id of unique.sort()) { // stable lock order avoids deadlocks between concurrent bulk calls
           const row = (await q('SELECT ' + COLS + ' FROM clients WHERE tenant_id=:tenant AND id=$1 FOR UPDATE', [id]))[0];
           if (row) rows.push(row);
         }
+        // Shared pool: the clients' new balances together may not hand out more than the store has left (all or nothing).
+        if (action === 'credits') {
+          let extra = 0;
+          for (const row of rows) extra += Math.min(MAX_CREDITS, Math.max(0, mode === 'set' ? amount : mode === 'add' ? shownOf(row) + amount : shownOf(row) - amount)) - shownOf(row);
+          await refuseOver(q, extra);
+        }
         for (const row of rows) {
           if (action === 'delete') await q('DELETE FROM clients WHERE tenant_id=:tenant AND id=$1', [row.id]);
           else if (action === 'block' || action === 'unblock') await q('UPDATE clients SET blocked=$1 WHERE tenant_id=:tenant AND id=$2', [action === 'block' ? 1 : 0, row.id]);
           else {
-            const shown = row.credits + (row.free_used ? 0 : 1);
+            const shown = shownOf(row);
             const next = Math.min(MAX_CREDITS, Math.max(0, mode === 'set' ? amount : mode === 'add' ? shown + amount : shown - amount));
             const stored = balance(row, next);
             await q('UPDATE clients SET credits=$1, free_used=$2 WHERE tenant_id=:tenant AND id=$3', [stored.credits, stored.freeUsed, row.id]);
