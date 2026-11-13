@@ -21,11 +21,11 @@ const { createPlatform } = require('./platform');
 
 const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))]);
 
-function createBundles({ db, env = process.env, senders, media: mediaOptions = {}, chatFetch, imageFetch } = {}) {
+function createBundles({ db, env = process.env, senders, media: mediaOptions = {}, chatFetch, imageFetch, mailer } = {}) {
   // One S3 client for the whole process: tenants differ by object-key prefix, not by credentials.
   const storage = 'storage' in mediaOptions ? mediaOptions.storage : createR2Storage(env);
   // Allowances + API manager (platform tables). Tenant modules only get `platform.forTenant(id)`: a handle fixed to their own tenant.
-  const platform = createPlatform(db, { env });
+  const platform = createPlatform(db, { env, mailer });
   const cache = new Map();
   const max = Math.max(5, Math.min(2000, Number(env.TENANT_CACHE) || 200));
 
@@ -34,7 +34,8 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     const rowOf = row => JSON.parse(row.data);
     let content;
     const notifier = createNotifier(tdb, env, senders, { settings: () => content.getDoc('settings'), platformDb: db });
-    const clients = createClients(tdb);
+    const own = platform.forTenant(tenantId, { onChange: () => sync.bump('credits') });
+    const clients = createClients(tdb, { pool: own }); // the store's clients share ONE credit pool (its limit)
     // Long-running server: anonymous polls are answered from a 2 s in-memory copy of the versions (local writes invalidate it at once).
     // Serverless instances keep no cache: each one only sees a fraction of the writes.
     const sync = createSync(tdb, { cacheMs: env.VERCEL ? 0 : Math.max(0, Math.min(10000, Number(env.SYNC_CACHE_MS ?? 2000) || 0)) });
@@ -43,7 +44,6 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     const admins = createAdmins(tdb, { env, sync, media });
     // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
     const campaigns = createCampaigns(tdb, notifier, { sync, settings: () => content.getDoc('settings') });
-    const own = platform.forTenant(tenantId, { onChange: () => sync.bump('credits') });
     const imagegen = createImageGen(tdb, { env, media, content, sync, platform: own, ...(imageFetch ? { fetch: imageFetch } : {}) });
     const chat = createChat(tdb, { env, platform: own, ...(chatFetch ? { fetch: chatFetch } : {}) });
     const assistant = createAssistant(tdb, { chat, content });

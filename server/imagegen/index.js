@@ -242,10 +242,11 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
         { role: 'system', content: 'You translate interior-design requests written in Moroccan Darija, Arabic or French into plain, precise English for an image generator. Keep every detail (objects, colours, materials, positions, numbers). Reply with ONLY the English text, no quotes, no comments.' },
         { role: 'user', content: text },
       ] }) }, 7000);
+      void platform?.record?.({ kind: 'text', op: 'prompt-translate', provider: 'pollinations', units: 1, ok: response.ok });
       if (!response.ok) return '';
       const out = clean((await response.json())?.choices?.[0]?.message?.content, 700);
       return out && !/[\u0600-\u06FF]/.test(out) ? out : '';
-    } catch { return ''; }
+    } catch { void platform?.record?.({ kind: 'text', op: 'prompt-translate', provider: 'pollinations', units: 1, ok: false }); return ''; }
   }
 
   /* ------------------------------------------------------------ the admin's prompt rules (Admin > Prompt cards) */
@@ -378,6 +379,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       const t0 = clock();
       try {
         const out = await callEngine(candidate, { prompt: brief.prompt, photo, references: photo ? references : [], size, signal: Math.min(left, Number(env.IMAGEGEN_ATTEMPT_MS) || (env.VERCEL ? 24000 : 40000)) });
+        void platform?.record?.({ kind: 'image', op: photo ? 'edit' : 'generate', provider: candidate.engine, units: 1, ok: true });
         const imageUri = await media.storeMedia({ body: out.bytes, mime: out.mime });
         cooling.delete(`${candidate.engine}|${candidate.model}`);
         // Another pool model answered (the one whose turn it was rested): the next creation continues after it.
@@ -389,6 +391,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       } catch (error) {
         lastStatus = error.statusCode || lastStatus;
         const code = error.statusCode;
+        void platform?.record?.({ kind: 'image', op: photo ? 'edit' : 'generate', provider: candidate.engine, units: 1, ok: false });
         step.ms = clock() - t0; step.status = code || 0; run.tried.push(step);
         // 404 / 422: this model does not exist here or cannot do this job -> next model. Everything else rests it briefly.
         if (code === 404 || code === 422 || code === 400) { cooling.set(`${candidate.engine}|${candidate.model}`, clock() + 600000); continue; }
@@ -455,6 +458,8 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
       let result;
       // Store allowance: one credit per new generation, taken atomically BEFORE the engine is called and given back if nothing was produced.
       const metered = !!platform && !(request.aiResult && /^\/api\/media\//.test(request.aiResult) && request.aiModel);
+      // The AI gate (demo switch / paused store) comes first: a refused call costs no credit and reaches no provider.
+      if (metered && platform.gate) await platform.gate('image', 'render');
       if (metered && !(await platform.consume(1))) throw fail(402, 'STORE_CREDITS_EXHAUSTED');
       try { result = await generate({ request, userId: client.id }); }
       catch (error) {

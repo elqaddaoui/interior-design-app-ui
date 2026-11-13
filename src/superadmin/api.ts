@@ -36,6 +36,9 @@ const MESSAGES: Record<string, string> = {
   SELECT_TENANTS: 'Choose at least one store.', TOO_MANY_TENANTS: 'Choose twelve stores at most at a time.', THEME_TOO_LARGE: 'This store has too much content to copy as a theme.',
   SOURCE_GONE: 'The store this theme came from no longer exists.', NO_ADMIN: 'This store has no active administrator.', TENANT_SUSPENDED: 'This store is suspended.', HANDOFF_INVALID: 'The sign-in link expired. Try again.',
   TOO_MANY_APIS: 'Thirty connections of one kind at most.', DEFAULT_REQUIRED: 'Choose another connection as the default instead.', INVALID_KIND: 'Unknown kind.',
+  STORE_POOL_EXCEEDED: 'The clients of this store would hold more credits than its limit allows.', INVALID_LIMIT: 'This value is out of range.',
+  NO_RECIPIENT: 'No e-mail address to send warnings to. Enter one above.', NO_MAIL_TRANSPORT: 'The server has no e-mail service configured yet.', EMAIL_FAILED: 'The e-mail could not be sent.',
+  AI_DISABLED_DEMO: 'The API is off for this demo. Turn it on from Demos.', AI_PAUSED: 'The API of this store is paused.',
 };
 export const saMessage = (error: unknown) => (error instanceof SaError ? tr(MESSAGES[error.code] || error.code) : tr('Something went wrong.'));
 

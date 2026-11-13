@@ -50,7 +50,7 @@ test('nothing that a tenant can write is able to reach the console style: no ser
   const content = fs.readFileSync(path.join(root, 'server/content.js'), 'utf8');
   assert.doesNotMatch(content, /saas_/, 'tenant content code never touches platform tables');
   // Only superadmin.js, platform.js (API manager + credits), tenants.js, bundle.js (tenant discovery) and db.js (schema) may mention platform tables.
-  const tenantModules = fs.readdirSync(path.join(root, 'server'), { recursive: true }).filter(f => /\.js$/.test(String(f)) && !/^(superadmin|platform|tenants|bundle|db|index)\.js$/.test(String(f)));
+  const tenantModules = fs.readdirSync(path.join(root, 'server'), { recursive: true }).filter(f => /\.js$/.test(String(f)) && !/^(superadmin|platform|usage|tenants|bundle|db|index)\.js$/.test(String(f)));
   for (const file of tenantModules) assert.doesNotMatch(fs.readFileSync(path.join(root, 'server', String(file)), 'utf8'), /\bsaas_/, `server/${file} must not read platform tables`);
 });
 

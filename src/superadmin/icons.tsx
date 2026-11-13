@@ -1,6 +1,7 @@
+/* eslint-disable react-hooks/refs -- useTip hands its ref and bubble to the Pressable it decorates; the ref is only read in event handlers. */
 /** Console icon set: Material Design Icons paths (Apache-2.0, https://pictogrammers.com/library/mdi/), drawn with react-native-svg in the console's own colours. */
-import React from 'react';
-import { Pressable } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Platform, Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { SA } from './tokens';
 
@@ -36,6 +37,11 @@ const PATHS = {
   publish: 'M5,4V6H19V4H5M5,14H9V20H15V14H19L12,7L5,14Z',
   publishOff: 'M20.8 22.7L15 16.9V20H9V14H5L8.6 10.4L1.1 3L2.4 1.7L22.1 21.4L20.8 22.7M19 6V4H7.2L9.2 6H19M17.2 14H19L12 7L11.1 7.9L17.2 14Z',
   storePlusOutline: 'M20 6H4V4H20V6M15.69 14H14V15.69C13.37 16.64 13 17.77 13 19C13 19.34 13.04 19.67 13.09 20H4V14H3V12L4 7H20L21 12V13.35C20.37 13.13 19.7 13 19 13C17.77 13 16.64 13.37 15.69 14M12 14H6V18H12V14M18.96 12L18.36 9H5.64L5.04 12H18.96M20 18V15H18V18H15V20H18V23H20V20H23V18H20Z',
+  chartLine: 'M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.75L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z',
+  bellAlertOutline: 'M10 21H14C14 22.1 13.1 23 12 23S10 22.1 10 21M21 19V20H3V19L5 17V11C5 7.9 7 5.2 10 4.3V4C10 2.9 10.9 2 12 2S14 2.9 14 4V4.3C17 5.2 19 7.9 19 11V17L21 19M17 11C17 8.2 14.8 6 12 6S7 8.2 7 11V18H17V11M4.2 3.5L5.6 2.1L3.5 0L2.1 1.4L4.2 3.5M19.8 3.5L21.9 1.4L20.5 0L18.4 2.1L19.8 3.5Z',
+  pauseCircleOutline: 'M13,16V8H15V16H13M9,16V8H11V16H9M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4Z',
+  playCircleOutline: 'M10,16.5V7.5L16,12M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20Z',
+  contentCopyClone: 'M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z',
 } as const;
 export type IconName = keyof typeof PATHS;
 
@@ -43,15 +49,47 @@ export function Icon({ name, size = 18, color = SA.color.text }: { name: IconNam
   return <Svg width={size} height={size} viewBox="0 0 24 24" accessible={false}><Path d={PATHS[name]} fill={color} /></Svg>;
 }
 
-/** Square icon button with a 40 px touch target (36 when small), a text label for screen readers and a tooltip on the web. */
-export function IconBtn({ icon, label, onPress, tone = 'normal', disabled, active, testID, size = 40 }: { icon: IconName; label: string; onPress: () => void; tone?: 'normal' | 'accent' | 'danger'; disabled?: boolean; active?: boolean; testID?: string; size?: number }) {
+/**
+ * Tooltip for any pressable: hover or keyboard focus on a computer, long press on a phone. The bubble is drawn with fixed
+ * coordinates so a card with hidden overflow never clips it, stays inside the screen and flips under the control near the top.
+ * Spread `handlers` on the Pressable, set `ref`, and render `node` inside it.
+ */
+export function useTip(label: string) {
+  const ref = useRef<View>(null);
+  const [pos, setPos] = useState<{ x: number; y: number; h: number } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const show = () => {
+    if (Platform.OS !== 'web' || !label) return;
+    ref.current?.measureInWindow((x, y, w, h) => setPos({ x: x + w / 2, y, h }));
+  };
+  const hide = () => { if (timer.current) clearTimeout(timer.current); setPos(null); };
+  const vw = Platform.OS === 'web' ? (globalThis as { innerWidth?: number }).innerWidth || 1024 : 1024;
+  const below = !!pos && pos.y < 52;
+  const node = pos ? (
+    <View pointerEvents="none" style={{ position: 'fixed', left: Math.min(Math.max(pos.x, 112), vw - 112), top: below ? pos.y + pos.h + 6 : pos.y - 6, zIndex: 99999,
+      transform: [{ translateX: '-50%' }, { translateY: below ? '0%' : '-100%' }], maxWidth: 220, backgroundColor: SA.color.text, borderRadius: SA.radius.sm, paddingHorizontal: 8, paddingVertical: 5,
+      ...(Platform.OS === 'web' ? { boxShadow: '0 4px 14px rgba(0,0,0,0.25)' } : {}) } as never}>
+      <Text style={{ color: SA.color.panel, fontSize: 12, lineHeight: 16, fontWeight: '600', textAlign: 'center', ...(Platform.OS === 'web' ? { fontFamily: SA.family } : {}) }}>{label}</Text>
+    </View>
+  ) : null;
+  const handlers = {
+    onHoverIn: show, onHoverOut: hide, onFocus: show, onBlur: hide,
+    onLongPress: () => { show(); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(hide, 1600); },
+  };
+  return { ref, node, handlers };
+}
+
+/** Square icon button with a 36 px touch target by default, a text label for screen readers and a tooltip. */
+export function IconBtn({ icon, label, onPress, tone = 'normal', disabled, active, testID, size = 36 }: { icon: IconName; label: string; onPress: () => void; tone?: 'normal' | 'accent' | 'danger'; disabled?: boolean; active?: boolean; testID?: string; size?: number }) {
   const color = tone === 'accent' ? SA.color.accent : tone === 'danger' ? SA.color.danger : SA.color.text;
+  const tip = useTip(label);
   return (
-    <Pressable testID={testID} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled, selected: !!active }} disabled={disabled} onPress={onPress}
-      {...({ title: label } as object)}
+    <Pressable ref={tip.ref} testID={testID} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled, selected: !!active }} disabled={disabled} onPress={onPress}
+      {...(tip.handlers as object)}
       style={({ pressed }) => ({ width: size, height: size, borderRadius: SA.radius.md, alignItems: 'center', justifyContent: 'center', borderWidth: 1,
-        borderColor: active ? SA.color.accent : tone === 'danger' ? SA.color.dangerSoft : SA.color.line, backgroundColor: active ? SA.color.accentSoft : SA.color.panel, opacity: disabled ? 0.4 : pressed ? 0.75 : 1 })}>
+        borderColor: active ? SA.color.accent : tone === 'danger' ? SA.color.dangerSoft : SA.color.line, backgroundColor: active ? SA.color.accentSoft : tone === 'danger' ? SA.color.dangerSoft : SA.color.panel, opacity: disabled ? 0.4 : pressed ? 0.75 : 1 })}>
       <Icon name={icon} size={Math.round(size * 0.5)} color={color} />
+      {tip.node}
     </Pressable>
   );
 }
