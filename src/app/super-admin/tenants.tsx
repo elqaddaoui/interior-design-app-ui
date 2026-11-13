@@ -151,7 +151,13 @@ function Plan({ tenant, onChanged }: { tenant: Tenant; onChanged: () => void }) 
     <View>
       <T weight="bold" style={{ marginBottom: SA.space.sm }}>{tr('Credits')}</T>
       <Meter used={tenant.creditsUsed} limit={tenant.creditLimit} testID="sa-t-meter" />
-      <Hint>{tr('One AI picture = one credit. When the limit is reached the store cannot create new pictures until you raise it.')}</Hint>
+      <Hint>{tr('One AI picture = one credit. The limit is shared by all the clients of this store: what they hold plus what they already used can never exceed it.')}</Hint>
+      {tenant.creditLimit != null && tenant.creditsAllocated != null ? (
+        <View testID="sa-t-pool" style={{ marginBottom: SA.space.md }}>
+          <T size="sm" color={SA.color.muted}>{tr('{n} credits are held by its clients, {left} left to hand out.', { n: tenant.creditsAllocated, left: Math.max(0, tenant.creditLimit - tenant.creditsUsed - tenant.creditsAllocated) })}</T>
+          {tenant.creditsUsed + tenant.creditsAllocated > tenant.creditLimit ? <Notice tone="warn">{tr('The clients hold more than the limit. The store administrator sees a warning; raise the limit or let them use their credits.')}</Notice> : null}
+        </View>
+      ) : null}
       <Field label={tr('Credit limit (empty = unlimited)')} value={limit} onChangeText={v => setLimit(v.replace(/[^0-9]/g, ''))} keyboardType="number-pad" placeholder={tr('Unlimited')} {...({ testID: 'sa-t-limit' } as object)} />
       <Row style={{ marginBottom: SA.space.xl }}>
         <Btn testID="sa-t-limit-save" label={tr('Save limit')} busy={busy === 'limit'} onPress={() => run('limit', { creditLimit: parseLimit(limit) }, tr('Limit saved.'))} />
@@ -177,6 +183,15 @@ function Plan({ tenant, onChanged }: { tenant: Tenant; onChanged: () => void }) 
       <ErrorLine error={error} />
       {note ? <T size="sm" color={SA.color.ok} style={{ marginBottom: SA.space.md }}>{note}</T> : null}
       <Btn testID="sa-t-mode-save" label={tr('Save AI keys')} busy={busy === 'mode'} onPress={() => run('mode', { apiMode: mode, ...(mode === 'platform' ? { apiLinks: Object.fromEntries(Object.entries(links).map(([k, v]) => [k, v || null])) } : {}) }, tr('Saved.'))} />
+      <View style={{ marginTop: SA.space.xl }}>
+        <T weight="bold" style={{ marginBottom: SA.space.sm }}>{tr('AI access')}</T>
+        <Row>
+          <Badge label={tenant.aiPaused ? tr('API paused') : tr('API active')} tone={tenant.aiPaused ? 'warn' : 'ok'} />
+          <Btn testID="sa-t-ai-pause" small kind={tenant.aiPaused ? 'solid' : 'ghost'} label={tenant.aiPaused ? tr('Resume API') : tr('Pause API')} busy={busy === 'pause'}
+            onPress={async () => { setBusy('pause'); setError(null); try { await sa(`/tenants/${tenant.id}/ai-pause`, { method: 'POST', body: { paused: !tenant.aiPaused } }); onChanged(); } catch (e) { setError(saMessage(e)); } finally { setBusy(''); } }} />
+        </Row>
+        <Hint>{tenant.aiPaused ? (tenant.aiPauseReason === 'owner' ? tr('Paused by you. Its AI calls are refused until you resume.') : tr('Paused automatically after unusual use. Check the warnings in APIs, then resume.')) : tr('Stops every AI call of this store at once (pictures and texts). Reversible.')}</Hint>
+      </View>
     </View>
   );
 }
@@ -288,7 +303,7 @@ export default function Tenants() {
         }))} />
       ) : shown.map(t => (
         <ListRow key={t.id} testID="sa-manage" titleTestID="sa-tenant-name" title={t.name} onPress={() => setOpenId(t.id)}
-          meta={<Row style={{ gap: 4 }}><Badge label={tr(t.status)} tone={statusTone(t.status)} />{t.kind === 'default' ? <Badge label={tr('default')} tone="accent" /> : null}{t.sourceDemoId ? <Badge label={tr('from demo')} tone="accent" /> : null}{t.apiMode === 'platform' ? <Badge label={tr('API managed')} tone="accent" /> : null}</Row>}
+          meta={<Row style={{ gap: 4 }}><Badge label={tr(t.status)} tone={statusTone(t.status)} />{t.kind === 'default' ? <Badge label={tr('default')} tone="accent" /> : null}{t.sourceDemoId ? <Badge label={tr('from demo')} tone="accent" /> : null}{t.apiMode === 'platform' ? <Badge label={tr('API managed')} tone="accent" /> : null}{t.aiPaused ? <Badge label={tr('API paused')} tone="warn" /> : null}{t.creditLimit != null && (t.creditsAllocated || 0) + t.creditsUsed > t.creditLimit ? <Badge label={tr('over the limit')} tone="danger" /> : null}</Row>}
           sub={`${t.path} · ${t.counts ? `${tr(t.counts.admins === 1 ? '{n} admin' : '{n} admins', { n: t.counts.admins })} · ${tr('{n} clients', { n: t.counts.clients })}` : ''}`}
           right={
             <Row style={{ gap: SA.space.md, flexWrap: 'wrap' }}>

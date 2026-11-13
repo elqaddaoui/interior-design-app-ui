@@ -302,6 +302,8 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
     // Providers expect the conversation to start with the user: drop any leading assistant (welcome) turns.
     while (turns.length > 1 && turns[0].role !== 'user') turns.shift();
     const messages = [{ role: 'system', content: systemPrompt(config, language, { facts, instructions }) }, ...turns];
+    // The AI gate (demo switch / paused store): refused before any provider is reached.
+    if (platform?.gate) await platform.gate('text', only ? 'chat-test' : 'chat');
     const chain = await chainOf(only);
     const deadline = clock() + budgetMs;
     const tried = [];
@@ -315,11 +317,13 @@ function createChat(db, { env = process.env, fetch: fetchImpl = globalThis.fetch
         lastModel = model;
         try {
           const text = await ask(entry, model, messages, Math.min(entry.ms, left));
+          void platform?.record?.({ kind: 'text', op: only ? 'chat-test' : 'chat', provider: entry.id, units: 1, ok: true });
           cooling.delete(entry.id);
           health.set(entry.id, { ok: true, at: clock(), model });
           return { text, provider: entry.id, model, label: entry.label, language, paid: entry.paid, status: entry.paid ? 'paid' : tried.length ? 'fallback' : 'active', tried };
         } catch (error) {
           reason = reasonOf(error);
+          void platform?.record?.({ kind: 'text', op: only ? 'chat-test' : 'chat', provider: entry.id, units: 1, ok: false });
           // The model does not exist (any more) -> try the provider's next model. Quota, bad key or an outage -> next provider, and rest this one briefly.
           if (reason === 'model') continue;
           cooling.set(entry.id, { until: clock() + (reason === 'rate_limit' ? 60000 : reason === 'auth' ? 300000 : 20000), reason });

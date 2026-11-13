@@ -145,9 +145,27 @@ ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS api_mode TEXT NOT NULL DEFAULT
 ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS api_links TEXT NOT NULL DEFAULT '{}';
 -- API manager: one row per provider connection (secret key stored, never returned by any route).
 CREATE TABLE IF NOT EXISTS saas_apis (id TEXT PRIMARY KEY, kind TEXT NOT NULL, provider TEXT NOT NULL DEFAULT '', label TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '', base_url TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, is_default INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL);
+-- AI gate: a demo may only use an API while ai_until is in the future (the console switch; it slides forward while the demo is used and
+-- lapses by itself after a quiet period). ai_paused = the owner (or the abuse detector) stopped every AI call of a store.
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS ai_until BIGINT;
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS ai_paused INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE saas_tenants ADD COLUMN IF NOT EXISTS ai_pause_reason TEXT NOT NULL DEFAULT '';
+-- API consumption: one rollup row per tenant / modality / operation / provider / key mode per 10-minute bucket (never one row per call).
+CREATE TABLE IF NOT EXISTS saas_usage (
+  bucket BIGINT NOT NULL, tenant_id TEXT NOT NULL, kind TEXT NOT NULL, op TEXT NOT NULL, provider TEXT NOT NULL, mode TEXT NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0, blocked INTEGER NOT NULL DEFAULT 0, units BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, tenant_id, kind, op, provider, mode)
+);
+CREATE INDEX IF NOT EXISTS saas_usage_tenant ON saas_usage(tenant_id, bucket);
+-- Warnings raised by the abuse detector (and e-mailed to the super admin).
+CREATE TABLE IF NOT EXISTS saas_alerts (
+  id TEXT PRIMARY KEY, at BIGINT NOT NULL, tenant_id TEXT NOT NULL, rule TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'medium', title TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '{}', action TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', emailed_at BIGINT, email_error TEXT NOT NULL DEFAULT '', resolved_at BIGINT
+);
+CREATE INDEX IF NOT EXISTS saas_alerts_at ON saas_alerts(at DESC);
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
-const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis'];
+const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
 
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 /** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */

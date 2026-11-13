@@ -191,7 +191,8 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     id: row.id, slug: row.slug, name: row.name, kind: row.kind, status: row.status, plan: row.plan, ownerEmail: row.owner_email,
     sourceDemoId: row.source_demo_id, sourceDemoVersion: num(row.source_demo_version), notes: row.notes,
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at), suspendedAt: num(row.suspended_at), ...urls(row),
-    creditLimit: num(row.credit_limit), creditsUsed: Number(row.credits_used || 0), apiMode: row.api_mode === 'platform' ? 'platform' : 'own', apiLinks: linksOf(row),
+    creditLimit: num(row.credit_limit), creditsUsed: Number(row.credits_used || 0), apiMode: row.api_mode === 'platform' ? 'platform' : 'own', apiLinks: linksOf(row), ...platform.aiView(row),
+    ...(row.allocated !== undefined ? { creditsAllocated: Number(row.allocated) } : {}),
     ...(row.clients !== undefined ? { counts: { clients: row.clients, requests: row.requests, admins: row.admins, domains: row.domains } } : {}),
   });
   const getTenantRow = async id => {
@@ -203,6 +204,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
   async function listTenants(kinds) {
     const rows = await db.query(`SELECT t.*,
       (SELECT COUNT(*) FROM clients c WHERE c.tenant_id=t.id)::int AS clients, (SELECT COUNT(*) FROM requests r WHERE r.tenant_id=t.id)::int AS requests,
+      (SELECT COALESCE(SUM(c.credits + CASE WHEN c.free_used=0 THEN 1 ELSE 0 END),0) FROM clients c WHERE c.tenant_id=t.id)::int AS allocated,
       (SELECT COUNT(*) FROM admin_accounts a WHERE a.tenant_id=t.id)::int AS admins, (SELECT COUNT(*) FROM saas_domains d WHERE d.tenant_id=t.id)::int AS domains
       FROM saas_tenants t WHERE t.kind = ANY($1) ORDER BY t.created_at, t.id`, [kinds]);
     return rows.map(tenantView);
@@ -403,9 +405,9 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
   const demoView = async row => ({
     id: row.id, name: row.name, description: row.description, status: row.status, tenantId: row.tenant_id, slug: row.slug,
     version: await contentVersion(row.tenant_id), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-    assignments: row.assignments ?? 0, path: `/${row.slug}`, adminPath: `/${row.slug}/admin`, creditLimit: num(row.credit_limit), creditsUsed: Number(row.credits_used || 0),
+    assignments: row.assignments ?? 0, path: `/${row.slug}`, adminPath: `/${row.slug}/admin`, ...platform.aiView({ ...row, kind: 'demo' }),
   });
-  const DEMO_SQL = 'SELECT d.*, t.slug, t.credit_limit, t.credits_used, (SELECT COUNT(*) FROM saas_assignments a WHERE a.demo_id=d.id)::int AS assignments FROM saas_demos d JOIN saas_tenants t ON t.id=d.tenant_id';
+  const DEMO_SQL = 'SELECT d.*, t.slug, t.ai_until, t.ai_paused, t.ai_pause_reason, (SELECT COUNT(*) FROM saas_assignments a WHERE a.demo_id=d.id)::int AS assignments FROM saas_demos d JOIN saas_tenants t ON t.id=d.tenant_id';
   const getDemoRow = async id => {
     const row = (await db.query(`${DEMO_SQL} WHERE d.id=$1`, [String(id)]))[0];
     if (!row) throw fail(404, 'NOT_FOUND');
@@ -446,8 +448,8 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     for (let tries = 0; ; tries++) {
       try { slug = await checkSlug(slug); break; } catch (error) { if (tries > 5 || !['SLUG_TAKEN', 'SLUG_RETIRED'].includes(error.message) || body?.slug) throw error; slug = `${base.slice(0, 34)}-${crypto.randomBytes(2).toString('hex')}`; }
     }
-    // The credit limit (empty = unlimited) is the store's own allowance: it is what the store's administrator sees in the menu.
-    const created = await createTenant({ name, slug, ownerName: `${name} demo admin`, creditLimit: body?.creditLimit }, actor, { kind: 'demo' }); // no e-mail needed: the user name is "admin"
+    // A demo has no credit limit: it may not call any API at all until its "use API" switch is turned on (platform.gate).
+    const created = await createTenant({ name, slug, ownerName: `${name} demo admin` }, actor, { kind: 'demo' }); // no e-mail needed: the user name is "admin"
     const id = newId('d'), now = Date.now();
     await db.query('INSERT INTO saas_demos(id,name,description,tenant_id,status,version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,1,$6,$6)', [id, name, clean(body?.description, 500), created.tenant.id, 'draft', now]);
     if (theme) await applyTheme(created.tenant.id, theme);
@@ -737,6 +739,9 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
       clients: await count('SELECT COUNT(*) AS n FROM clients'),
       apis: await count('SELECT COUNT(*) AS n FROM saas_apis'),
       creditsUsed: await count("SELECT COALESCE(SUM(credits_used),0) AS n FROM saas_tenants WHERE kind IN ('default','instance')"),
+      alerts: await platform.usage.openCount(),
+      calls24h: (await platform.usage.today()).calls,
+      demosAiOn: await count("SELECT COUNT(*) AS n FROM saas_tenants WHERE kind='demo' AND ai_until>$1", [Date.now()]),
       platformManaged: await count("SELECT COUNT(*) AS n FROM saas_tenants WHERE kind IN ('default','instance') AND api_mode='platform'"),
     };
   }
@@ -818,6 +823,34 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     if ((m = /^\/apis\/(api_[a-f0-9]{10})$/.exec(path))) {
       if (method === 'PATCH') { const body = await readBody(req); const view = await platform.update(m[1], body); await audit(actor, 'api.update', null, m[1], Object.keys(body || {}).map(k => (k === 'apiKey' ? 'key' : k)).join(',')); return ok(view); }
       if (method === 'DELETE') { const row = await platform.remove(m[1]); await audit(actor, 'api.delete', null, m[1], `${row.kind}/${row.provider}`); return ok({ ok: true }); }
+    }
+    // API consumption (every modality, both key modes), abuse alerts and their settings.
+    if (path === '/usage' && method === 'GET') {
+      const q = url.searchParams;
+      return ok(await platform.usage.report({ range: q.get('range') || '24h', tenantId: q.get('tenant') || undefined, kind: q.get('kind') || undefined, mode: q.get('mode') || undefined }));
+    }
+    if (path === '/alerts' && method === 'GET') return ok({ alerts: await platform.usage.alerts({ status: url.searchParams.get('status') || 'open' }), open: await platform.usage.openCount() });
+    if (path === '/alerts/resolve-all' && method === 'POST') { const result = await platform.usage.resolveAll(); await audit(actor, 'alert.resolve', null, 'all', String(result.count)); return ok(result); }
+    if ((m = /^\/alerts\/(al_[a-f0-9]{12})\/resolve$/.exec(path)) && method === 'POST') { const result = await platform.usage.resolve(m[1]); await audit(actor, 'alert.resolve', null, m[1], ''); return ok(result); }
+    if (path === '/alert-settings') {
+      if (method === 'GET') return ok({ settings: await platform.usage.getSettings(), recipient: await platform.usage.recipient(), transport: platform.usage.transport(), defaults: platform.usage.DEFAULTS });
+      if (method === 'PATCH') { const settings = await platform.usage.setSettings(await readBody(req)); await audit(actor, 'alert.settings', null, 'abuse', ''); return ok({ settings, recipient: await platform.usage.recipient(), transport: platform.usage.transport(), defaults: platform.usage.DEFAULTS }); }
+    }
+    if (path === '/alert-settings/test' && method === 'POST') return ok(await platform.usage.testEmail());
+    // A demo's "use API" switch (auto-closes after a quiet period) and the pause switch of any store.
+    if ((m = /^\/demos\/([a-z0-9_-]+)\/ai$/.exec(path)) && method === 'POST') {
+      const row = await getDemoRow(m[1]);
+      const on = (await readBody(req)).enabled === true;
+      await platform.setDemoAi(row.tenant_id, on);
+      await audit(actor, on ? 'demo.ai.on' : 'demo.ai.off', row.tenant_id, row.id, '');
+      return ok(await demoView(await getDemoRow(row.id)));
+    }
+    if ((m = /^\/tenants\/([a-z0-9_-]+)\/ai-pause$/.exec(path)) && method === 'POST') {
+      const row = await getTenantRow(m[1]);
+      const paused = (await readBody(req)).paused === true;
+      await platform.setPaused(row.id, paused, paused ? 'owner' : '');
+      await audit(actor, paused ? 'tenant.ai.pause' : 'tenant.ai.resume', row.id, row.slug, '');
+      return ok(tenantView(await getTenantRow(row.id)));
     }
     if (path === '/themes') {
       if (method === 'GET') return ok((await db.query(`${THEME_SQL} ORDER BY h.created_at DESC`)).map(themeView));

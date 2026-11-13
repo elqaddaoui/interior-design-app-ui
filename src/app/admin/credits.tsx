@@ -13,6 +13,10 @@ import { useStore } from '@/store/useStore';
 import { useCreditLog } from '@/store/useCreditLog';
 import { router, useBackCheckpoint, useLeaveGuard } from '@/hooks/useLeaveGuard';
 import { toast, toastAction } from '@/store/useToast';
+import { BackendError } from '@/lib/backend';
+import { PoolWarning } from '@/components/admin/PoolWarning';
+import { poolState, useAdminInstance } from '@/store/useAdminInstance';
+import { refreshAdminSession } from '@/lib/sync';
 import { QUICK_AMOUNTS, ago, canGrant, clampAmount, initialOf, monthTotal, nextBalance, parseAmount, searchUsers, stepAmount, undoneBalance, type Grant } from '@/lib/creditGrants';
 import type { AppUser } from '@/data/types';
 
@@ -61,13 +65,21 @@ export default function Credits() {
   const s = useStore();
   const { log, load: loadLog, add: addLog, undone: markLogUndone } = useCreditLog();
   useEffect(() => { void loadLog(); }, [loadLog]);
+  const pool = useAdminInstance((st) => st.instance?.credits);
   const users = useMemo(() => s.users.filter((u) => u.role === 'user'), [s.users]);
   const saved = s.doc.settings.defaultFreeCredits;
 
   // default credits: inline stepper, "Apply" only appears once the number changed
   const [def, setDef] = useState(saved);
   const dirty = def !== saved;
-  const saveDef = async () => { await s.patchDoc('settings', { defaultFreeCredits: clampAmount(def) }); toast(t('admin.crud.saved')); };
+  // The shared limit of the store refused a hand-out: say how many credits are really left to give.
+  const poolRefused = (error: unknown) => {
+    if (!(error instanceof BackendError) || error.code !== 'STORE_POOL_EXCEEDED') return false;
+    toast(t('sp.poolExceeded', { available: (error.body as { available?: number } | undefined)?.available ?? 0 }));
+    void refreshAdminSession();
+    return true;
+  };
+  const saveDef = async () => { try { await s.patchDoc('settings', { defaultFreeCredits: clampAmount(def) }); } catch (error) { if (poolRefused(error)) return; throw error; } void refreshAdminSession(); toast(t('admin.crud.saved')); };
   useLeaveGuard(dirty, saveDef, () => setDef(saved), { before: { defaultFreeCredits: saved }, after: { defaultFreeCredits: def } });
   useBackCheckpoint(dirty, () => router.back());
 
@@ -90,7 +102,8 @@ export default function Credits() {
     if (!picked || !ready) return;
     const n = clampAmount(amount);
     const g: Grant = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, userId: picked.id, name: nameOf(picked), amount: n, before: picked.credits, at: Date.now() };
-    await s.update('users', picked.id, { credits: picked.credits + n });
+    try { await s.update('users', picked.id, { credits: picked.credits + n }); } catch (error) { if (poolRefused(error)) return; throw error; }
+    void refreshAdminSession();
     addLog(g);
     setAmount(0);
     toastAction(t('cr.granted', { n, name: g.name }), { label: t('cr.undo'), run: () => { void undo(g); } });
@@ -196,6 +209,13 @@ export default function Credits() {
     </Card>
   );
 
+  // The limit of the store is shared by all its clients: how much is held, used and still free to hand out.
+  const poolCard = pool && pool.limit != null && poolState(pool) !== 'over' ? (
+    <Card testID="credits-pool" className="p-3">
+      <Txt className="text-muted text-[12px] leading-[18px]">{t('sp.poolShared', { limit: pool.limit, allocated: pool.allocated ?? 0, used: pool.used, available: pool.available ?? 0 })}</Txt>
+    </Card>
+  ) : null;
+
   const recent = log.slice(0, 8);
   const activityCard = (
     <Card className="p-3" style={{ gap: 4 }}>
@@ -222,6 +242,7 @@ export default function Credits() {
 
   return (
     <AdminPage title={t('admin.nav.credits')} max={980} audience="clients">
+      <View style={{ marginBottom: 12, gap: 12 }}><PoolWarning />{poolCard}</View>
       <View testID="credits-stats" className="flex-row mb-3" style={{ gap: 10 }}>
         <Stat id="credits-stat-users" icon="account-multiple-outline" value={users.length} label={t('cr.statUsers')} />
         <Stat id="credits-stat-month" icon="gift-outline" value={monthTotal(log)} label={t('cr.statMonth')} />

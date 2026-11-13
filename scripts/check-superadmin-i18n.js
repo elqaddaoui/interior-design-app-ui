@@ -72,7 +72,9 @@ test('Arabic and Darija rows are written in Arabic letters', () => {
 test('the menu uses the new names', () => {
   assert.ok(TEXTS['Client Stores'] && TEXTS['Clone Existing Store']);
   assert.match(shell, /label: 'Client Stores'/);
-  assert.match(shell, /label: 'Clone Existing Store'/);
+  // Cloning is a button inside Demos now, not a page of its own.
+  assert.doesNotMatch(shell, /label: 'Clone Existing Store'/);
+  assert.match(fs.readFileSync(path.join(root, 'src/app/super-admin/demos.tsx'), 'utf8'), /Clone Existing Store/);
   assert.doesNotMatch(shell, /label: 'Tenants'/);
   assert.doesNotMatch(shell, /label: 'Store themes'/);
 });

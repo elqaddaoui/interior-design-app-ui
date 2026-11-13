@@ -9,6 +9,7 @@ import { AdminPage } from '@/components/admin/AdminShell';
 import { AdminLoading } from '@/components/admin/AdminLoading';
 import { RankBars } from '@/components/admin/dashboard/Charts';
 import { QuickActions } from '@/components/admin/dashboard/QuickActions';
+import { PoolWarning } from '@/components/admin/PoolWarning';
 import { QuickView, type QV } from '@/components/admin/dashboard/QuickView';
 import { EV_ICON, useDashFormat } from '@/components/admin/dashboard/format';
 import { Delta, IconBtn, Initials, Kpi, Panel, Reveal, Seg } from '@/components/admin/dashboard/Kit';
@@ -117,6 +118,9 @@ export default function Dashboard() {
   return (
     <AdminPage title={title} max={1280}>
       <View style={{ gap: 16 }}>
+        {/* The store's credit limit is shared by its clients: warn the administrator when it is exceeded (or nearly) */}
+        <PoolWarning onPress={() => go('/admin/credits')} />
+
         {/* Hero: greeting + the one thing that needs attention */}
         <Reveal i={0}>
           {pending > 0 ? (

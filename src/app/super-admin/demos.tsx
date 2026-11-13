@@ -1,28 +1,28 @@
 import React, { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { parseLimit, sa, saMessage } from '@/superadmin/api';
+import { sa, saMessage } from '@/superadmin/api';
+import { CloneStoresSheet } from '@/superadmin/CloneStores';
 import { Icon, IconBtn } from '@/superadmin/icons';
 import { LivePreviews, ViewSwitch, type ViewMode } from '@/superadmin/LivePreviews';
 import { ThemePreview } from '@/superadmin/ThemePreview';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
 import type { Assignment, Demo, NewAdmin, StoreTheme } from '@/superadmin/types';
-import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Meter, Pair, Row, Sheet, T, ago, openAdminSession, openUrl, statusTone, useLoad } from '@/superadmin/ui';
+import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Row, Sheet, T, ago, openAdminSession, openUrl, statusTone, useLoad } from '@/superadmin/ui';
 
-/** A demo is a template store. Optional: start from a saved store theme (look only, no client data) and set its credit limit. */
+/** A demo is a template store. Optional: start from a saved store theme (look only, no client data). A demo has no credit limit: it uses no API until its "Use API" switch is on. */
 function CreateDemo({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const themes = useLoad(() => sa<StoreTheme[]>('/themes'));
   const [name, setName] = useState('');
   const [themeId, setThemeId] = useState('');
-  const [limit, setLimit] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [made, setMade] = useState<{ demo: Demo; admin: NewAdmin } | null>(null);
   const [opening, setOpening] = useState('');
   const submit = async () => {
     setBusy(true); setError(null);
-    try { setMade(await sa('/demos', { method: 'POST', body: { name, ...(themeId ? { themeId } : {}), creditLimit: parseLimit(limit) } })); onDone(); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
+    try { setMade(await sa('/demos', { method: 'POST', body: { name, ...(themeId ? { themeId } : {}) } })); onDone(); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
   };
   return (
     <Sheet title={tr('New demo')} onClose={onClose} testID="sa-create-demo" wide="xl">
@@ -36,10 +36,7 @@ function CreateDemo({ onClose, onDone }: { onClose: () => void; onDone: () => vo
       ) : (
         <View>
           <Hint>{tr('A demo is a template store. Choose a look to start from, or none for the standard sample store. Stores created from it get their own independent copy.')}</Hint>
-          <Pair>
-            <Field label={tr('Demo name')} value={name} onChangeText={setName} autoCapitalize="words" {...({ testID: 'sa-d-name' } as object)} />
-            <Field label={tr('Credit limit (empty = unlimited)')} value={limit} onChangeText={v => setLimit(v.replace(/[^0-9]/g, ''))} keyboardType="number-pad" placeholder={tr('Unlimited')} {...({ testID: 'sa-d-limit' } as object)} />
-          </Pair>
+          <Field label={tr('Demo name')} value={name} onChangeText={setName} autoCapitalize="words" {...({ testID: 'sa-d-name' } as object)} />
           <T size="xs" weight="bold" color={SA.color.muted} style={{ marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>{tr('Theme')}</T>
           {themes.loading && !themes.data ? <Loading /> : (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.md, marginBottom: SA.space.lg }}>
@@ -47,7 +44,7 @@ function CreateDemo({ onClose, onDone }: { onClose: () => void; onDone: () => vo
               {(themes.data || []).map(th => <ThemeChoice key={th.id} testID="sa-d-theme" label={th.name} sub={th.sourceName ? tr('from {name}', { name: th.sourceName }) : tr('saved theme')} theme={th} on={themeId === th.id} onPress={() => setThemeId(th.id)} />)}
             </View>
           )}
-          {!themes.loading && !(themes.data || []).length ? <Hint>{tr('No saved theme yet. Add some in Clone Existing Store to clone a store look.')}</Hint> : null}
+          {!themes.loading && !(themes.data || []).length ? <Hint>{tr('No saved theme yet. Use the Clone Existing Store button to copy a store look.')}</Hint> : null}
           <ErrorLine error={error || themes.error} />
           <Btn testID="sa-d-create" icon="plus" label={tr('Create demo')} onPress={submit} busy={busy} disabled={name.trim().length < 2} />
         </View>
@@ -67,6 +64,23 @@ function ThemeChoice({ label, sub, theme, on, onPress, testID }: { label: string
         {on ? <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: SA.color.accent, alignItems: 'center', justifyContent: 'center' }}><Icon name="check" size={14} color={SA.color.onAccent} /></View> : null}
       </Row>
     </Pressable>
+  );
+}
+
+/** The demo's "Use API" switch. A demo calls no API at all until it is on; it switches itself off after a quiet period (and must be turned on again by hand). */
+function AiSwitch({ demo, onChanged, onProblem }: { demo: Demo; onChanged: () => void; onProblem: (m: unknown) => void }) {
+  const [busy, setBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/purity -- a countdown label; the list reloads every few seconds
+  const left = demo.aiUntil ? Math.max(0, Math.ceil((demo.aiUntil - Date.now()) / 60000)) : 0;
+  const toggle = async () => {
+    setBusy(true); onProblem(null);
+    try { await sa(`/demos/${demo.id}/ai`, { method: 'POST', body: { enabled: !demo.aiOn } }); onChanged(); } catch (e) { onProblem(saMessage(e)); } finally { setBusy(false); }
+  };
+  return (
+    <View testID="sa-demo-ai"><Row style={{ gap: SA.space.sm }}>
+      <Badge label={demo.aiPaused ? tr('API paused') : demo.aiOn ? tr('API on · {n} min left', { n: left }) : tr('API off')} tone={demo.aiPaused ? 'danger' : demo.aiOn ? 'ok' : 'muted'} />
+      <Btn testID="sa-demo-ai-toggle" small kind={demo.aiOn ? 'ghost' : 'solid'} icon={demo.aiOn ? 'pauseCircleOutline' : 'playCircleOutline'} label={demo.aiOn ? tr('Turn API off') : tr('Use API')} busy={busy} onPress={toggle} />
+    </Row></View>
   );
 }
 
@@ -100,9 +114,10 @@ function Remove({ demo, onClose, onDone }: { demo: Demo; onClose: () => void; on
 
 export default function Demos() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ new?: string }>();
+  const params = useLocalSearchParams<{ new?: string; clone?: string }>();
   const { data, error, loading, reload } = useLoad(() => sa<Demo[]>('/demos'));
   const [creating, setCreating] = useState(params.new === '1'); // opened by a link such as /super-admin/demos?new=1
+  const [cloning, setCloning] = useState(params.clone === '1'); // ... or /super-admin/demos?clone=1 (the old Clone Existing Store page redirects here)
   const [list, setList] = useState<Demo | null>(null);
   const [remove, setRemove] = useState<Demo | null>(null);
   const [problem, setProblem] = useState<unknown>(null);
@@ -116,11 +131,11 @@ export default function Demos() {
   return (
     <View>
       <Heading title={tr('Demos')} hint={tr('Template stores. Customize one in its admin panel, then create as many independent stores from it as you like.')}
-        right={<Row><ViewSwitch value={view} onChange={setView} testID="sa-demo-view" /><Btn testID="sa-new-demo" icon="plus" label={tr('New demo')} onPress={() => setCreating(true)} /></Row>} />
+        right={<Row><ViewSwitch value={view} onChange={setView} testID="sa-demo-view" /><Btn testID="sa-clone-store" kind="ghost" icon="contentCopyClone" label={tr('Clone Existing Store')} onPress={() => setCloning(true)} /><Btn testID="sa-new-demo" icon="plus" label={tr('New demo')} onPress={() => setCreating(true)} /></Row>} />
       <ErrorLine error={error || problem} />
       {loading && !data ? <Loading /> : !data?.length ? <Empty>{tr('No demo yet. Create one to start stores faster.')}</Empty> : view === 'live' ? (
         <LivePreviews testID="sa-demo-live" items={data.map(d => ({
-          id: d.id, name: d.name, path: d.path, badge: <Badge label={tr(d.status)} tone={statusTone(d.status)} />, sub: d.creditLimit == null ? tr('{used} used · unlimited', { used: d.creditsUsed }) : tr('{used} / {limit} credits', { used: d.creditsUsed, limit: d.creditLimit }),
+          id: d.id, name: d.name, path: d.path, badge: <Badge label={tr(d.status)} tone={statusTone(d.status)} />, sub: d.aiPaused ? tr('API paused') : d.aiOn ? tr('API on') : tr('API off'),
           actions: <><IconBtn icon="openInNew" label={tr('Open {name} full size', { name: d.name })} onPress={() => openUrl(d.path)} /><IconBtn icon="brush" label={tr('Customize {name}', { name: d.name })} tone="accent" onPress={() => { void customize(d); }} /></>,
         }))} />
       ) : data.map(d => (
@@ -128,7 +143,7 @@ export default function Demos() {
           sub={`${d.path} · ${tr(d.assignments === 1 ? '{n} store' : '{n} stores', { n: d.assignments })}`}
           right={
             <View style={{ gap: SA.space.md, alignItems: 'flex-start' }}>
-              <View style={{ minWidth: 150, alignSelf: 'stretch' }}><Meter used={d.creditsUsed} limit={d.creditLimit} testID="sa-demo-credits" /></View>
+              <AiSwitch demo={d} onChanged={reload} onProblem={setProblem} />
               <Row>
                 <Btn testID="sa-demo-assign" label={tr('Create store')} small icon="storePlusOutline" onPress={() => router.push(`/super-admin/tenants?demo=${encodeURIComponent(d.id)}`)} />
                 <Btn testID="sa-demo-customize" label={tr('Customize')} small kind="ghost" icon="brush" onPress={() => { void customize(d); }} />
@@ -141,6 +156,7 @@ export default function Demos() {
           } />
       ))}
       {creating ? <CreateDemo onClose={() => setCreating(false)} onDone={reload} /> : null}
+      {cloning ? <CloneStoresSheet onClose={() => setCloning(false)} /> : null}
       {list ? <Instances demo={list} onClose={() => setList(null)} /> : null}
       {remove ? <Remove demo={remove} onClose={() => setRemove(null)} onDone={reload} /> : null}
     </View>
