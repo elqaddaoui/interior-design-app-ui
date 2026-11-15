@@ -302,6 +302,7 @@ const dar: Dict = {
       theme: 'الثيم',
       interface: 'الواجهة والمينيو',
       performance: 'الأداء',
+      backup: 'النسخ الاحتياطي',
       studio: 'ستوديو الحركة',
       layouts: 'تخطيطات الصفحات',
       settingsMap: 'خريطة الإعدادات',

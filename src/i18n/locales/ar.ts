@@ -302,6 +302,7 @@ const ar: Dict = {
       theme: 'السمة',
       interface: 'الواجهة والقوائم',
       performance: 'الأداء',
+      backup: 'النسخ الاحتياطي',
       studio: 'استوديو الحركة',
       layouts: 'تخطيطات الصفحات',
       settingsMap: 'خريطة الإعدادات',

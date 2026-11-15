@@ -12,6 +12,8 @@ const CONFIGURED = configured === '/api' ? '' : configured;
 // A tenant served under the platform host (app.com/acme) reaches ITS API at /acme/api: the base is only known once the page runs, so it is read per call.
 const apiBase = () => (CONFIGURED || (Platform.OS === 'web' ? `${tenantBase()}/api` : '')).replace(/\/+$/, '');
 const BASE = apiBase();
+/** Absolute-path URL of an API route for the browser itself (downloads open it directly: the session cookie authenticates, nothing is buffered in JS). */
+export const apiUrl = (path: string) => `${apiBase()}${path}`;
 export const backendEnabled = process.env.EXPO_PUBLIC_BACKEND_MODE !== 'demo' && !!BASE;
 /** Native apps address one tenant with X-Dwira-Tenant (EXPO_PUBLIC_TENANT, set per white-label build); unset = the default tenant. */
 const NATIVE_TENANT = process.env.EXPO_PUBLIC_TENANT?.trim() || '';

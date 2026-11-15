@@ -14,6 +14,23 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 const clean = (value, max) => Array.from(String(value ?? '').replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '').trim()).slice(0, max).join('');
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@.]{2,24}$/;
 const MAX_CREDITS = 1000000;
+/** Permissions an administrator can be denied (by the super admin). Allowed unless explicitly false. */
+const PERMISSIONS = ['storeApi', 'backup'];
+const permissionsOf = raw => {
+  let stored = {};
+  try { stored = JSON.parse(raw || '{}') || {}; } catch { /* corrupt value = nothing denied */ }
+  return Object.fromEntries(PERMISSIONS.map(key => [key, stored[key] !== false]));
+};
+/** Validates a permission patch ({ storeApi?: boolean, backup?: boolean }) and merges it into the stored JSON. */
+function mergePermissions(raw, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw fail(400, 'INVALID_PERMISSIONS');
+  const next = { ...permissionsOf(raw) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (!PERMISSIONS.includes(key) || typeof value !== 'boolean') throw fail(400, 'INVALID_PERMISSIONS');
+    next[key] = value;
+  }
+  return JSON.stringify(Object.fromEntries(Object.entries(next).filter(([, allowed]) => !allowed)));
+}
 const WEAK = new Set(['admin', 'administrator', 'password', 'password1', '12345678', '123456789', '1234567890', 'qwertyui', 'azertyui', 'dwira123', 'admin123', 'admin1234', 'motdepasse', '00000000', '11111111']);
 
 function passwordMatches(password, encoded) {
@@ -55,8 +72,11 @@ function createAdmins(db, { env = process.env, sync, media } = {}) {
     passwordChangedAt: row.pw_changed_at == null ? 0 : Number(row.pw_changed_at),
     // True while the built-in admin / admin password is still the one that opens this account: the panel nags about it.
     defaultPassword: defaultAllowed() && row.admin_id === 'admin' && !row.pw_hash,
+    permissions: permissionsOf(row.permissions),
   });
   async function get(adminId) { return view(await ensure(adminId)); }
+  /** What this administrator may do ({ storeApi, backup }). A missing account row counts as full access (nothing was ever denied). */
+  async function permissions(adminId) { return permissionsOf((await rowOf(adminId))?.permissions); }
 
   /** The administrator identity for these credentials, or null. A stored password replaces the built-in / environment ones. */
   async function verify(identifier, password) {
@@ -138,7 +158,7 @@ function createAdmins(db, { env = process.env, sync, media } = {}) {
     await db.query('DELETE FROM admin_sessions WHERE tenant_id=:tenant AND admin_id=$1 AND token_hash LIKE $2 AND token_hash<>$3', [adminId, `${id}%`, currentHash]);
   }
 
-  return { get, verify, touchLogin, update, changePassword, sessions, revoke, revokeOthers };
+  return { get, permissions, verify, touchLogin, update, changePassword, sessions, revoke, revokeOthers };
 }
 
-module.exports = { createAdmins, passwordMatches, hashPassword, passwordProblem };
+module.exports = { createAdmins, passwordMatches, hashPassword, passwordProblem, permissionsOf, mergePermissions, PERMISSIONS };

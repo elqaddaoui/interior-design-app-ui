@@ -4,7 +4,10 @@ import { api, backendEnabled } from '@/lib/backend';
 /** The signed-in administrator's own account (see server/admins.js). `credits: null` = unlimited. */
 export interface AdminProfile {
   id: string; username: string; name: string; email: string; phone: string; title: string; avatar: string;
-  credits: number | null; createdAt?: number; lastLoginAt?: number | null; passwordChangedAt?: number | null; defaultPassword?: boolean;
+  credits: number | null;
+  /** What the super admin allows this administrator (a missing key = allowed). storeApi: AI API settings and keys; backup: backup and restore. */
+  permissions?: { storeApi?: boolean; backup?: boolean };
+  createdAt?: number; lastLoginAt?: number | null; passwordChangedAt?: number | null; defaultPassword?: boolean;
 }
 export interface AdminDevice { id: string; current: boolean; createdAt?: number | null; lastSeen?: number | null; ua?: string }
 
@@ -39,3 +42,6 @@ export async function refreshProfile() {
 }
 /** Display name: the profile name, else the generic role label supplied by the caller. */
 export const adminDisplayName = (p: AdminProfile | null, fallback: string) => (p?.name || '').trim() || fallback;
+
+/** Allowed unless the server said so explicitly (an older server sends no permissions at all). */
+export const useCan = (permission: 'storeApi' | 'backup') => useAdminProfile((s) => s.profile?.permissions?.[permission] !== false);

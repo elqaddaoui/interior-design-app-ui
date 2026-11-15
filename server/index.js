@@ -15,6 +15,9 @@ const { cleanCampaign } = require('./campaigns');
 const knowledge = require('./assistant/knowledge');
 const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
+const { createBackupService } = require('./backup');
+const { route: backupRoute } = require('./backup/routes');
+const fsNode = require('node:fs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const DEFAULT_RESOLVED = pathname => ({ tenant: { id: 'default', slug: 'default', name: 'Default', kind: 'default', status: 'active' }, via: 'default', base: '', pathname, platform: true });
 /** The installable web app of a non-default tenant: its own name, and a scope / start_url under its prefix. */
@@ -36,6 +39,22 @@ async function readBody(req) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw fail(400, 'Invalid JSON'); }
 }
+/** Streams a finished backup archive (Range supported, never loaded in memory). */
+function sendDownload(req, res, { file, name, size, sha256 }) {
+  const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+  let start = 0, end = size - 1, status = 200;
+  const headers = { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${String(name).replace(/[^A-Za-z0-9._-]/g, '_')}"`, 'Cache-Control': 'private, no-store', 'Accept-Ranges': 'bytes', 'X-Backup-SHA256': sha256, 'X-Content-Type-Options': 'nosniff' };
+  if (range && (range[1] || range[2])) {
+    start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size || start > end) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end(); }
+    status = 206; headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+  }
+  res.writeHead(status, { ...headers, 'Content-Length': end - start + 1 });
+  if (req.method === 'HEAD') return res.end();
+  require('node:stream').pipeline(fsNode.createReadStream(file, { start, end }), res, () => {});
+}
+const ERROR_DETAILS = ['entry', 'table', 'destination', 'upstream', 'detected', 'expected', 'job', 'tenant'];
 function validateDemand(value) {
   const name = trim(value?.name, 120), whatsapp = phone(value?.whatsapp);
   if (name.length < 2 || !/^\+?\d{6,20}$/.test(whatsapp)) throw fail(400, 'Name and phone required');
@@ -113,6 +132,19 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
   const tenants = createTenants({ db, env, resolveTxt: dnsResolver });
   // Platform back office: the only code that touches the saas_* tables with the raw database (server/superadmin.js).
   const superAdmin = createSuperAdmin({ db: rawDb, env, bundles, tenants });
+  // Backup & restore (server/backup): one service for the store admin and the super admin. Not available on serverless hosts (no disk).
+  const backup = createBackupService({
+    db: rawDb, bundles, env, appRoot: env.BACKUP_APP_ROOT || path.join(__dirname, '..'),
+    tenantIds: async () => (await rawDb.query('SELECT id FROM saas_tenants ORDER BY id')).map(row => row.id),
+    // The database changed under the running process: forget every in-memory copy and make open apps refetch.
+    async onRestored(scope) {
+      const ids = scope.kind === 'platform' ? (await rawDb.query('SELECT id FROM saas_tenants')).map(row => row.id) : [scope.tenantId];
+      if (scope.kind === 'platform') await rawDb.query("INSERT INTO saas_tenants(id,slug,name,kind,status,created_at,updated_at) VALUES('default','default','Default','default','active',0,0) ON CONFLICT (id) DO NOTHING");
+      tenants.invalidate();
+      for (const id of [...new Set([...ids, ...bundles.loaded()])]) { bundles.drop(id); }
+      for (const id of ids) await bundles.get(id).sync.bump('content', 'requests', 'clients', 'chats', 'campaigns', 'credits').catch(() => {});
+    },
+  });
   const base = bundles.get('default'); // the original single-tenant app = the default tenant (also what `createBackend()` exposes to tests / scripts)
   const { notifier, clients, campaigns, chat, assistant } = base;
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
@@ -198,6 +230,20 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           const headers = { 'Content-Type': file.mime, ETag: etag, 'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable', ...(file.mime === 'image/svg+xml' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) };
           if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag, 'Cache-Control': headers['Cache-Control'] }); return res.end(); }
           if (req.method === 'HEAD') { res.writeHead(200, { ...headers, 'Content-Length': file.size ?? file.body.length }); return res.end(); }
+          // A file on the disk of the server (app-directory storage): streamed from the path, Range supported, never loaded whole.
+          if (file.path) {
+            headers['Accept-Ranges'] = 'bytes';
+            const total = file.size, rng = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+            let start = 0, end = total - 1, status = 200;
+            if (rng && (rng[1] || rng[2])) {
+              start = rng[1] ? Number(rng[1]) : Math.max(0, total - Number(rng[2]));
+              end = rng[1] && rng[2] ? Math.min(Number(rng[2]), total - 1) : total - 1;
+              if (start >= total || start > end) { res.writeHead(416, { 'Content-Range': `bytes */${total}` }); return res.end(); }
+              status = 206; headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+            }
+            res.writeHead(status, { ...headers, 'Content-Length': end - start + 1 });
+            return require('node:stream').pipeline(require('node:fs').createReadStream(file.path, { start, end }), res, () => {});
+          }
           // Audio/video players seek with Range requests (Safari refuses to play without them).
           headers['Accept-Ranges'] = 'bytes';
           const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
@@ -211,7 +257,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           }
           return sendBuffer(req, res, 200, headers, file.body);
         }
-        const bucketName = (url.pathname === '/api/admin/login' || url.pathname === '/api/super-admin/login') ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : 'api';
+        const bucketName = (url.pathname === '/api/admin/login' || url.pathname === '/api/super-admin/login') ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : /^\/api\/(?:admin|super-admin)\/(?:backup|tenants\/[a-z0-9_-]+\/backup)\//.test(url.pathname) ? 'backup' : 'api';
         const key = `${bundle.tenantId}:${address(req)}:${bucketName}`; // one tenant's traffic can never exhaust another's allowance
         const now = Date.now();
         if (buckets.size > 10000) for (const [id, bucket] of buckets) if (bucket.until < now) buckets.delete(id);
@@ -219,7 +265,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         if (bucket.until < now) { bucket.count = 0; bucket.until = now + 15 * 60000; }
         bucket.count++; buckets.set(key, bucket);
         // The AI chat spends a shared free quota: its own, much smaller allowance per address (CHAT_RATE_LIMIT per 15 minutes, default 90).
-        if (bucket.count > (bucketName === 'login' ? 20 : bucketName === 'sync' ? 20000 : bucketName === 'chat' ? Math.max(5, Math.min(2000, Number(env.CHAT_RATE_LIMIT) || 90)) : apiLimit)) throw fail(429, 'Too many requests');
+        if (bucket.count > (bucketName === 'login' ? 20 : bucketName === 'sync' ? 20000 : bucketName === 'backup' ? 20000 : bucketName === 'chat' ? Math.max(5, Math.min(2000, Number(env.CHAT_RATE_LIMIT) || 90)) : apiLimit)) throw fail(429, 'Too many requests');
 
         if (url.pathname === '/api/health' && req.method === 'GET') {
           // Never exposes secrets: only whether the database answers right now (one `SELECT 1`, 5 s at most).
@@ -239,6 +285,18 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
 
         // ---- Super admin (platform host only: guarded above, never under a slug or on a custom domain) ----
         if (url.pathname.startsWith('/api/super-admin/')) {
+          const sb = /^\/api\/super-admin\/(?:backup|tenants\/([a-z0-9_-]+)\/backup)(\/.*)$/.exec(url.pathname);
+          if (sb) {
+            const me = await superAdmin.authenticate(req);
+            if (!me) throw fail(401, 'Super admin login required');
+            // /backup/* = the whole platform (every store + platform tables + the app); /tenants/<id>/backup/* = one store's data and files.
+            if (sb[1] && !(await rawDb.query('SELECT 1 FROM saas_tenants WHERE id=$1', [sb[1]]))[0]) throw fail(404, 'NOT_FOUND');
+            const scope = sb[1] ? { kind: 'tenant', tenantId: sb[1], canApp: false, actor: me.email } : { kind: 'platform', canApp: true, actor: me.email };
+            const done = await backupRoute({ backup, scope, req, url, readBody, path: sb[2], audit: (action, detail) => superAdmin.audit(me.email, action, sb[1] || null, 'backup', detail) });
+            if (!done) throw fail(404, 'API route not found');
+            if (done.download) return sendDownload(req, res, done.download);
+            return json(done.status, done.data, { 'Cache-Control': 'private, no-store' });
+          }
           const result = await superAdmin.handle({ req, url, readBody, ip: address(req) });
           return json(result.status, result.data, { 'Cache-Control': 'private, no-store', ...(result.headers || {}) });
         }
@@ -250,7 +308,9 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         // admin panel request with ?a=1) pays for the session query, because only admins may see provider API keys.
         if (url.pathname === '/api/content' && req.method === 'GET') {
           const adminAsked = !!sessionToken || url.searchParams.has('a');
-          const admin = !!sessionToken && !!(await db.query('SELECT 1 FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
+          const adminRow = !!sessionToken && (await db.query('SELECT admin_id FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
+          // An administrator without the Store API permission gets the public copy of the content: it differs from the admin copy only by the provider keys.
+          const admin = !!adminRow && (await admins.permissions(adminRow.admin_id)).storeApi;
           // The ETag is the content version (one tiny sync_state read): an unchanged app gets a bodyless 304 and the database is never asked for the snapshot.
           const etag = await content.etag(admin);
           const matches = (req.headers['if-none-match'] || '').split(',').map(value => value.trim()).includes(etag);
@@ -269,6 +329,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         const session = sessionToken && (await db.query('SELECT token_hash,admin_id FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
         const adminId = session?.admin_id;
         const admin = () => { if (!session) throw fail(401, 'Admin login required'); };
+        /** Admin AND the given permission (set by the super admin per administrator; allowed unless explicitly denied). */
+        const allow = async permission => { admin(); if (!(await admins.permissions(adminId))[permission]) throw fail(403, 'PERMISSION_DENIED'); };
         const clientToken = req.headers['x-demand-token'];
         const clientHash = typeof clientToken === 'string' && /^[a-f0-9]{64}$/.test(clientToken) ? hash(clientToken) : null;
         const userCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_user='))?.slice(11);
@@ -507,16 +569,33 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
             throw error;
           }
         }
-        if (url.pathname === '/api/admin/ai/status' && req.method === 'GET') { admin(); return json(200, await imagegen.status()); }
-        if (url.pathname === '/api/admin/ai/keys' && req.method === 'PATCH') { admin(); return json(200, await imagegen.setKeys(await readBody(req))); }
+        if (url.pathname === '/api/admin/ai/status' && req.method === 'GET') { await allow('storeApi'); return json(200, await imagegen.status()); }
+        if (url.pathname === '/api/admin/ai/keys' && req.method === 'PATCH') { await allow('storeApi'); return json(200, await imagegen.setKeys(await readBody(req))); }
+        // Read-only health of the store's AI connection for administrators who may not see its settings: ONE word, nothing else
+        // (no provider names, no key state, no usage). Every administrator may ask.
+        if (url.pathname === '/api/admin/api-health' && req.method === 'GET') {
+          admin();
+          let working = false;
+          try { working = !!(await imagegen.status()).live && !(await superAdmin.platformInfo(resolved.tenant.id)).aiPaused; } catch { working = false; }
+          return json(200, { status: working ? 'working' : 'not_working' });
+        }
+        // ---- Backup & restore of THIS store (permission "backup"). The app itself can only be backed up / restored from the default (owner) store. ----
+        if (url.pathname.startsWith('/api/admin/backup/')) {
+          await allow('backup');
+          const scope = { kind: 'tenant', tenantId: bundle.tenantId, canApp: bundle.tenantId === 'default', adminId, actor: adminId };
+          const done = await backupRoute({ backup, scope, req, url, readBody, path: url.pathname.slice('/api/admin/backup'.length), audit: (action, detail) => superAdmin.audit(`${adminId}@${bundle.tenantId}`, action, bundle.tenantId, 'backup', detail) });
+          if (!done) throw fail(404, 'API route not found');
+          if (done.download) return sendDownload(req, res, done.download);
+          return json(done.status, done.data);
+        }
         // ---- Prompt cards: the admin decides the final prompt and pictures sent to the image model (per tool or for all tools). ----
         if (url.pathname === '/api/admin/prompt-rules' && req.method === 'GET') { admin(); return json(200, await imagegen.rulesInfo()); }
         if (url.pathname === '/api/admin/prompt-rules' && req.method === 'PUT') { admin(); return json(200, await imagegen.setRules(await readBody(req))); }
         if (url.pathname === '/api/admin/prompt-rules/preview' && req.method === 'POST') { admin(); return json(200, await imagegen.previewPrompt(await readBody(req))); }
-        if (url.pathname === '/api/admin/chat/status' && req.method === 'GET') { admin(); return json(200, await chat.status()); }
-        if (url.pathname === '/api/admin/chat/keys' && req.method === 'PATCH') { admin(); return json(200, await chat.setKeys(await readBody(req))); }
+        if (url.pathname === '/api/admin/chat/status' && req.method === 'GET') { await allow('storeApi'); return json(200, await chat.status()); }
+        if (url.pathname === '/api/admin/chat/keys' && req.method === 'PATCH') { await allow('storeApi'); return json(200, await chat.setKeys(await readBody(req))); }
         // Providers: free switches, the paid zone (position, providers, write-only keys).
-        if (url.pathname === '/api/admin/chat/config' && req.method === 'PUT') { admin(); return json(200, await chat.setConfig(await readBody(req))); }
+        if (url.pathname === '/api/admin/chat/config' && req.method === 'PUT') { await allow('storeApi'); return json(200, await chat.setConfig(await readBody(req))); }
         // Automations: the whole ordered list (order = priority) with usage counters; saved as a whole.
         if (url.pathname === '/api/admin/assistant/automations' && req.method === 'GET') { admin(); return json(200, await assistant.overview()); }
         if (url.pathname === '/api/admin/assistant/automations' && req.method === 'PUT') { admin(); return json(200, await assistant.saveList(await readBody(req))); }
@@ -545,6 +624,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         const contentItem = url.pathname.match(/^\/api\/admin\/content\/([A-Za-z]+)(?:\/([A-Za-z0-9_-]{1,100}))?$/);
         if (contentItem) {
           admin();
+          // AI models carry the provider key and the address it is sent to: only an administrator allowed to manage the Store API may change them.
+          if (contentItem[1] === 'models') await allow('storeApi');
           if (req.method === 'PUT' && contentItem[2]) return json(200, await content.putItem(contentItem[1], contentItem[2], await readBody(req)));
           if (req.method === 'DELETE' && !contentItem[2]) { await content.deleteItems(contentItem[1], (await readBody(req)).ids); return json(200, { ok: true }); }
           throw fail(405, 'Method not allowed');
@@ -806,11 +887,15 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         res.writeHead(suspended ? 503 : 404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(suspended ? 'This site is temporarily unavailable.' : 'Not found');
       }
-      if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error', ...(error.code === 'TENANT_SUSPENDED' || error.code === 'TENANT_NOT_FOUND' ? { code: error.code } : {}), ...(error.message === 'STORE_POOL_EXCEEDED' ? { available: error.available, requested: error.requested } : {}) }); else res.end();
+      if (!res.headersSent) json(error.status || 500, { error: error.status ? error.message : 'Server error', ...(error.code === 'TENANT_SUSPENDED' || error.code === 'TENANT_NOT_FOUND' ? { code: error.code } : {}), ...(error.message === 'STORE_POOL_EXCEEDED' ? { available: error.available, requested: error.requested } : {}), ...(error.status ? Object.fromEntries(ERROR_DETAILS.filter(key => error[key] !== undefined).map(key => [key, error[key]])) : {}) }); else res.end();
     }
   }
   const server = http.createServer(handle);
-  server.requestTimeout = 30000;
+  // A backup upload sends 4 MB chunks: the whole request (not the idle time) must fit this window, so a 0.3 Mbit/s line still gets through.
+  server.requestTimeout = 120000;
+  const sweeper = setInterval(() => { backup.sweep().catch(() => {}); }, 30 * 60000);
+  sweeper.unref();
+  backup.sweep().catch(() => {});
   /*
    * Background work of the long-running server: notification retries and the campaign scheduler. Every
    * BACKGROUND_INTERVAL_MS (default 30 s) while the app is in use (an API request in the last 5 minutes), every
@@ -837,8 +922,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
     })().catch(() => {});
   }, Math.min(activeEvery, 15000));
   timer.unref();
-  server.on('close', () => { closed = true; clearInterval(timer); void db.close(); });
-  return { server, handle, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
+  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(sweeper); void db.close(); });
+  return { server, handle, backup, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
 }
 module.exports = { createBackend, passwordMatches };
 // `node server/index.js` keeps working (README, browser checks): same startup as server/start.js.

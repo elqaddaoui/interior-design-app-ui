@@ -14,7 +14,7 @@
  * Nothing here stores or reads a style: the Super Admin's look is hard-coded in src/superadmin/tokens.ts.
  */
 const crypto = require('node:crypto');
-const { passwordMatches, hashPassword, passwordProblem } = require('./admins');
+const { passwordMatches, hashPassword, passwordProblem, permissionsOf, mergePermissions } = require('./admins');
 const { slugProblem } = require('../src/lib/reservedSlugs');
 const { TENANT_TABLES } = require('./db');
 const { keyFor, EXT } = require('./media');
@@ -340,7 +340,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
   }
 
   // ---------- Tenant administrators ----------
-  const adminView = row => ({ id: row.admin_id, username: row.admin_id.includes('@') ? '' : row.admin_id, name: row.name, email: row.email, phone: row.phone, title: row.title, disabled: !!row.disabled, hasPassword: !!row.pw_hash, lastLoginAt: num(row.last_login_at), createdAt: Number(row.created_at) });
+  const adminView = row => ({ id: row.admin_id, username: row.admin_id.includes('@') ? '' : row.admin_id, name: row.name, email: row.email, phone: row.phone, title: row.title, disabled: !!row.disabled, hasPassword: !!row.pw_hash, permissions: permissionsOf(row.permissions), lastLoginAt: num(row.last_login_at), createdAt: Number(row.created_at) });
   const getAdminRow = async (tenantId, adminId) => {
     const row = (await db.query('SELECT * FROM admin_accounts WHERE tenant_id=$1 AND admin_id=$2', [tenantId, String(adminId).toLowerCase()]))[0];
     if (!row) throw fail(404, 'NOT_FOUND');
@@ -366,6 +366,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
         next.email = email;
       }
       if (body.disabled !== undefined) next.disabled = body.disabled ? 1 : 0;
+      if (body.permissions !== undefined) next.permissions = mergePermissions(row.permissions, body.permissions);
       const keys = Object.keys(next);
       if (keys.length) {
         try { await db.query(`UPDATE admin_accounts SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')}, updated_at=$${keys.length + 1} WHERE tenant_id=$${keys.length + 2} AND admin_id=$${keys.length + 3}`, [...keys.map(k => next[k]), Date.now(), tenantId, row.admin_id]); }

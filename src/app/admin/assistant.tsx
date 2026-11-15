@@ -11,6 +11,8 @@ import { DemoMessages } from '@/components/admin/assistant/DemoMessages';
 import { Behaviour } from '@/components/admin/assistant/Behaviour';
 import { Knowledge } from '@/components/admin/assistant/Knowledge';
 import { Providers, useProviders } from '@/components/admin/assistant/Providers';
+import { ApiHealth } from '@/components/admin/ApiHealth';
+import { useCan } from '@/store/useAdminProfile';
 import { backendEnabled } from '@/lib/backend';
 import { router, useBackCheckpoint, useLeaveGuard } from '@/hooks/useLeaveGuard';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
@@ -46,7 +48,8 @@ function Flow() {
 export default function AssistantAdmin() {
   const { t } = useT();
   const doc = useDraftDoc('assistant');
-  const prov = useProviders();
+  const canStoreApi = useCan('storeApi');
+  const prov = useProviders(canStoreApi);
   const auto = useAutomations();
   const [tab, setTab] = useState<TabKey>('behaviour');
   const [saving, setSaving] = useState(false);
@@ -106,7 +109,7 @@ export default function AssistantAdmin() {
       <View className="mt-3">
         {current === 'behaviour' ? <Behaviour c={c} setC={doc.set} /> : null}
         {current === 'demo' ? <DemoMessages c={c} setC={doc.set} /> : null}
-        {current === 'providers' ? <Providers api={prov} totals={auto.info?.totals} /> : null}
+        {current === 'providers' ? (canStoreApi ? <Providers api={prov} totals={auto.info?.totals} /> : <ApiHealth />) : null}
         {current === 'knowledge' ? <Knowledge c={c} setC={doc.set} /> : null}
         {current === 'automations' ? <Automations api={auto} /> : null}
       </View>
