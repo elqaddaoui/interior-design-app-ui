@@ -301,6 +301,7 @@ const fr = {
       theme: 'Thème',
       interface: 'Interface & menus',
       performance: 'Performance',
+      backup: 'Sauvegarde',
       studio: 'Studio d’animation',
       layouts: 'Mises en page',
       settingsMap: 'Carte des réglages',

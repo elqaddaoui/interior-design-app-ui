@@ -37,6 +37,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { key: 'layouts', icon: 'view-dashboard-variant-outline', href: '/admin/layouts' },
     { key: 'studio', icon: 'motion-play-outline', href: '/admin/studio' },
     { key: 'performance', icon: 'speedometer', href: '/admin/performance' },
+    { key: 'backup', icon: 'backup-restore', href: '/admin/backup' },
   ] },
 ];
 export const ADMIN_NAV = ADMIN_GROUPS.flatMap((g) => g.items);

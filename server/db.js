@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS admin_accounts (
 -- (the e-mail uniqueness of admin accounts is per tenant, see SCHEMA_MT)
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS created_at BIGINT;
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS ua TEXT;
+-- Per-administrator permissions (JSON). A permission is DENIED only by an explicit false (storeApi:false), so every existing account keeps
+-- its full access. storeApi = may see / edit the AI API settings and keys of the store; backup = may back up and restore the store.
+ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS permissions TEXT NOT NULL DEFAULT '{}';
 `;
 
 /**
@@ -166,6 +169,41 @@ CREATE INDEX IF NOT EXISTS saas_alerts_at ON saas_alerts(at DESC);
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
 const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
+
+/**
+ * What a backup holds (server/backup/dump.js reads this; it lives here because this file owns the schema). One entry per table, parents before
+ * children (foreign keys). `pk` = the key columns used to page through the table.
+ * `omit` columns are never exported. `keep` columns (secrets, and the access rights of an account) are never taken from a backup: a restore keeps
+ * the value the row has now, or the column default for a row that did not exist. `secret` columns also feed the leak guard of the archive writer.
+ * NOT exported at all: sessions (user_sessions, admin_sessions, platform sessions), push subscriptions, the outbox, sync counters, one-time
+ * handoff codes and the platform owner's account. Those are either secrets or state that must be rebuilt.
+ */
+const BACKUP_TABLES = [
+  { table: 'clients', pk: ['id'] },
+  { table: 'claims', pk: ['id'] },
+  { table: 'space', pk: ['id'] },
+  { table: 'requests', pk: ['id'] },
+  { table: 'settings', pk: ['key'] },
+  { table: 'content_items', pk: ['coll', 'id'] },
+  { table: 'content_docs', pk: ['name'] },
+  { table: 'admin_prefs', pk: ['admin_id'] },
+  { table: 'guest_chats', pk: ['id'] },
+  { table: 'campaigns', pk: ['id'] },
+  { table: 'campaign_deliveries', pk: ['id'] },
+  { table: 'admin_accounts', pk: ['admin_id'], omit: ['pw_hash'], keep: ['pw_hash', 'permissions', 'disabled'], secret: ['pw_hash'] },
+  { table: 'media', pk: ['id'], omit: ['body', 'data'], media: true },
+  { table: 'saas_tenants', pk: ['id'], platform: true },
+  { table: 'saas_domains', pk: ['domain'], platform: true },
+  { table: 'saas_demos', pk: ['id'], platform: true },
+  { table: 'saas_assignments', pk: ['id'], platform: true },
+  { table: 'saas_themes', pk: ['id'], platform: true },
+  { table: 'saas_audit', pk: ['id'], platform: true, preserve: true },
+  { table: 'saas_usage', pk: ['bucket', 'tenant_id', 'kind', 'op', 'provider', 'mode'], platform: true },
+  { table: 'saas_alerts', pk: ['id'], platform: true },
+  { table: 'saas_apis', pk: ['id'], platform: true, omit: ['api_key'], keep: ['api_key'], secret: ['api_key'] },
+];
+/** settings rows that hold secrets (provider keys, push private key): never exported, never overwritten by a restore. */
+const SECRET_SETTINGS = ['image_keys', 'chat_keys', 'chat_paid_keys', 'vapid'];
 
 const isLocal = url => /@(localhost|127\.0\.0\.1)[:/]/.test(url);
 /** Pool size: 3 per serverless instance (many instances), 5 for the single long-running server; DB_POOL_MAX (1-20) overrides. */
@@ -349,4 +387,4 @@ function createDb(env = process.env) {
     info: async () => (await open()).kind,
   };
 }
-module.exports = { createDb, connectionString, ensureSchema, SCHEMA, SCHEMA_MT, TENANT_TABLES, PLATFORM_TABLES };
+module.exports = { createDb, connectionString, ensureSchema, SCHEMA, SCHEMA_MT, SCHEMA_VERSION, TENANT_TABLES, PLATFORM_TABLES, BACKUP_TABLES, SECRET_SETTINGS };

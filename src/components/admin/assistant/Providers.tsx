@@ -15,13 +15,13 @@ import { toast } from '@/store/useToast';
 import { MAX_PAID, canEnable, clone, configBody, configDirty, configOf, newPaid, orderedChain, paidErrors, type AutomationsInfo, type ChatStatus, type PaidDraft, type ProvConfig } from '@/lib/assistantAdmin';
 
 /** Provider status (read from the server) and the owner's draft of the config; saved as a whole by the page's save bar. */
-export function useProviders() {
+export function useProviders(enabled = true) {
   const [status, setStatus] = useState<ChatStatus | null>(null);
   const [saved, setSaved] = useState<ProvConfig | null>(null);
   const [cfg, setCfg] = useState<ProvConfig | null>(null);
   const [failed, setFailed] = useState(false);
   const load = useCallback(async (keepDraft = false) => {
-    if (!backendEnabled) return;
+    if (!backendEnabled || !enabled) return;
     try {
       const s = await api<ChatStatus>('/admin/chat/status');
       setStatus(s); setFailed(false);
@@ -29,7 +29,7 @@ export function useProviders() {
       setSaved(next);
       if (!keepDraft) setCfg(clone(next));
     } catch { setFailed(true); }
-  }, []);
+  }, [enabled]);
   useEffect(() => { load(); }, [load]);
   const dirty = !!cfg && !!saved && configDirty(cfg, saved);
   const invalid = !!cfg && cfg.paid.some((p) => paidErrors(p).length > 0);

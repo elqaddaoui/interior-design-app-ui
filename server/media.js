@@ -106,6 +106,11 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
       const out = await connection().send(new (s3().GetObjectCommand)({ Bucket: bucket, Key: key, Range: `bytes=0-${length - 1}` }));
       return Buffer.from(await out.Body.transformToByteArray());
     },
+    /** The object as a Node stream (backups read every file this way: one file in memory at a time at most). */
+    async stream(key) {
+      const out = await connection().send(new (s3().GetObjectCommand)({ Bucket: bucket, Key: key }));
+      return out.Body;
+    },
     async remove(key) { await connection().send(new (s3().DeleteObjectCommand)({ Bucket: bucket, Key: key })); },
     /** Presigned PUT: the type and the exact length are part of the signature, so the client cannot change them. */
     presignPut(key, mime, size) {
@@ -115,11 +120,52 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
 }
 
 /**
+ * "App directory" storage: files on the disk of the server (MEDIA_DIR, default server/data/media), same interface as the R2 adapter
+ * (keys are the same `media/<name>` / `t/<tenant>/media/<name>`). Only for hosts with a persistent disk (VPS, Hostinger): serverless
+ * disks are wiped. Served through /api/media like database files (there is no public URL).
+ */
+function createFsStorage(env = process.env) {
+  const fs = require('node:fs'), nodePath = require('node:path');
+  const root = nodePath.resolve(String(env.MEDIA_DIR || '').trim() || nodePath.join(__dirname, 'data', 'media'));
+  const SAFE_KEY = /^(?:media|t\/[a-z0-9][a-z0-9_-]{0,62}\/media)\/[a-f0-9]{32}\.[a-z0-9]+$/;
+  const file = key => { if (!SAFE_KEY.test(String(key))) throw fail(400, 'INVALID_MEDIA_KEY'); return nodePath.join(root, ...key.split('/')); };
+  return {
+    kind: 'fs', root, publicUrl: null, file,
+    async put(key, body) {
+      const target = file(key);
+      await fs.promises.mkdir(nodePath.dirname(target), { recursive: true, mode: 0o750 });
+      const temp = `${target}.${process.pid}.tmp`;
+      await fs.promises.writeFile(temp, body);
+      await fs.promises.rename(temp, target);
+    },
+    async putStream(key, source) {
+      const target = file(key);
+      await fs.promises.mkdir(nodePath.dirname(target), { recursive: true, mode: 0o750 });
+      const temp = `${target}.${process.pid}.tmp`;
+      try { await require('node:stream/promises').pipeline(source, fs.createWriteStream(temp)); await fs.promises.rename(temp, target); }
+      catch (error) { await fs.promises.rm(temp, { force: true }); throw error; }
+    },
+    async head(key) { try { const st = await fs.promises.stat(file(key)); return { size: st.size, mime: '' }; } catch (error) { if (error.code === 'ENOENT') return null; throw error; } },
+    get: key => fs.promises.readFile(file(key)),
+    async getRange(key, length) { const handle = await fs.promises.open(file(key), 'r'); try { const buffer = Buffer.alloc(length); const { bytesRead } = await handle.read(buffer, 0, length, 0); return buffer.subarray(0, bytesRead); } finally { await handle.close(); } },
+    stream: async key => fs.createReadStream(file(key)),
+    remove: async key => { await fs.promises.rm(file(key), { force: true }); },
+    /** Writable? (the backup screen reports it before offering this target) */
+    async writable() { try { await fs.promises.mkdir(root, { recursive: true, mode: 0o750 }); await fs.promises.access(root, fs.constants.W_OK); return true; } catch { return false; } },
+  };
+}
+
+/**
  * @param db       the database (metadata rows; bytes too, only without R2)
  * @param options  env, storage (R2 adapter or null = database fallback), download (external fetcher), dryRun (compute URLs, write nothing)
  */
-function createMedia(db, { env = process.env, storage = createR2Storage(env), download = downloadRemote, dryRun = false } = {}) {
+function createMedia(db, { env = process.env, storage = createR2Storage(env) || (env.MEDIA_STORAGE === 'app' || String(env.MEDIA_DIR || '').trim() ? createFsStorage(env) : null), download = downloadRemote, dryRun = false, r2, fsStorage } = {}) {
   const limits = limitsOf(env);
+  // Every kind of file the database can point to stays readable whichever storage is the primary one (a restore may move files to another).
+  const adapters = {
+    r2: storage?.kind === 'r2' ? storage : r2 !== undefined ? r2 : createR2Storage(env),
+    fs: storage?.kind === 'fs' ? storage : fsStorage !== undefined ? fsStorage : createFsStorage(env),
+  };
   const keyOf = keyFor(db.tenantId);
   const saved = new Set();
   const remoteCache = new Map(); // url -> Promise<media URL>: an external image is downloaded once per process
@@ -153,9 +199,9 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     if (dryRun || saved.has(id)) return PREFIX + name;
     const existing = (await db.query('SELECT storage FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
     if (storage) {
-      if (existing?.storage !== 'r2') {
+      if (existing?.storage !== storage.kind) {
         await storage.put(keyOf(name), body, mime);
-        await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) VALUES(:tenant,$1,$2,'',NULL,$3,'r2',$4) ON CONFLICT (tenant_id,id) DO UPDATE SET storage='r2', size=EXCLUDED.size", [id, mime, body.length, Date.now()]);
+        await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) VALUES(:tenant,$1,$2,'',NULL,$3,$5,$4) ON CONFLICT (tenant_id,id) DO UPDATE SET storage=EXCLUDED.storage, size=EXCLUDED.size", [id, mime, body.length, Date.now(), storage.kind]);
         meta.delete(id);
         stats.stored++;
       }
@@ -226,9 +272,10 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
       const file = await readMedia(name);
       if (!file) throw fail(404, 'NOT_FOUND');
       if (file.redirect) {
-        if (!storage || !storage.get) throw fail(502, 'MEDIA_UNREADABLE');
-        return { body: await storage.get(keyOf(name)), mime: file.mime };
+        if (!adapters.r2 || !adapters.r2.get) throw fail(502, 'MEDIA_UNREADABLE');
+        return { body: await adapters.r2.get(keyOf(name)), mime: file.mime };
       }
+      if (file.path) return { body: await require('node:fs').promises.readFile(file.path), mime: file.mime };
       return { body: file.body, mime: file.mime };
     }
     const file = await download(text, { kind: 'image', maxBytes: Math.min(limits.image, 10 * 1024 * 1024) });
@@ -294,13 +341,19 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
       const row = (await db.query('SELECT mime,storage,size FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
       if (!row) return null;
       info = { mime: row.mime, storage: row.storage, size: row.size == null ? null : Number(row.size) };
-      if (info.storage === 'r2' || info.storage === 'db') { // 'pending' rows change: never remembered
+      if (info.storage === 'r2' || info.storage === 'db' || info.storage === 'fs') { // 'pending' rows change: never remembered
         if (meta.size >= 5000) meta.delete(meta.keys().next().value);
         meta.set(id, info);
       }
     }
     if (MIME[match[2]] !== info.mime) return null;
-    if (info.storage === 'r2') return storage ? { redirect: storage.publicUrl(keyOf(match[0])), mime: info.mime } : null;
+    if (info.storage === 'r2') return adapters.r2 ? { redirect: adapters.r2.publicUrl(keyOf(match[0])), mime: info.mime } : null;
+    // A file on the disk of the server: served from the path (never loaded whole), with Range support in the route.
+    if (info.storage === 'fs') {
+      const path = adapters.fs.file(keyOf(match[0]));
+      const st = await require('node:fs').promises.stat(path).catch(() => null);
+      return st ? { mime: info.mime, size: st.size, path } : null;
+    }
     if (info.storage !== 'db') return null; // pending direct upload
     if (head) return { mime: info.mime, body: Buffer.alloc(0), size: info.size };
     const cached = bodies.get(id);
@@ -317,7 +370,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
 
   /** Step 1 of a direct upload (admin only, checked by the caller). The server picks the key; type and size are signed. */
   async function presignUpload({ contentType, size }) {
-    if (!storage) throw fail(503, 'R2_NOT_CONFIGURED');
+    if (storage?.kind !== 'r2') throw fail(503, 'R2_NOT_CONFIGURED');
     const mime = String(contentType || '').toLowerCase();
     const kind = mime === 'image/svg+xml' ? '' : kindOf(mime);
     if (!kind) throw fail(400, 'UNSUPPORTED_MEDIA_TYPE');
@@ -331,7 +384,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
 
   /** Step 2: verifies what actually arrived in R2 (size, type, magic bytes) and publishes it. */
   async function completeUpload(id) {
-    if (!storage) throw fail(503, 'R2_NOT_CONFIGURED');
+    if (storage?.kind !== 'r2') throw fail(503, 'R2_NOT_CONFIGURED');
     if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) throw fail(400, 'INVALID_ID');
     const row = (await db.query('SELECT mime,size,storage,created_at FROM media WHERE tenant_id=:tenant AND id=$1', [id]))[0];
     if (!row) throw fail(404, 'NOT_FOUND');
@@ -353,7 +406,7 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
    * The database copy is left untouched (nothing is ever deleted).
    */
   async function moveRowToR2(row) {
-    if (!storage) throw fail(503, 'R2_NOT_CONFIGURED');
+    if (storage?.kind !== 'r2') throw fail(503, 'R2_NOT_CONFIGURED');
     const body = row.body ? Buffer.from(row.body) : Buffer.from(row.data || '', 'base64');
     if (!body.length || !EXT[row.mime]) return false;
     const name = `${row.id}.${EXT[row.mime]}`;
@@ -365,7 +418,44 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env), do
     return true;
   }
 
-  return { storeMedia, storeRaw, rawLimit, readMedia, fetchBytes, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, stats, mode: storage ? 'r2' : 'database' };
+  /**
+   * Backup / restore access (server/backup). Reads every file of THIS tenant from wherever its row says it lives, and writes a file to the
+   * storage the restore chose ('r2' | 'app'). Bytes travel as streams, one file at a time.
+   */
+  const backup = {
+    adapters,
+    keyOf,
+    nameOf: row => `${row.id}.${EXT[row.mime]}`,
+    /** Settled files only (a pending direct upload has no bytes yet). */
+    async list() {
+      return (await db.query("SELECT id,mime,size,storage FROM media WHERE tenant_id=:tenant AND storage<>'pending' ORDER BY id")).map(row => ({ id: row.id, mime: row.mime, size: row.size == null ? null : Number(row.size), storage: row.storage }));
+    },
+    /** A readable stream of the file, or throws (missing object, unknown storage). */
+    async open(row) {
+      const name = `${row.id}.${EXT[row.mime]}`;
+      if (!EXT[row.mime]) throw fail(400, 'UNSUPPORTED_MEDIA');
+      if (row.storage === 'r2') { if (!adapters.r2) throw fail(503, 'R2_NOT_CONFIGURED'); return adapters.r2.stream(keyOf(name)); }
+      if (row.storage === 'fs') return adapters.fs.stream(keyOf(name));
+      const stored = (await db.query('SELECT data,body FROM media WHERE tenant_id=:tenant AND id=$1', [row.id]))[0];
+      const body = stored?.body ? Buffer.from(stored.body) : stored?.data ? Buffer.from(stored.data, 'base64') : null;
+      if (!body) throw fail(404, 'NOT_FOUND');
+      return require('node:stream').Readable.from([body]);
+    },
+    /** target: 'r2' | 'app'. Stores the bytes, then points the row at them. Returns false when the target is unavailable. */
+    async restore({ id, mime }, stream, size, target) {
+      const name = `${id}.${EXT[mime]}`;
+      if (!EXT[mime]) throw fail(400, 'UNSUPPORTED_MEDIA');
+      const kind = target === 'r2' ? 'r2' : 'fs';
+      const adapter = adapters[kind];
+      if (!adapter) throw fail(503, 'R2_NOT_CONFIGURED');
+      if (kind === 'fs') await adapter.putStream(keyOf(name), stream);
+      else { const chunks = []; for await (const chunk of stream) chunks.push(chunk); await adapter.put(keyOf(name), Buffer.concat(chunks), mime); }
+      await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) VALUES(:tenant,$1,$2,'',NULL,$3,$4,$5) ON CONFLICT (tenant_id,id) DO UPDATE SET mime=EXCLUDED.mime, data='', body=NULL, size=EXCLUDED.size, storage=EXCLUDED.storage", [id, mime, size, kind, Date.now()]);
+      meta.delete(id); bodies.delete(id);
+    },
+  };
+
+  return { storeMedia, storeRaw, rawLimit, readMedia, fetchBytes, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, backup, stats, mode: storage ? storage.kind : 'database' };
 }
 
-module.exports = { keyFor, createMedia, createR2Storage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };
+module.exports = { keyFor, createMedia, createR2Storage, createFsStorage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };
