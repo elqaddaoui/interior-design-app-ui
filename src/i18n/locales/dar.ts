@@ -292,6 +292,7 @@ const dar: Dict = {
       sections: 'سلايدرات الاكتشاف',
       categories: 'أقسام الاكتشاف',
       inspirations: 'صور الإلهام',
+      media: 'مكتبة الميديا',
       styles: 'الستايلات',
       roomTypes: 'أنواع البيوت',
       palettes: 'لوحات الألوان',

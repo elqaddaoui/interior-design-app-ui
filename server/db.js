@@ -166,9 +166,22 @@ CREATE TABLE IF NOT EXISTS saas_alerts (
   detail TEXT NOT NULL DEFAULT '{}', action TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', emailed_at BIGINT, email_error TEXT NOT NULL DEFAULT '', resolved_at BIGINT
 );
 CREATE INDEX IF NOT EXISTS saas_alerts_at ON saas_alerts(at DESC);
+-- Media & Storage. ONE shared, content-addressed namespace: a file is named after the hash of its bytes, so every store that holds the same picture
+-- points at the SAME stored object (media/<hash>.<ext>); each store only has its own row (its own library, title, alt text). ns = 1 means the
+-- object lives at that shared key; ns = 0 is a legacy per-store key (t/<store>/media/..., or raw bytes in the row). A stored object is deleted
+-- only when the last store row that points at it is deleted. lib = 1: the file was added on purpose by an administrator (upload / import).
+ALTER TABLE media ADD COLUMN IF NOT EXISTS lib INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE media ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+ALTER TABLE media ADD COLUMN IF NOT EXISTS alt TEXT NOT NULL DEFAULT '';
+ALTER TABLE media ADD COLUMN IF NOT EXISTS ns INTEGER NOT NULL DEFAULT 0;
+UPDATE media SET ns=1 WHERE tenant_id='default' AND ns=0 AND storage IN ('r2','fs');
+CREATE INDEX IF NOT EXISTS media_tenant_lib ON media(tenant_id, lib, created_at DESC);
+CREATE INDEX IF NOT EXISTS media_shared_id ON media(id) WHERE ns=1;
+-- Old copies left behind by "move all files": kept (never deleted at once) until the 24 h redirect cache of /api/media has expired.
+CREATE TABLE IF NOT EXISTS saas_media_old (tenant_id TEXT NOT NULL, id TEXT NOT NULL, storage TEXT NOT NULL, mime TEXT NOT NULL, size BIGINT, moved_at BIGINT NOT NULL, PRIMARY KEY (tenant_id, id, storage));
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
-const PLATFORM_TABLES = ['saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
+const PLATFORM_TABLES = ['saas_media_old', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
 
 /**
  * What a backup holds (server/backup/dump.js reads this; it lives here because this file owns the schema). One entry per table, parents before

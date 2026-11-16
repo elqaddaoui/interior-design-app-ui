@@ -12,6 +12,7 @@ const { createAdmins } = require('./admins');
 const { createSync } = require('./sync');
 const { createContent } = require('./content');
 const { createR2Storage } = require('./media');
+const { createMediaHub } = require('./media-hub');
 const { createNotifier } = require('./notifications');
 const { createCampaigns } = require('./campaigns');
 const { createChat } = require('./chat');
@@ -26,6 +27,8 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
   const storage = 'storage' in mediaOptions ? mediaOptions.storage : createR2Storage(env);
   // Allowances + API manager (platform tables). Tenant modules only get `platform.forTenant(id)`: a handle fixed to their own tenant.
   const platform = createPlatform(db, { env, mailer });
+  // Which storage receives new files + read-through for stores without own media (server/media-hub.js). One per process.
+  const hub = createMediaHub({ db, platform: platform.media, env, mediaOptions });
   const cache = new Map();
   const max = Math.max(5, Math.min(2000, Number(env.TENANT_CACHE) || 200));
 
@@ -39,7 +42,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     // Long-running server: anonymous polls are answered from a 2 s in-memory copy of the versions (local writes invalidate it at once).
     // Serverless instances keep no cache: each one only sees a fraction of the writes.
     const sync = createSync(tdb, { cacheMs: env.VERCEL ? 0 : Math.max(0, Math.min(10000, Number(env.SYNC_CACHE_MS ?? 2000) || 0)) });
-    content = createContent(tdb, sync, { env, ...mediaOptions, storage });
+    content = createContent(tdb, sync, { env, ...mediaOptions, storage, hub: hub.forTenant(tenantId) });
     const media = content.media;
     const admins = createAdmins(tdb, { env, sync, media });
     // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
@@ -95,6 +98,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     loaded: () => [...cache.keys()],
     storage,
     platform,
+    hub,
     /**
      * Tenants that have work for the background timer: a notification job due, or a campaign that can still fire (the default tenant is
      * always included, which keeps the single-tenant behaviour). Suspended tenants are skipped. Reads the raw database on purpose: this

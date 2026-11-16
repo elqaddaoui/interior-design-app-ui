@@ -12,6 +12,8 @@ import { useT } from '@/i18n';
 import { BackendError, backendEnabled } from '@/lib/backend';
 import { mediaUploadsEnabled, uploadDataUrl } from '@/lib/media';
 import { pickPhoto } from '@/lib/photo';
+import { useLibraryEnabled } from '@/lib/mediaLibrary';
+import { useMediaChooser } from '@/components/admin/media/MediaChooser';
 import { accountErrorKey, agoParts, deviceName, passwordStrength } from '@/lib/adminAccount';
 import { changeAdminPassword, listAdminDevices, refreshProfile, revokeAdminDevice, revokeOtherAdminDevices, useAdminProfile, type AdminDevice } from '@/store/useAdminProfile';
 import { useLocal } from '@/store/useLocal';
@@ -98,7 +100,17 @@ function ProfileSection() {
       if (field === 'form') toast(t('ac.saveFailed'));
     } finally { setBusy(false); }
   };
+  const own = useLibraryEnabled();
+  const chooser = useMediaChooser();
   const pick = async () => {
+    if (own) {
+      if (readOnly) return;
+      const urls = await chooser.choose({ kind: 'image' });
+      if (!urls?.[0]) return;
+      setPhotoBusy(true);
+      try { await useAdminProfile.getState().save({ avatar: urls[0] }); } catch { toast(t('ac.saveFailed')); } finally { setPhotoBusy(false); }
+      return;
+    }
     const r = await pickPhoto('gallery', { purpose: 'photo' });
     if (!('uri' in r) || readOnly) return;
     setPhotoBusy(true);
@@ -118,7 +130,7 @@ function ProfileSection() {
         <View className="flex-1" style={{ gap: 8 }}>
           <Txt className="text-muted text-[12px] font-semibold">{t('ac.photo')}</Txt>
           <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-            <Button testID="account-photo" title={t('ac.changePhoto')} icon="camera-outline" variant="soft" size="sm" onPress={pick} loading={photoBusy} disabled={readOnly} />
+            <Button testID="account-photo" title={t('ac.changePhoto')} icon="camera-outline" variant="soft" size="sm" onPress={pick} loading={photoBusy} disabled={readOnly} />{chooser.node}
             {profile?.avatar ? <Pressable testID="account-photo-remove" onPress={removePhoto} className="h-9 px-3 justify-center"><Txt className="text-danger font-bold text-[13px]">{t('ac.removePhoto')}</Txt></Pressable> : null}
           </View>
         </View>

@@ -17,7 +17,7 @@ const crypto = require('node:crypto');
 const { passwordMatches, hashPassword, passwordProblem, permissionsOf, mergePermissions } = require('./admins');
 const { slugProblem } = require('../src/lib/reservedSlugs');
 const { TENANT_TABLES } = require('./db');
-const { keyFor, EXT } = require('./media');
+const { createMediaOps } = require('./media-ops');
 const { TENANT_ID } = require('./scope');
 const THEME_ID = /^th_[a-f0-9]{12}$/;
 
@@ -57,8 +57,11 @@ const LOGIN_ID = /^[a-z0-9][a-z0-9._@+-]{2,189}$/;
 // A store administrator's user name (no @: it can never be mistaken for an e-mail address).
 const USERNAME = /^[a-z0-9][a-z0-9._-]{2,39}$/;
 
-function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = bundles.storage }) {
+function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
   const platform = bundles.platform; // allowances + API manager (server/platform.js)
+  // Media operations across stores (copy / move / make independent / cleanup). Built on first use: the reset script has no bundles.
+  let opsInstance;
+  const ops = () => (opsInstance ||= createMediaOps({ db, hub: bundles.hub, platform: platform.media, env }));
   const attempts = new Map(); // address -> { count, until }: 5 failed sign-ins lock that address for 15 minutes
   const cookieFlags = `HttpOnly; SameSite=Strict; Path=/api${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
   /** The console is always available: the account lives in the database (saas_super), it is never "not configured". */
@@ -310,11 +313,9 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
   /** Deletes one tenant and everything it owns. Files in object storage are removed best-effort. Returns what was purged. */
   async function deleteTenantData(row) {
     let purged = 0;
-    if (storage && row.kind !== 'default') {
-      const key = keyFor(row.id);
-      for (const media of await db.query("SELECT id,mime FROM media WHERE tenant_id=$1 AND storage='r2'", [row.id])) {
-        try { await storage.remove(key(`${media.id}.${EXT[media.mime]}`)); purged++; } catch { /* kept: a later purge can remove the prefix */ }
-      }
+    if (row.kind !== 'default') {
+      // The store's rows go; a stored object goes with them only when no other store (or theme) still points at the same file.
+      purged = (await ops().purgeRows(row.id)).objects;
     }
     await db.tx(async q => {
       for (const table of [...DELETE_ORDER, ...TENANT_TABLES.filter(t => !DELETE_ORDER.includes(t))]) await q(`DELETE FROM ${table} WHERE tenant_id=$1`, [row.id]);
@@ -505,25 +506,16 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     const policy = platform.policyFields(body, { forCreate: true });
     const tenantId = newId('t'), now = Date.now();
     const version = await contentVersion(template.id);
-    // Files: R2 keys carry the tenant id, so each instance gets its own copy of the template's objects (content-addressed, copied once).
-    const mediaRows = await db.query("SELECT id,mime,storage FROM media WHERE tenant_id=$1 AND storage IN ('r2','db')", [template.id]);
-    if (storage) {
-      const from = keyFor(template.id), to = keyFor(tenantId);
-      for (const row of mediaRows.filter(row => row.storage === 'r2')) {
-        const file = `${row.id}.${EXT[row.mime]}`;
-        await storage.put(to(file), await storage.get(from(file)), row.mime);
-      }
-    }
     const sample = JSON.parse((await db.query('SELECT value FROM saas_kv WHERE key=$1', [`demo_sample:${template.id}`]))[0]?.value || '{"clients":[],"requests":[]}');
-    let admin;
+    let admin, copiedMedia = 0;
     await db.tx(async q => {
       await q('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'); // one consistent picture of the template, even while it is being edited
       try {
         await q('INSERT INTO saas_tenants(id,slug,name,kind,status,plan,owner_email,source_demo_id,source_demo_version,notes,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)',
           [tenantId, slug, name, 'instance', 'active', clean(body?.plan, 40), clean(body?.ownerEmail || owner.email, 254).toLowerCase(), demo.id, version, clean(body?.notes, 1000), now]);
       } catch (error) { if (/duplicate key|unique/i.test(String(error.message))) throw fail(409, 'SLUG_TAKEN'); throw error; }
-      const ids = mediaRows.map(row => row.id);
-      await q("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) SELECT $2,id,mime,data,body,size,storage,created_at FROM media WHERE tenant_id=$1 AND id=ANY($3) AND storage IN ('r2','db')", [template.id, tenantId, ids]);
+      // The pictures: the clone gets a ROW for every file of the demo (same hash = same stored object, shared by both stores). No bytes are copied.
+      copiedMedia = await ops().copyRows(template.id, tenantId, { run: q });
       await q("INSERT INTO content_items(tenant_id,coll,id,data,updated_at) SELECT $2,coll,id,data,updated_at FROM content_items WHERE tenant_id=$1 AND coll<>'models'", [template.id, tenantId]);
       // AI model entries hold provider API keys: the copy keeps the entry and drops the key.
       for (const row of await q("SELECT coll,id,data,updated_at FROM content_items WHERE tenant_id=$1 AND coll='models'", [template.id])) {
@@ -552,7 +544,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     if (Object.keys(policy).length) await platform.setPolicy(tenantId, body);
     await bundles.get(tenantId).sync.bump('content', 'clients', 'requests');
     tenants.invalidate();
-    await audit(actor, 'demo.assign', tenantId, demo.id, { slug, owner: admin.id, version });
+    await audit(actor, 'demo.assign', tenantId, demo.id, { slug, owner: admin.id, version, media: `${copiedMedia} shared` });
     return { tenant: tenantView(await getTenantRow(tenantId)), admin, demoId: demo.id };
   }
   async function listAssignments(demoId) {
@@ -617,18 +609,9 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     if (JSON.stringify(snap).length > MAX_SNAPSHOT) throw fail(413, 'THEME_TOO_LARGE');
     return snap;
   }
-  /** Files a snapshot points at, copied from one namespace (a store or a theme) to another. Content-addressed, so copying twice is harmless. */
+  /** Files a snapshot points at: the target gets a row for each (same hash = same stored object, nothing is copied). */
   async function copyMedia(from, to, ids) {
-    if (!ids.length) return;
-    const rows = await db.query("SELECT id,mime,storage FROM media WHERE tenant_id=$1 AND id=ANY($2) AND storage IN ('r2','db')", [from, ids]);
-    if (storage) {
-      const source = keyFor(from), target = keyFor(to);
-      for (const row of rows.filter(r => r.storage === 'r2')) {
-        const file = `${row.id}.${EXT[row.mime]}`;
-        try { await storage.put(target(file), await storage.get(source(file)), row.mime); } catch { /* a missing object: the picture simply stays unavailable */ }
-      }
-    }
-    await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at) SELECT $2,id,mime,data,body,size,storage,created_at FROM media WHERE tenant_id=$1 AND id=ANY($3) AND storage IN ('r2','db') ON CONFLICT DO NOTHING", [from, to, rows.map(r => r.id)]);
+    if (ids.length) await ops().copyRows(from, to, { ids });
   }
   async function createThemes(body, actor) {
     const ids = Array.isArray(body?.tenantIds) ? [...new Set(body.tenantIds.map(String))] : [];
@@ -667,11 +650,8 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
   }
   async function deleteTheme(id, actor) {
     const row = await getThemeRow(id);
-    if (storage) {
-      const key = keyFor(row.id);
-      for (const file of await db.query("SELECT id,mime FROM media WHERE tenant_id=$1 AND storage='r2'", [row.id])) { try { await storage.remove(key(`${file.id}.${EXT[file.mime]}`)); } catch { /* best effort */ } }
-    }
-    await db.tx(async q => { await q('DELETE FROM media WHERE tenant_id=$1', [row.id]); await q('DELETE FROM saas_themes WHERE id=$1', [row.id]); });
+    await ops().purgeRows(row.id); // the theme's rows; objects used by stores made from it stay
+    await db.query('DELETE FROM saas_themes WHERE id=$1', [row.id]);
     await audit(actor, 'theme.delete', row.source_tenant_id, row.id, row.name);
     return { ok: true };
   }
@@ -725,6 +705,35 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
     if (!found) return null;
     await audit('super-admin', 'tenant.handoff.open', tenantId, found.admin_id, '');
     return found.admin_id;
+  }
+
+
+  // ---------- Media & storage ----------
+  const STORAGES = ['r2', 'app'];
+  /** Everything the "Media & storage" page shows, in one call. */
+  async function mediaOverview() {
+    const hub = bundles.hub;
+    const [choice, app, totals, perStore, old, move] = await Promise.all([hub.choice(), hub.appInfo(), ops().totals(), ops().perStore(), ops().oldCopies(), ops().move.status()]);
+    const rows = await db.query('SELECT id,slug,name,kind,status FROM saas_tenants ORDER BY kind, created_at, id');
+    return {
+      storage: { current: choice, deployDefault: hub.envChoice(), r2: { available: !!hub.adapters.r2 }, app, database: { available: true } },
+      totals, oldCopies: old, move,
+      // Files and bytes each store holds (a file two stores share is listed in both: it is one stored object, see `totals`).
+      stores: rows.map(row => ({ id: row.id, slug: row.slug, name: row.name, kind: row.kind, status: row.status, ...(perStore.get(row.id) || { files: 0, bytes: 0 }) })),
+    };
+  }
+  /** Picks the storage for new files; with `move`, every existing file is also moved there (resumable: the console calls /media/move/step). */
+  async function setMediaStorage(body, actor) {
+    const kind = body?.storage;
+    if (!STORAGES.includes(kind)) throw fail(400, 'INVALID_STORAGE');
+    if (!bundles.hub.available(kind)) throw fail(409, kind === 'r2' ? 'R2_NOT_CONFIGURED' : 'APP_STORAGE_UNAVAILABLE');
+    if (kind === 'app' && !(await bundles.hub.appInfo()).available) throw fail(409, 'APP_STORAGE_UNAVAILABLE');
+    if ((await ops().move.status()).status === 'running') throw fail(409, 'MOVE_RUNNING');
+    await platform.media.setStorageChoice(kind);
+    bundles.hub.bump();
+    await audit(actor, 'media.storage', null, kind, body?.move === true ? 'with move' : '');
+    if (body?.move === true) await ops().move.start(kind);
+    return mediaOverview();
   }
 
   // ---------- Reports ----------
@@ -852,6 +861,17 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants, storage = b
       await platform.setPaused(row.id, paused, paused ? 'owner' : '');
       await audit(actor, paused ? 'tenant.ai.pause' : 'tenant.ai.resume', row.id, row.slug, '');
       return ok(tenantView(await getTenantRow(row.id)));
+    }
+
+    // Media & storage: where files live, move them, files and size per store.
+    if (path === '/media' && method === 'GET') return ok(await mediaOverview());
+    if (path === '/media/storage' && method === 'PUT') return ok(await setMediaStorage(await readBody(req), actor));
+    if (path === '/media/move/step' && method === 'POST') return ok(await ops().move.step());
+    if (path === '/media/move/cancel' && method === 'POST') { const status = await ops().move.cancel(); await audit(actor, 'media.move.cancel', null, '', ''); return ok(status); }
+    if (path === '/media/cleanup' && method === 'POST') {
+      const result = await ops().cleanup();
+      await audit(actor, 'media.cleanup', null, '', result);
+      return ok({ ...result, oldCopies: await ops().oldCopies() });
     }
     if (path === '/themes') {
       if (method === 'GET') return ok((await db.query(`${THEME_SQL} ORDER BY h.created_at DESC`)).map(themeView));

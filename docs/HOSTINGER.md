@@ -92,6 +92,10 @@ Without it the server does not start. The runtime log then shows:
 `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (otherwise generated and stored in the database) · `FCM_SERVICE_ACCOUNT_JSON` ·
 `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` · `APP_ORIGINS` (only for a frontend hosted on another domain) · `CONTENT_S_MAXAGE`, `API_RATE_LIMIT`, `CHAT_RATE_LIMIT`, `PUSH_WAIT_MS`.
 
+### Media in the app directory (self-hosted)
+
+To keep files on the Hostinger disk instead of R2, set `MEDIA_DIR` to a folder **outside** the deploy folder (for example `/home/<user>/media`): Hostinger replaces the whole build folder on every deploy, so anything inside it would disappear. Then choose *App directory* in **Super admin > Media & storage** (or **Move all** to migrate from R2 / the database). Back this folder up with the database.
+
 ### Do not set
 
 | Variable | Why |

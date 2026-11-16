@@ -43,7 +43,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   const ttl = env.VERCEL ? 0 : 5000;
   let apisCache = { at: -Infinity, rows: [] };
   const policies = new Map(); // tenant id -> { at, mode, links }
-  const forget = () => { apisCache = { at: -Infinity, rows: [] }; policies.clear(); };
+  const forget = () => { apisCache = { at: -Infinity, rows: [] }; policies.clear(); if (mediaChoice) mediaChoice.cache = { at: -Infinity, value: null }; };
 
   async function apiRows() {
     if (ttl && clock() - apisCache.at < ttl) return apisCache.rows;
@@ -150,6 +150,29 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
       apiMode: row.api_mode === 'platform' ? 'platform' : 'own', aiPaused: !!row.ai_paused,
     };
   }
+
+
+  // ---------- Media storage choice (read by tenant media code through the hub, written by the console) ----------
+  const kvGet = async key => (await db.query('SELECT value FROM saas_kv WHERE key=$1', [key]))[0]?.value ?? null;
+  const kvSet = (key, value) => db.query('INSERT INTO saas_kv(key,value) VALUES($1,$2) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value', [key, String(value)]);
+  const mediaChoice = { cache: { at: -Infinity, value: null } };
+  /** The storage the console chose for NEW files ('r2' | 'app' | null = none chosen, the deployment default applies). */
+  async function mediaStorageChoice() {
+    if (ttl && clock() - mediaChoice.cache.at < ttl) return mediaChoice.cache.value;
+    const value = await kvGet('media_storage');
+    mediaChoice.cache = { at: clock(), value: value === 'r2' || value === 'app' ? value : null };
+    return mediaChoice.cache.value;
+  }
+  async function setMediaStorageChoice(kind) { await kvSet('media_storage', kind); mediaChoice.cache = { at: -Infinity, value: null }; }
+  // Copies of files left behind by a move between storages: removed by the console only after a delay (see server/media-ops.js).
+  const oldAdd = (tenantId, id, storage, mime, size) => db.query('INSERT INTO saas_media_old(tenant_id,id,storage,mime,size,moved_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,id,storage) DO UPDATE SET moved_at=EXCLUDED.moved_at', [tenantId, id, storage, mime, size ?? null, clock()]);
+  const oldList = (tenantId, ids) => db.query('SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE tenant_id=$1 AND id=ANY($2)', [tenantId, ids]);
+  const oldDel = (tenantId, id, storage) => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1 AND id=$2 AND storage=$3', [tenantId, id, storage]);
+  const oldDue = (before, limit) => db.query('SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE moved_at<=$1 ORDER BY moved_at LIMIT $2', [before, limit]);
+  const oldSummary = async () => (await db.query('SELECT COUNT(*)::int AS files, COALESCE(SUM(size),0)::bigint AS bytes, MIN(moved_at) AS first FROM saas_media_old'))[0];
+  const oldDropTenant = tenantId => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1', [tenantId]);
+  const oldOf = tenantId => db.query('SELECT id,mime,storage FROM saas_media_old WHERE tenant_id=$1', [tenantId]);
+  const media = { oldOf, oldAdd, oldList, oldDel, oldDue, oldSummary, oldDropTenant, forget: () => { mediaChoice.cache = { at: -Infinity, value: null }; }, storageChoice: mediaStorageChoice, setStorageChoice: setMediaStorageChoice, kvGet, kvSet };
 
   // ---------- Console: AI switches ----------
   /** The "use API" switch of a demo. On = until now + the idle window; off = closed at once. Only demos have it. */
@@ -314,7 +337,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
     return row;
   }
 
-  return { managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
+  return { media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
 }
 
 module.exports = { createPlatform, KINDS };

@@ -8,6 +8,8 @@ import { useT } from '@/i18n';
 import { pickPhoto } from '@/lib/photo';
 import { importMediaUrl, isStoredMedia, mediaUploadsEnabled, uploadDataUrl } from '@/lib/media';
 import { toast } from '@/store/useToast';
+import { useLibraryEnabled } from '@/lib/mediaLibrary';
+import { useMediaChooser } from '@/components/admin/media/MediaChooser';
 
 /**
  * URL input + upload from gallery + preview. Used for every admin image.
@@ -17,6 +19,10 @@ import { toast } from '@/store/useToast';
 export function ImageField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   const { t } = useT();
   const [busy, setBusy] = React.useState(false);
+  const own = useLibraryEnabled();
+  const chooser = useMediaChooser();
+  /** Stores with their own library choose between "Media library" and "Upload new"; the others upload straight away. */
+  const fromLibrary = async () => { const urls = await chooser.choose({ kind: 'image' }); if (urls?.[0]) onChange(urls[0]); };
   const up = async () => {
     const r = await pickPhoto('gallery', { preserveTransparency: true });
     if (!('uri' in r)) return;
@@ -38,11 +44,12 @@ export function ImageField({ label, value, onChange }: { label: string; value: s
         <View className="flex-1">
           <Input value={value.startsWith('data:') ? '(uploaded image)' : value} editable={!value.startsWith('data:') && !busy} onChangeText={onChange} onBlur={importLink} placeholder="https://…" autoCapitalize="none" />
           <View className="flex-row flex-wrap gap-2 -mt-1">
-            <Button title={t('admin.f.uploadImage')} icon="upload" variant="soft" size="sm" onPress={up} loading={busy} />
+            {own ? <Button testID="img-library" title={t('ml.choose')} icon="folder-multiple-image" variant="soft" size="sm" onPress={fromLibrary} loading={busy} /> : <Button title={t('admin.f.uploadImage')} icon="upload" variant="soft" size="sm" onPress={up} loading={busy} />}
             {value ? <Pressable onPress={() => onChange('')} className="h-9 px-3 justify-center"><Txt className="text-danger font-bold text-[13px]">{t('admin.brand.remove')}</Txt></Pressable> : null}
           </View>
         </View>
       </View>
+    {chooser.node}
     </View>
   );
 }

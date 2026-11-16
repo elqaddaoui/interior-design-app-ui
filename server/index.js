@@ -668,7 +668,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           admin();
           const body = await readBody(req);
           if (typeof body.data !== 'string' || !/^data:[a-z]+\/[a-z0-9.+-]+;base64,/i.test(body.data)) throw fail(400, 'INVALID_MEDIA');
-          const { value } = await media.externalize({ file: body.data });
+          const { value } = await media.externalize({ file: body.data }, { lib: true, title: typeof body.title === 'string' ? body.title : '' });
           return json(200, { url: value.file });
         }
         // Raw upload (database mode, where presigned uploads do not exist): the file is the request body, its type the Content-Type.
@@ -679,7 +679,28 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           let size = 0;
           const chunks = [];
           for await (const chunk of req) { size += chunk.length; if (size > max) throw fail(413, 'MEDIA_TOO_LARGE'); chunks.push(chunk); }
-          return json(200, { url: await media.storeRaw(Buffer.concat(chunks), type) });
+          const title = decodeURIComponent(String(req.headers['x-media-title'] || '').slice(0, 600)).slice(0, 200);
+          return json(200, { url: await media.storeRaw(Buffer.concat(chunks), type, { lib: true, title }) });
+        }
+
+        // ---- Media library (WordPress-like). Lists and edits ONLY this store's files (every file the store holds). ----
+        const libraryRoute = /^\/api\/admin\/library(?:\/([a-f0-9]{32}))?$/.exec(url.pathname);
+        if (libraryRoute) {
+          admin();
+          const library = media.library;
+          const id = libraryRoute[1];
+          if (!id && req.method === 'GET') {
+            const q = url.searchParams;
+            return json(200, await library.list({ q: q.get('q') || '', kind: q.get('kind') || '', limit: q.get('limit') || 60, offset: q.get('offset') || 0 }));
+          }
+          if (!id && req.method === 'DELETE') { const body = await readBody(req); return json(200, await library.remove(body?.ids, { force: body?.force === true })); }
+          if (id && req.method === 'GET') return json(200, await library.get(id));
+          if (id && req.method === 'PATCH') return json(200, await library.update(id, await readBody(req)));
+          if (id && req.method === 'DELETE') {
+            const out = await library.remove([id]);
+            if (out.blocked.length) throw Object.assign(fail(409, out.blocked[0].reason === 'NOT_FOUND' ? 'NOT_FOUND' : out.blocked[0].reason), { status: out.blocked[0].reason === 'NOT_FOUND' ? 404 : 409 });
+            return json(200, out);
+          }
         }
         // Admin card-video renderer: the bytes of one picture (ours, or an external https one) so the browser can draw it without CORS.
         if (url.pathname === '/api/admin/media/fetch' && req.method === 'GET') {
@@ -697,7 +718,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           admin();
           const body = await readBody(req);
           if (typeof body.url !== 'string' || body.url.length > 2048) throw fail(400, 'INVALID_URL');
-          try { return json(200, { url: await media.importRemote(body.url) }); }
+          try { return json(200, { url: await media.importRemote(body.url, { lib: true }) }); }
           catch (error) { throw fail(error.policy ? 400 : 502, `MEDIA_URL_${error.code || 'FAILED'}`); }
         }
         // Large files and videos: presigned PUT straight to R2 (5 minutes). The server picks the key, type and exact size.
@@ -708,7 +729,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         }
         if (url.pathname === '/api/admin/media/complete' && req.method === 'POST') {
           admin();
-          return json(200, await media.completeUpload((await readBody(req)).id));
+          return json(200, await media.completeUpload((await readBody(req)).id, { lib: true }));
         }
         if (req.method === 'POST' && url.pathname === '/api/admin/login') {
           const body = await readBody(req);

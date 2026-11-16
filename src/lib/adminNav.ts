@@ -19,6 +19,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { key: 'sections', icon: 'view-carousel-outline', href: '/admin/sections' },
     { key: 'categories', icon: 'view-grid-outline', href: '/admin/categories' },
     { key: 'inspirations', icon: 'image-multiple-outline', href: '/admin/inspirations' },
+    { key: 'media', icon: 'folder-multiple-image', href: '/admin/media' },
   ] },
   { key: 'creation', items: [
     { key: 'styles', icon: 'palette-swatch-outline', href: '/admin/styles' },
