@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
 const { createArchive, openArchive, openEntry, readEntry, hashEntry, hashing } = require('./zip');
-const { exportDatabase, importDatabase, detectProvider, checkProvider, checkTables, collectSecrets } = require('./dump');
+const { exportDatabase, importDatabase, detectProvider, checkProvider, checkTables, collectSecrets, specsFor } = require('./dump');
 const appFiles = require('./app-files');
 const { createDestinations } = require('./destinations');
 const { SCHEMA_VERSION } = require('../db');
@@ -22,6 +22,12 @@ const FORMAT = 'dwira-backup';
 const FORMAT_VERSION = 1;
 const fail = (status, message, extra) => Object.assign(new Error(message), { status }, extra);
 const TYPES = { app: { app: true, db: false }, db: { app: false, db: true }, both: { app: true, db: true } };
+/**
+ * A store that is not the owner's has no server files of its own (the code is shared by every store and stays with the platform owner), so its
+ * three choices split ITS OWN tables instead: "app" = how the store looks and what it offers (content, settings, theme, menus, preferences),
+ * "db" = its operational data (clients, credits, requests, chats, campaigns, administrators), "both" = everything.
+ */
+const STORE_APP_TABLES = ['content_items', 'content_docs', 'settings', 'admin_prefs'];
 const TEXTUAL = /\.(js|mjs|cjs|json|html|css|map|txt|md|sql|ndjson|xml|webmanifest|yml|yaml|ts|tsx)$/i;
 const stamp = (at = Date.now()) => new Date(at).toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const errorOf = error => ({ code: error.status ? error.message : 'INTERNAL', ...Object.fromEntries(['entry', 'table', 'destination', 'upstream', 'detected', 'tenant'].filter(k => error[k] !== undefined).map(k => [k, error[k]])) });
@@ -101,12 +107,18 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
   // ---------------------------------------------------------------- options
   function backupOptions(scope, input = {}) {
     const type = TYPES[input.type] ? input.type : (() => { throw fail(400, 'INVALID_TYPE'); })();
-    const parts = { ...TYPES[type] };
-    if (parts.app && !scope.canApp) throw fail(403, 'APP_SCOPE_FORBIDDEN');
+    const store = scope.kind === 'tenant' && !scope.canApp;
+    let parts = { ...TYPES[type] };
+    let tables = null; // null = every table of the scope
+    if (store) {
+      parts = { app: false, db: true };
+      if (type === 'app') tables = STORE_APP_TABLES;
+      else if (type === 'db') tables = specsFor(true).map(spec => spec.table).filter(table => !STORE_APP_TABLES.includes(table));
+    } else if (parts.app && !scope.canApp) throw fail(403, 'APP_SCOPE_FORBIDDEN');
     const data = input.data === 'empty' ? 'empty' : input.data === 'content' || input.data === undefined ? 'content' : (() => { throw fail(400, 'INVALID_DATA_MODE'); })();
     const destination = ['local', 'gdrive', 'dropbox'].includes(input.destination || 'local') ? input.destination || 'local' : (() => { throw fail(400, 'INVALID_DESTINATION'); })();
     const auth = destination === 'local' ? {} : { accessToken: typeof input.auth?.accessToken === 'string' ? input.auth.accessToken.trim().slice(0, 4096) : '', folderId: String(input.auth?.folderId || '').slice(0, 200), folder: String(input.auth?.folder || '').slice(0, 200) };
-    return { type, parts, data, media: input.media === true, destination, provider: input.provider || 'auto', auth };
+    return { type, parts, tables, storeParts: store ? type : null, data: store && type === 'app' ? 'content' : data, media: input.media === true, destination, provider: input.provider || 'auto', auth };
   }
   const publicOptions = o => ({ type: o.type, data: o.data, media: o.media, destination: o.destination, provider: o.provider });
 
@@ -159,7 +171,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       if (o.parts.db) {
         steps.start('database');
         let tables = 0;
-        dumped = await exportDatabase({ db: handle, tenant, schemaOnly: o.data === 'empty', dir: path.join(work, 'db'), cancelled, onTable: ({ table, rows }) => { tables++; log(job, 'info', 'db.table', { table, rows }); steps.fraction('database', Math.min(0.95, tables / 24)); } });
+        dumped = await exportDatabase({ db: handle, tenant, only: o.tables || undefined, schemaOnly: o.data === 'empty', dir: path.join(work, 'db'), cancelled, onTable: ({ table, rows }) => { tables++; log(job, 'info', 'db.table', { table, rows }); steps.fraction('database', Math.min(0.95, tables / 24)); } });
         archive.addBuffer('db/schema.sql', Buffer.from(dumped.schemaSql));
         for (const f of dumped.files) archive.addFile(f.name, f.file);
         archive.addBuffer('db/tables.json', Buffer.from(JSON.stringify({ schemaVersion: dumped.schemaVersion, schemaOnly: o.data === 'empty', tables: dumped.tables })));
@@ -198,7 +210,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       try {
         result = await archive.finish(entries => ({
           format: FORMAT, version: FORMAT_VERSION, createdAt: now(), createdBy: 'dwira', appVersion,
-          scope: scope.kind, tenantId: tenant ? scope.tenantId : null, type: o.type,
+          scope: scope.kind, tenantId: tenant ? scope.tenantId : null, type: o.type, storePart: o.storeParts || undefined,
           includes: { app: o.parts.app, db: o.parts.db, media: o.media },
           db: o.parts.db ? { provider, engine, dataMode: o.data, schemaOnly: o.data === 'empty', schemaVersion: SCHEMA_VERSION, tables: Object.fromEntries(Object.entries(dumped.tables).map(([t, v]) => [t, { rows: v.rows }])) } : null,
           app: o.parts.app ? { files: app.length, bytes: appBytes } : null,
@@ -361,7 +373,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     if (tenant && manifest.tenantId && manifest.tenantId !== scope.tenantId) warnings.push({ code: 'OTHER_STORE', tenant: manifest.tenantId });
     if (manifest.media?.missing) warnings.push({ code: 'MEDIA_MISSING', count: manifest.media.missing });
     return {
-      manifest: { createdAt: manifest.createdAt, appVersion: manifest.appVersion, scope: manifest.scope, tenantId: manifest.tenantId, type: manifest.type, includes: manifest.includes, db: manifest.db ? { provider: manifest.db.provider, dataMode: manifest.db.dataMode, schemaOnly: manifest.db.schemaOnly, tables: manifest.db.tables } : null, app: manifest.app, media: manifest.media },
+      manifest: { createdAt: manifest.createdAt, appVersion: manifest.appVersion, scope: manifest.scope, tenantId: manifest.tenantId, type: manifest.type, storePart: manifest.storePart, includes: manifest.includes, db: manifest.db ? { provider: manifest.db.provider, dataMode: manifest.db.dataMode, schemaOnly: manifest.db.schemaOnly, tables: manifest.db.tables } : null, app: manifest.app, media: manifest.media },
       restorable: { app: !!manifest.includes?.app && !!scope.canApp, db: !!manifest.includes?.db, media: !!manifest.includes?.media },
       mediaTargets, defaultMediaTarget: sample.adapters.r2 && bundles.get(scope.kind === 'tenant' ? scope.tenantId : 'default').media.mode === 'r2' ? 'r2' : 'app',
       willReplace: current, currentProvider: detected, warnings,
@@ -402,7 +414,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
         const pre = newJob('backup', scope, { type: 'db', data: 'content', media: false, destination: 'local', provider: 'auto', safetyFor: job.id }, [['prepare', 1], ['database', 1], ['package', 1]]);
         pre.status = 'running'; pre.startedAt = now();
         const preSteps = stepper(pre);
-        try { pre.result = await runBackup(pre, scope, { ...backupOptions({ ...scope, canApp: false }, { type: 'db', data: 'content' }) }, { provider: null, engine: await handleOf(scope).info() }, preSteps); pre.status = 'done'; pre.progress = 100; }
+        try { pre.result = await runBackup(pre, scope, { ...backupOptions({ ...scope, canApp: false }, { type: tenant ? 'both' : 'db', data: 'content' }) }, { provider: null, engine: await handleOf(scope).info() }, preSteps); pre.status = 'done'; pre.progress = 100; }
         catch (error) { pre.status = 'error'; pre.errors.push(errorOf(error)); pre.finishedAt = now(); save(pre); throw fail(500, 'SAFETY_BACKUP_FAILED'); }
         pre.finishedAt = now(); save(pre);
         result.safetyBackup = { id: pre.id, name: pre.result.name, size: pre.result.size };
@@ -476,8 +488,8 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     for (const id of await idsOf(scope)) for (const row of await bundles.get(id).media.backup.list()) { count++; bytes += row.size || 0; }
     return {
       available: supported(), reason: supported() ? '' : 'BACKUP_UNSUPPORTED_HOST', scope: scope.kind,
-      types: scope.canApp ? ['app', 'db', 'both'] : ['db'], canApp: !!scope.canApp,
-      provider: { detected, engine, options: ['neon', 'supabase'], matches: p => undefined },
+      types: ['app', 'db', 'both'], canApp: !!scope.canApp, storeSplit: scope.kind === 'tenant' && !scope.canApp,
+      provider: { detected, engine, options: ['neon', 'supabase'], locked: detected === 'neon' || detected === 'supabase' },
       media: { mode: sample.mode, count, bytes, targets: { r2: !!sample.backup.adapters.r2, app: !!(sample.backup.adapters.fs && await sample.backup.adapters.fs.writable()) } },
       destinations: { local: true, ...Object.fromEntries(Object.entries(destinations.configured()).map(([k, v]) => [k, { serverConfigured: v }])) },
       limits: { maxUploadBytes: maxUpload, keepHours: keepMs / 3600000 },
@@ -485,7 +497,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     };
   }
   const jobOf = (scope, id) => { const job = jobs.get(String(id)); if (!job || job.scopeKey !== scopeKey(scope)) throw fail(404, 'JOB_NOT_FOUND'); return job; };
-  const sanitizeCaps = c => ({ ...c, provider: { detected: c.provider.detected, engine: c.provider.engine, options: c.provider.options } });
+  const sanitizeCaps = c => ({ ...c, provider: { detected: c.provider.detected, engine: c.provider.engine, options: c.provider.options, locked: !!c.provider.locked } });
   const api = {
     capabilities: async scope => { await ensureLoaded(); return sanitizeCaps(await capabilities(scope)); },
     startBackup, createUpload, appendChunk, completeUpload, startRestore,

@@ -309,8 +309,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         if (url.pathname === '/api/content' && req.method === 'GET') {
           const adminAsked = !!sessionToken || url.searchParams.has('a');
           const adminRow = !!sessionToken && (await db.query('SELECT admin_id FROM admin_sessions WHERE tenant_id=:tenant AND token_hash=$1 AND expires_at>$2', [hash(sessionToken), now]))[0];
-          // An administrator without the Store API permission gets the public copy of the content: it differs from the admin copy only by the provider keys.
-          const admin = !!adminRow && (await admins.permissions(adminRow.admin_id)).storeApi;
+          // An administrator without the Store API permission (or of a store whose API the platform manages) gets the public copy of the content: it differs from the admin copy only by the provider keys.
+          const admin = !!adminRow && (await admins.permissions(adminRow.admin_id)).storeApi && (await bundle.platform.mode()) !== 'platform';
           // The ETag is the content version (one tiny sync_state read): an unchanged app gets a bodyless 304 and the database is never asked for the snapshot.
           const etag = await content.etag(admin);
           const matches = (req.headers['if-none-match'] || '').split(',').map(value => value.trim()).includes(etag);
@@ -330,7 +330,12 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
         const adminId = session?.admin_id;
         const admin = () => { if (!session) throw fail(401, 'Admin login required'); };
         /** Admin AND the given permission (set by the super admin per administrator; allowed unless explicitly denied). */
-        const allow = async permission => { admin(); if (!(await admins.permissions(adminId))[permission]) throw fail(403, 'PERMISSION_DENIED'); };
+        const allow = async permission => {
+          admin();
+          if (!(await admins.permissions(adminId))[permission]) throw fail(403, 'PERMISSION_DENIED');
+          // A store whose API is managed by the platform owner never sees or edits API detail, whatever the administrator's own permissions are.
+          if (permission === 'storeApi' && (await bundle.platform.mode()) === 'platform') throw fail(403, 'API_MANAGED_BY_PLATFORM');
+        };
         const clientToken = req.headers['x-demand-token'];
         const clientHash = typeof clientToken === 'string' && /^[a-f0-9]{64}$/.test(clientToken) ? hash(clientToken) : null;
         const userCookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('dwira_user='))?.slice(11);

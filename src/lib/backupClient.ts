@@ -21,8 +21,8 @@ export type Destination = 'local' | 'gdrive' | 'dropbox';
 export type Provider = 'neon' | 'supabase';
 export type MediaTarget = 'r2' | 'app';
 export type Capabilities = {
-  available: boolean; reason: string; scope: 'tenant' | 'platform'; types: BackupType[]; canApp: boolean;
-  provider: { detected: string; engine: string; options: Provider[] };
+  available: boolean; reason: string; scope: 'tenant' | 'platform'; types: BackupType[]; canApp: boolean; storeSplit?: boolean;
+  provider: { detected: string; engine: string; options: Provider[]; locked?: boolean };
   media: { mode: string; count: number; bytes: number; targets: { r2: boolean; app: boolean } };
   destinations: { local: true; gdrive?: { serverConfigured: boolean }; dropbox?: { serverConfigured: boolean } };
   limits: { maxUploadBytes: number; keepHours: number }; running: string | null;
@@ -31,7 +31,7 @@ export type JobStep = { key: string; status: 'pending' | 'running' | 'done' | 'e
 export type JobLog = { at: number; level: 'info' | 'warn' | 'error'; code: string; [k: string]: unknown };
 export type JobIssue = { code: string; [k: string]: unknown };
 export type Plan = {
-  manifest: { createdAt?: number; appVersion?: string; scope: string; tenantId?: string | null; type?: string; includes: { app?: boolean; db?: boolean; media?: boolean }; db?: { provider?: string; dataMode?: string; schemaOnly?: boolean } | null; [k: string]: unknown };
+  manifest: { createdAt?: number; appVersion?: string; scope: string; tenantId?: string | null; type?: string; storePart?: 'app' | 'db' | 'both'; includes: { app?: boolean; db?: boolean; media?: boolean }; db?: { provider?: string; dataMode?: string; schemaOnly?: boolean } | null; [k: string]: unknown };
   restorable: { app: boolean; db: boolean; media: boolean };
   mediaTargets: { r2: boolean; app: boolean }; defaultMediaTarget: MediaTarget;
   willReplace: Record<string, number>; currentProvider: string; warnings: JobIssue[];

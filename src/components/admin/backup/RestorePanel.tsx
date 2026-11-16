@@ -54,7 +54,7 @@ export function RestorePanel({ b, caps }: { b: Backup; caps: Capabilities }) {
           <Notice tone="success">{t('bk.r.valid')}</Notice>
           <Txt className="font-bold text-[13px] text-muted mb-1">{t('bk.r.contains')}</Txt>
           {plan.manifest.createdAt ? <Txt className="text-muted text-[12px] mb-1">{t('bk.r.created', { date: new Date(plan.manifest.createdAt).toLocaleString() })}</Txt> : null}
-          {row('db', plan.manifest.db?.schemaOnly ? t('bk.part.dbSchema') : t('bk.part.db'), parts.db, !plan.restorable.db)}
+          {row('db', plan.manifest.storePart === 'app' ? t('bk.part.storeApp') : plan.manifest.storePart === 'both' ? t('bk.part.storeBoth') : plan.manifest.db?.schemaOnly ? t('bk.part.dbSchema') : t('bk.part.db'), parts.db, !plan.restorable.db)}
           {row('media', t('bk.part.media'), parts.media, !plan.restorable.media)}
           {row('app', t('bk.part.app'), parts.app, !plan.restorable.app)}
           {parts.media ? (
