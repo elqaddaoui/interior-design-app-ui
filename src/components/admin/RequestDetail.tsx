@@ -6,6 +6,7 @@ import { ImageViewer, type ViewerItem } from '@/components/ui/ImageViewer';
 import { Txt } from '@/components/ui/Txt';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
+import { useCan } from '@/store/useAdminProfile';
 import { toast } from '@/store/useToast';
 import type { RenderRequest } from '@/data/types';
 
@@ -75,6 +76,8 @@ export function RequestInfo({ r, onOpenShot }: { r: RenderRequest; onOpenShot: (
   const { t } = useT();
   const d = r.draft;
   const run = r.aiRun;
+  // Without API access (permission withdrawn, or the platform manages the connections) no model, provider or engine name is shown.
+  const showApi = useCan('storeApi');
   const [showPrompt, setShowPrompt] = React.useState(false);
   const shots = useRequestShots(r);
   const indexOf = (uri?: string) => (uri ? shots.findIndex((x) => x.uri === uri) : -1);
@@ -141,6 +144,8 @@ export function RequestInfo({ r, onOpenShot }: { r: RenderRequest; onOpenShot: (
       </Section>
 
       <Section title={t('md.req.ai')} icon="creation-outline">
+        {showApi ? (
+          <>
         <Row label={t('md.req.modelAsked')}>{requested?.name ? `${requested.name}${requested.modelName ? ` · ${requested.modelName}` : ''}` : asked?.name ? `${asked.name}${asked.modelName ? ` · ${asked.modelName}` : ''}` : t('md.req.modelAuto')}</Row>
         <Row label={t('md.req.modelUsed')} testID="req-model-used">
           {used ? <View className="flex-row items-center gap-2"><Icon name="check-circle" size={16} tone="success" /><Txt className="text-[13px] leading-[20px] font-bold flex-1" selectable style={{ writingDirection: 'ltr', textAlign: 'left' }}>{engineName(used)}{used.model && used.label && used.model !== used.label ? ` (${used.model})` : ''}</Txt></View>
@@ -157,6 +162,8 @@ export function RequestInfo({ r, onOpenShot }: { r: RenderRequest; onOpenShot: (
               ))}
             </View>
           </Row>
+        ) : null}
+          </>
         ) : null}
         {run?.images ? (
           <Row label={t('md.req.imagesSent')} testID="req-images">

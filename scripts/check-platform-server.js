@@ -245,7 +245,14 @@ test('API manager: keys are write-only, one shared default or one per store, man
     assert.deepEqual([locked.status, locked.body.error], [403, 'API_MANAGED_BY_PLATFORM']);
     assert.equal((await call(backend, `/${slug}/api/admin/chat/keys`, { method: 'PATCH', headers: token, body: { gemini: 'sk_store_key_9999999999' } })).status, 403);
     assert.equal((await call(backend, `/${slug}/api/admin/chat/config`, { method: 'PUT', headers: token, body: { position: 'before' } })).status, 403);
-    assert.equal((await call(backend, `/${slug}/api/admin/ai/status`, { headers: token })).body.managed, true);
+    // A managed store sees NO API detail at all: the status and settings routes refuse, only the one-word health answers.
+    const st = await call(backend, `/${slug}/api/admin/ai/status`, { headers: token });
+    assert.deepEqual([st.status, st.body.error], [403, 'API_MANAGED_BY_PLATFORM']);
+    assert.equal((await call(backend, `/${slug}/api/admin/chat/status`, { headers: token })).status, 403);
+    assert.equal((await call(backend, `/${slug}/api/admin/content/models/model_x`, { method: 'PUT', headers: token, body: { name: 'x' } })).status, 403);
+    const health = await call(backend, `/${slug}/api/admin/api-health`, { headers: token });
+    assert.equal(health.status, 200); assert.deepEqual(Object.keys(health.body), ['status']);
+    assert.ok(!JSON.stringify((await call(backend, `/${slug}/api/content`, { headers: token })).body).includes('sk_platform_'), 'no platform key in the content');
     assert.equal((await call(backend, `/${slug}/api/admin/instance`, { headers: token })).body.apiMode, 'platform');
   }
   assert.equal((await call(backend, '/mgd-c/api/admin/ai/status', { headers: oc })).body.managed, false);

@@ -67,8 +67,9 @@ function sanitize(table, row) {
  * Writes db/schema.sql content, db/tables.json content and one ndjson file per table into `dir` (a temp directory).
  * Returns { schemaSql, tables: { table: { columns, rows } }, files: [{ name, file }] }.
  */
-async function exportDatabase({ db, tenant, schemaOnly, dir, onTable, cancelled }) {
-  const specs = specsFor(tenant);
+async function exportDatabase({ db, tenant, schemaOnly, dir, onTable, cancelled, only }) {
+  // `only` = a list of table names: a partial backup of a store (its design and settings, or its operational data).
+  const specs = specsFor(tenant).filter(spec => !Array.isArray(only) || only.includes(spec.table));
   const tables = {};
   const files = [];
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -140,7 +141,8 @@ async function importDatabase({ db, tenant, meta, open, protect = {}, onTable, c
   const allowed = checkTables(meta, tenant);
   const result = {};
   // `preserve` tables (the audit trail) are never replaced by a restore: an older backup must not erase what happened since.
-  const order = specsFor(tenant).filter(spec => allowed.has(spec.table) && !spec.preserve);
+  // Only the tables the archive lists are replaced: a partial backup (a store's design only, or its data only) leaves the others untouched.
+  const order = specsFor(tenant).filter(spec => allowed.has(spec.table) && meta.tables[spec.table] && !spec.preserve);
   await db.tx(async q => {
     const current = {};
     const keepers = {};

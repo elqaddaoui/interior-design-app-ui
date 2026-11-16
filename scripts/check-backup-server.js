@@ -410,9 +410,14 @@ test('tenant isolation: a store backs up and restores only its own data, never t
     const shop = await newShop(s.backend, S, 'isoshop');
     await h.call(s.backend, `/${shop.slug}/api/admin/content/roomTypes/room_shop`, { method: 'PUT', headers: shop.headers, body: { title: { fr: 'SHOP-ONLY', ar: 'A', dar: 'A' }, order: 1, visible: true } });
     const caps = await h.call(s.backend, `${shop.prefix}/capabilities`, { headers: shop.headers });
-    assert.equal(caps.status, 200); assert.equal(caps.body.canApp, false); assert.deepEqual(caps.body.types, ['db']);
-    for (const type of ['app', 'both']) { const r = await h.call(s.backend, `${shop.prefix}/jobs`, { method: 'POST', headers: shop.headers, body: { type } }); assert.equal(r.status, 403, type); assert.equal(r.body.error, 'APP_SCOPE_FORBIDDEN'); }
-    const made = await backup(s, { type: 'db', data: 'content', media: false }, shop.prefix, shop.headers);
+    assert.equal(caps.status, 200); assert.equal(caps.body.canApp, false); assert.deepEqual(caps.body.types, ['app', 'db', 'both']); assert.equal(caps.body.storeSplit, true);
+    // A store has no server files: "app" = its design and settings, "db" = its operational data, "both" = everything. Never a file of the app.
+    const names = async type => { const m = await backup(s, { type, data: 'content', media: false }, shop.prefix, shop.headers); assert.ok(!m.entries.names.some(n => /saas_|^app\//.test(n)), `${type}: no platform table, no app files`); return m.entries.names.filter(n => n.startsWith('db/data/')).map(n => n.slice(8, -7)); };
+    const designTables = await names('app'), dataTables = await names('db'), allTables = await names('both');
+    assert.ok(designTables.includes('content_items') && designTables.includes('settings') && !designTables.includes('clients') && !designTables.includes('requests'), `design only: ${designTables}`);
+    assert.ok(dataTables.includes('clients') && dataTables.includes('requests') && !dataTables.includes('content_items') && !dataTables.includes('settings'), `data only: ${dataTables}`);
+    assert.ok(allTables.includes('clients') && allTables.includes('content_items'), 'both');
+    const made = await backup(s, { type: 'both', data: 'content', media: false }, shop.prefix, shop.headers);
     assert.ok(!made.entries.names.some(n => /saas_|^app\//.test(n)), 'no platform table, no app files');
     const all = (await Promise.all(made.entries.names.map(async n => (await made.entries.read(n)).toString('latin1')))).join('\n');
     assert.ok(all.includes('SHOP-ONLY'), 'its own content');
@@ -438,7 +443,9 @@ test('database provider: Neon / Supabase labels, mismatch refused, cross-provide
   let zip;
   try {
     await seed(a);
-    assert.equal((await h.call(a.backend, `${P}/capabilities`, { headers: a.admin })).body.provider.detected, 'neon');
+    const capsA = (await h.call(a.backend, `${P}/capabilities`, { headers: a.admin })).body.provider;
+    assert.equal(capsA.detected, 'neon');
+    assert.equal(capsA.locked, true, 'a detected provider is selected for the person and cannot be changed');
     const bad = await h.call(a.backend, `${P}/jobs`, { method: 'POST', headers: a.admin, body: { type: 'db', provider: 'supabase' } });
     assert.equal(bad.status, 400); assert.equal(bad.body.error, 'PROVIDER_MISMATCH'); assert.equal(bad.body.detected, 'neon');
     assert.equal((await h.call(a.backend, `${P}/jobs`, { method: 'POST', headers: a.admin, body: { type: 'db', provider: 'oracle' } })).body.error, 'INVALID_PROVIDER');
@@ -458,6 +465,7 @@ test('database provider: Neon / Supabase labels, mismatch refused, cross-provide
   } finally { b.cleanup(); }
   const c = await h.setup({ r2: false });
   try {
+    assert.equal((await h.call(c.backend, `${P}/capabilities`, { headers: c.admin })).body.provider.locked, false, 'an undetected provider may be chosen');
     for (const provider of ['neon', 'supabase', 'auto']) {
       const m = await backup(c, { type: 'db', provider, data: 'content', media: false });
       assert.ok(['neon', 'supabase', 'pglite', 'postgres'].includes(JSON.parse((await m.entries.read('manifest.json')).toString()).db.provider));
@@ -641,10 +649,10 @@ test('super admin: platform backup (all stores + platform tables) and restore, p
     assert.equal((await h.call(s.backend, `/${shop.slug}/api/admin/session`, { headers: shop.headers })).status, 200, 'sessions of the stores survive');
     // per-store backup from the console: db only, that store only
     const SS = `/api/super-admin/tenants/${shop.tenant.id}/backup`;
-    const one = await backup(s, { type: 'db', data: 'content', media: false }, SS, S);
+    const one = await backup(s, { type: 'both', data: 'content', media: false }, SS, S);
     const oneAll = (await Promise.all(one.entries.names.map(async n => (await one.entries.read(n)).toString('latin1')))).join('\n');
     assert.ok(oneAll.includes('SHOP-ROW') && !oneAll.includes('Client One'), 'only that store');
-    assert.equal((await h.call(s.backend, `${SS}/jobs`, { method: 'POST', headers: S, body: { type: 'app' } })).status, 403);
+    assert.equal((await h.call(s.backend, `${SS}/jobs`, { method: 'POST', headers: S, body: { type: 'app' } })).status, 202, 'a store "app" backup is its design, never server files');
     assert.equal((await h.call(s.backend, '/api/super-admin/tenants/nope/backup/capabilities', { headers: S })).status, 404);
     // a store backup cannot be restored as a platform backup and vice versa
     const wrong = await h.upload(s.backend, S, SP, one.zip);

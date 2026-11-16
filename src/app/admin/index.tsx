@@ -17,6 +17,7 @@ import { AreaChart, Donut, Heatmap, Ring, StackBar } from '@/components/admin/da
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
+import { useCan } from '@/store/useAdminProfile';
 import { useTheme } from '@/theme/ThemeProvider';
 import { toast } from '@/store/useToast';
 import { canExport, download } from '@/lib/brand/export';
@@ -35,6 +36,7 @@ const BLOCKS = [0, 1, 2, 3, 4, 5];
 const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
 export default function Dashboard() {
+  const canApi = useCan('storeApi'); // model names are API detail: hidden without API access
   const { t, lang } = useT();
   const L = useL();
   const { colors } = useTheme();
@@ -271,7 +273,7 @@ export default function Dashboard() {
                         {ai.failed ? <Txt className="text-[12px] font-bold text-danger">{t('dx.ai.failed', { n: ai.failed })}</Txt> : null}
                       </View>
                     </View>
-                    {ai.models.length ? <View className="flex-row flex-wrap gap-1.5">{ai.models.map((m) => <View key={m.label} className="bg-surface2 rounded-full px-2.5 h-6 items-center justify-center"><Txt className="text-[11px] font-semibold" numberOfLines={1}>{m.label} · {m.count}</Txt></View>)}</View> : null}
+                    {canApi && ai.models.length ? <View className="flex-row flex-wrap gap-1.5">{ai.models.map((m) => <View key={m.label} className="bg-surface2 rounded-full px-2.5 h-6 items-center justify-center"><Txt className="text-[11px] font-semibold" numberOfLines={1}>{m.label} · {m.count}</Txt></View>)}</View> : null}
                   </View>
                 )}
               </Panel>

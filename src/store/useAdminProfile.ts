@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, backendEnabled } from '@/lib/backend';
+import { useAdminInstance } from '@/store/useAdminInstance';
 
 /** The signed-in administrator's own account (see server/admins.js). `credits: null` = unlimited. */
 export interface AdminProfile {
@@ -44,4 +45,9 @@ export async function refreshProfile() {
 export const adminDisplayName = (p: AdminProfile | null, fallback: string) => (p?.name || '').trim() || fallback;
 
 /** Allowed unless the server said so explicitly (an older server sends no permissions at all). */
-export const useCan = (permission: 'storeApi' | 'backup') => useAdminProfile((s) => s.profile?.permissions?.[permission] !== false);
+export const useCan = (permission: 'storeApi' | 'backup') => {
+  const allowed = useAdminProfile((s) => s.profile?.permissions?.[permission] !== false);
+  // A store whose AI connections are managed by the platform owner never shows API detail, whatever the administrator's own permissions are.
+  const managed = useAdminInstance((s) => s.instance?.apiMode === 'platform');
+  return permission === 'storeApi' ? allowed && !managed : allowed;
+};

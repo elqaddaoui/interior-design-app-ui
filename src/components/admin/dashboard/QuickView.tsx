@@ -13,6 +13,7 @@ import { Spark } from './Viz';
 import { useDashFormat } from './format';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
+import { useCan } from '@/store/useAdminProfile';
 import { toast } from '@/store/useToast';
 import { overview, heatmap, type Insight } from '@/lib/analytics';
 import { AUD_KINDS, audienceClients, clientProfile, failedRuns, pendingQueue, type AudKind, type ClientRow } from '@/lib/dashDetail';
@@ -106,7 +107,8 @@ function RequestView({ r, push }: { r: RenderRequest; push: (v: QV) => void }) {
   const [busy, setBusy] = useState(false);
   const at = (uri?: string) => Math.max(0, shots.findIndex((x) => x.uri === uri));
   const d = r.draft;
-  const used = r.aiRun?.used || r.aiModel;
+  const showApi = useCan('storeApi'); // no model / provider name for an administrator without API access
+  const used = showApi ? r.aiRun?.used || r.aiModel : undefined;
   const parts = [f.toolName(d.toolId), L(s.roomTypes.find((x) => x.id === d.roomTypeId)?.title), L(s.styles.find((x) => x.id === d.styleId)?.title), L(s.palettes.find((x) => x.id === d.paletteId)?.title)].filter(Boolean);
   const set = async (status: RequestStatus) => {
     if (busy) return;

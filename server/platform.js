@@ -119,6 +119,8 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   /** The handle tenant modules receive. The id is fixed at construction (bundle.js), so no caller can name another tenant. */
   const forTenant = (tenantId, { onChange } = {}) => ({
     managed: kind => managed(tenantId, kind),
+    /** 'platform' = the super admin manages this store's AI connections (the store's administrators see no API detail), 'own' otherwise. */
+    mode: async () => (await policyOf(tenantId)).mode,
     hasRoom: n => hasRoom(tenantId, n),
     consume: n => consume(tenantId, n, onChange),
     refund: n => refund(tenantId, n, onChange),

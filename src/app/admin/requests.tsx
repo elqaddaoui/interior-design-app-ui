@@ -18,6 +18,7 @@ import { ImageField } from '@/components/admin/ImageField';
 import { useBp } from '@/hooks/useBp';
 import { useL, useT } from '@/i18n';
 import { useStore } from '@/store/useStore';
+import { useCan } from '@/store/useAdminProfile';
 import { toast } from '@/store/useToast';
 import { waLink } from '@/lib/share';
 import { useDraftDoc } from '@/hooks/useDraftDoc';
@@ -42,7 +43,8 @@ function Choices({ r }: { r: RenderRequest }) {
   const { t } = useT();
   const d = r.draft;
   const run = r.aiRun;
-  const used = run?.used || r.aiModel;
+  const showApi = useCan('storeApi'); // no model / provider name for an administrator without API access
+  const used = showApi ? run?.used || r.aiModel : undefined;
   const parts = [
     s.tools.find((x) => x.id === d.toolId) && L(s.tools.find((x) => x.id === d.toolId)!.title),
     d.roomTypeId && L(s.roomTypes.find((x) => x.id === d.roomTypeId)?.title),
