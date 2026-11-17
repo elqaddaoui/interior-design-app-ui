@@ -11,6 +11,8 @@ import { useT } from '@/i18n';
 import { toCardWebp } from '@/lib/cardImage';
 import { mediaUploadsEnabled, uploadDataUrl } from '@/lib/media';
 import { photosFromFiles, pickPhotos } from '@/lib/photo';
+import { useLibraryEnabled } from '@/lib/mediaLibrary';
+import { useMediaChooser } from '@/components/admin/media/MediaChooser';
 import type { PickManyResult } from '@/lib/photoTypes';
 import { moveTo } from '@/lib/reorder';
 import { toast } from '@/store/useToast';
@@ -38,6 +40,8 @@ async function storeCardImage(uri: string): Promise<string> {
  */
 export function SlideshowImages({ images, onChange, ratio }: { images: string[]; onChange: (next: string[]) => void; ratio?: number }) {
   const { t } = useT();
+  const own = useLibraryEnabled();
+  const chooser = useMediaChooser();
   const [busy, setBusy] = useState<{ done: number; total: number } | null>(null);
   const [over, setOver] = useState(false);
   // Tile ids come from the picture itself (+ how many identical ones came before), so a duplicate never shares an id.
@@ -90,7 +94,17 @@ export function SlideshowImages({ images, onChange, ratio }: { images: string[];
       if (failed) toast(t('ax.uploadPartial', { failed }));
     } finally { setBusy(null); }
   };
-  const add = async () => { if (busy) return; await ingest(await pickPhotos({ limit: Math.max(1, MAX_IMAGES - images.length) })); };
+  const add = async () => {
+    if (busy) return;
+    if (own) {
+      // Own-media store: "Media library" or "Upload new"; the chosen files are already stored, so they are appended as they are.
+      const urls = await chooser.choose({ kind: 'image', multiple: true });
+      const room = Math.max(0, MAX_IMAGES - latest.current.length);
+      if (urls?.length) onChange([...latest.current, ...urls.slice(0, room)]);
+      return;
+    }
+    await ingest(await pickPhotos({ limit: Math.max(1, MAX_IMAGES - images.length) }));
+  };
 
   // Files dropped from the computer (web only): the whole area is a drop zone.
   const dropRef = useRef(ingest);
@@ -159,6 +173,7 @@ export function SlideshowImages({ images, onChange, ratio }: { images: string[];
           <Button testID="slide-add" size="sm" variant="soft" icon="plus" title={t('ax.addImagesMulti')} onPress={add} loading={!!busy} disabled={images.length >= MAX_IMAGES} />
           {busy ? <Txt testID="slide-progress" className="text-muted text-[12px]">{t('ax.uploadingN', { done: busy.done, total: busy.total })}</Txt> : null}
         </View>
+        {chooser.node}
       </View>
     </GestureRoot>
   );

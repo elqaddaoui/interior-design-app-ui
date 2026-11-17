@@ -291,6 +291,7 @@ const fr = {
       sections: 'Sliders Explorer',
       categories: 'Catégories Explorer',
       inspirations: 'Photos d’inspiration',
+      media: 'Médiathèque',
       styles: 'Styles',
       roomTypes: 'Types de pièces',
       palettes: 'Palettes',

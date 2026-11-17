@@ -66,6 +66,15 @@ The starter content in `server/seed-content.json` (generated from `src/data/mock
 ### Uploaded images
 All media (admin images and videos, client photos, AI results, chat images, external image links) is stored in **Cloudflare R2** through `server/media.js` and referenced by stable `/api/media/<hash>.<ext>` URLs (a redirect to the public R2 object). Videos use admin-only presigned uploads; external https images are downloaded once. Without the `R2_*` variables, files fall back to raw bytes in the `media` table; base64 is never stored. Setup and migration (`scripts/migrate-media-to-r2.js`): see [docs/r2-setup.md](docs/r2-setup.md).
 
+### Media & storage (multi-tenant)
+- **One shared namespace, keyed by the file hash.** A file id is the hash of its bytes and the object is stored once (`media/<hash>.<ext>`). Every store has its own *rows* in the `media` table (title, alt, library flag) pointing at that object. **Cloning a demo, restoring a backup or copying a theme copies rows only, never bytes**: the same file is shared by every store that uses it.
+- **Deleting a file in a store** removes only that store's row. The physical object (R2 / app folder) is deleted only when that store was the **last** owner; if the bytes live in the database, they are handed over to another store's row first.
+- **Super admin > Media & storage** (`/super-admin/media`): where the files live, plus the list of client stores with their **file count and size**.
+  - **Storage**: *Cloudflare R2*, *App directory* (self-hosted, `MEDIA_DIR`; keep it OUTSIDE the build folder on Hostinger) or the *database*. **Use** only changes where new files go; **Move all** copies every file once (a shared file is moved once and every store row is repointed), verifies it and keeps the old copy for 24 h (**Remove old copies** afterwards). The move is resumable and can be cancelled.
+- **Store admin > Media** (`/admin/media`, always available): grid of **everything the store manages or uses**: admin uploads, AI renders, client photos, files referenced by the content, and external image links found in the content (read-only, marked with a link badge). Search, All / Images / Videos filter, upload (progress), edit title / alt, copy URL, "used in" list, bulk delete (a file still in use asks for confirmation). **Videos show a live preview** (poster frame, plays in the details view); the **Autoplay** chip turns the in-grid playback on or off (remembered on the device).
+- **Everywhere a picture or video is added** (content image fields, logo, slideshow, avatar, video) the admin gets two choices: **Media library** or **Upload new**.
+- Tests: `node --test scripts/check-media-library-server.js scripts/check-media-server.js`.
+
 ## Services to replace later (`Services`)
 `upload` (file storage) and `whatsapp` (send design) are still mock services; `render` is real as soon as an image engine has a key (see **AI image generation** below; without one the app keeps its sample result); `auth` is the real admin login and `chat` is real (see **AI chat** below; it falls back to the local canned reply when no provider answers).
 

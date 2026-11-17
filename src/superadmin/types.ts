@@ -49,3 +49,17 @@ export type AbuseSettings = {
   spikeFactor: number; minSpike: number; failureRate: number; probe: number;
 };
 export type AlertConfig = { settings: AbuseSettings; recipient: string; transport: boolean; defaults: AbuseSettings };
+
+export type MediaStorageKind = 'r2' | 'app';
+export type MediaBucket = { files: number; bytes: number };
+export type MediaMove = { status: 'idle' | 'running' | 'done' | 'cancelled'; target?: MediaStorageKind; total?: number; done?: number; failed?: number; movedBytes?: number; bytes?: number; lastError?: string };
+export type MediaOverview = {
+  storage: {
+    current: string; deployDefault: string; r2: { available: boolean }; database: { available: boolean };
+    app: { available: boolean; writable?: boolean; root?: string; freeBytes?: number | null; persistent?: boolean | null; platform?: string; customDir?: boolean };
+  };
+  totals: { r2: MediaBucket; app: MediaBucket; database: MediaBucket };
+  oldCopies: { files: number; bytes: number; oldestAt: number | null; cleanableAt: number | null; cleanable: boolean };
+  move: MediaMove;
+  stores: { id: string; slug: string; name: string; kind: 'default' | 'instance' | 'demo'; status: string; files: number; bytes: number }[];
+};

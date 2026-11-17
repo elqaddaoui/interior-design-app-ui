@@ -14,6 +14,7 @@ const NAV: { href: string; label: string; testID: string; icon: IconName }[] = [
   { href: '/super-admin', label: 'Overview', testID: 'sa-nav-overview', icon: 'viewDashboardOutline' },
   { href: '/super-admin/tenants', label: 'Client Stores', testID: 'sa-nav-tenants', icon: 'domain' },
   { href: '/super-admin/demos', label: 'Demos', testID: 'sa-nav-demos', icon: 'viewGridOutline' },
+  { href: '/super-admin/media', label: 'Media & storage', testID: 'sa-nav-media', icon: 'imageMultipleOutline' },
   { href: '/super-admin/apis', label: 'APIs', testID: 'sa-nav-apis', icon: 'lockOutline' },
   { href: '/super-admin/audit', label: 'Activity', testID: 'sa-nav-audit', icon: 'formatListBulleted' },
   { href: '/super-admin/settings', label: 'Settings', testID: 'sa-nav-settings', icon: 'cogOutline' },

@@ -138,7 +138,7 @@ test('two tenants on one database: clients, sessions, content, settings, sync co
   assert.equal(await b.admins.verify('admin', 'admin'), null);
 });
 
-test('media: the same bytes are stored once per tenant, each under its own R2 prefix; a tenant cannot read another tenant\'s file by name', async () => {
+test('media: the same bytes are ONE shared object (media/<hash>) with one row per tenant; a tenant cannot read another tenant\'s file by name', async () => {
   const { db, backend } = await setup();
   const objects = new Map();
   const storage = { kind: 'r2', publicUrl: key => `https://cdn.example/${key}`, put: async (key, body) => { objects.set(key, body); }, head: async () => null };
@@ -147,11 +147,11 @@ test('media: the same bytes are stored once per tenant, each under its own R2 pr
   const url = await mediaOf('acme').storeMedia({ body, mime: 'image/png' });
   await mediaOf('default').storeMedia({ body, mime: 'image/png' });
   const name = url.slice('/api/media/'.length);
-  assert.ok(objects.has(`t/acme/media/${name}`), 'non-default tenants live under t/<id>/');
-  assert.ok(objects.has(`media/${name}`), 'the default tenant keeps the historical key');
-  assert.equal((await db.query('SELECT tenant_id FROM media ORDER BY tenant_id')).map(r => r.tenant_id).join(), 'acme,default');
-  assert.equal(await mediaOf('globex').readMedia(name), null, 'globex never stored it: unknown, even though the bytes exist for others');
-  assert.equal((await mediaOf('acme').readMedia(name)).redirect, `https://cdn.example/t/acme/media/${name}`);
+  assert.ok(objects.has(`media/${name}`), 'every store uses the shared key');
+  assert.ok(![...objects.keys()].some(key => key.startsWith('t/')), 'no per-store prefix any more');
+  assert.equal((await db.query('SELECT tenant_id FROM media ORDER BY tenant_id')).map(r => r.tenant_id).join(), 'acme,default', 'one ROW per store');
+  assert.equal(await mediaOf('globex').readMedia(name), null, 'globex has no row: unknown, even though the bytes exist for others');
+  assert.equal((await mediaOf('acme').readMedia(name)).redirect, `https://cdn.example/media/${name}`);
   assert.equal((await mediaOf('default').readMedia(name)).redirect, `https://cdn.example/media/${name}`);
   backend.server.emit('close');
 });

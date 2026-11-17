@@ -11,6 +11,8 @@ import { useT } from '@/i18n';
 import { pickPhoto } from '@/lib/photo';
 import { mediaUploadsEnabled, uploadDataUrl } from '@/lib/media';
 import { toast } from '@/store/useToast';
+import { useLibraryEnabled } from '@/lib/mediaLibrary';
+import { useMediaChooser } from '@/components/admin/media/MediaChooser';
 import { DARK_BG } from '@/lib/brand/color';
 import { canEditImage, cropImage, imageSize, ratioOf, trimRect, whiteVersion } from '@/lib/brand/imageTools';
 import type { LogoSpec } from '@/lib/brand/spec';
@@ -68,7 +70,12 @@ export function ImagePanel({ spec, up }: { spec: LogoSpec; up: Up }) {
     up((s) => ({ ...s, image: { ...s.image, [slot]: url, ...(slot === 'light' ? { ratio } : { darkRatio: ratio }) } }), `image-${slot}`);
   };
   const run = async (slot: Slot, job: () => Promise<void>) => { setBusy(slot); try { await job(); } catch { toast(t('br.imageFailed')); } finally { setBusy(''); } };
-  const upload = (slot: Slot) => run(slot, async () => { const r = await pickPhoto('gallery', { preserveTransparency: true }); if ('uri' in r) await store(slot, r.uri); });
+  const own = useLibraryEnabled();
+  const chooser = useMediaChooser();
+  const upload = (slot: Slot) => run(slot, async () => {
+    if (own) { const urls = await chooser.choose({ kind: 'image' }); if (urls?.[0]) await store(slot, urls[0]); return; }
+    const r = await pickPhoto('gallery', { preserveTransparency: true }); if ('uri' in r) await store(slot, r.uri);
+  });
   const uri = (slot: Slot) => spec.image[slot];
   const slot = (id: Slot) => {
     const u = uri(id);
@@ -93,6 +100,7 @@ export function ImagePanel({ spec, up }: { spec: LogoSpec; up: Up }) {
       <View className="flex-row flex-wrap gap-2.5 mb-2">{slot('light')}{slot('dark')}</View>
       <Hint>{t('br.imgHint')}</Hint>
       {cropping && uri(cropping) ? <CropSheet uri={uri(cropping)} onClose={() => setCropping('')} onApply={(rect) => { const id = cropping; setCropping(''); void run(id, async () => { await store(id, await cropImage(uri(id), rect)); }); }} /> : null}
+      {chooser.node}
     </View>
   );
 }

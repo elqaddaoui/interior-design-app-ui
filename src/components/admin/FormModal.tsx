@@ -9,6 +9,8 @@ import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { ColorPicker } from './ColorPicker';
 import { ImageField } from './ImageField';
+import { useLibraryEnabled } from '@/lib/mediaLibrary';
+import { useMediaChooser } from '@/components/admin/media/MediaChooser';
 import { SlideshowModal } from './toolcards/SlideshowModal';
 import { slideshowImages } from '@/lib/toolCards';
 import { LangDots, LangField } from './LangField';
@@ -163,16 +165,24 @@ function SlideshowSummary({ m, onChange, record }: { m: any; onChange: (v: any) 
 function VideoUpload({ onUploaded }: { onUploaded: (uri: string, poster: string) => void }) {
   const { t } = useT();
   const [busy, setBusy] = React.useState(false);
+  const own = useLibraryEnabled();
+  const chooser = useMediaChooser();
   const up = async () => {
     setBusy(true);
-    try { const { uri, poster } = await pickAndUploadVideo(); if (uri) onUploaded(uri, poster); }
+    try {
+      if (own) {
+        // Library store: "Media library" or "Upload new"; the preview image is made from the first frame of the chosen video.
+        const urls = await chooser.choose({ kind: 'video' });
+        if (urls?.[0]) { const { posterForVideo } = await import('@/lib/videoPoster'); onUploaded(urls[0], await posterForVideo(urls[0]).catch(() => '')); }
+      } else { const { uri, poster } = await pickAndUploadVideo(); if (uri) onUploaded(uri, poster); }
+    }
     catch (error) {
       const code = error instanceof Error ? error.message : '';
       toast(/TOO_LARGE/.test(code) ? t('admin.f.videoTooLarge') : code === 'R2_REQUIRED' ? t('improve.videoNeedsR2') : /^UPLOAD_(BLOCKED|FAILED_403)$/.test(code) ? t('improve.uploadBlocked') : t('admin.f.uploadFailed'));
     }
     finally { setBusy(false); }
   };
-  return <View className="flex-row -mt-1 mb-3"><Button title={t('admin.f.uploadVideo')} icon="upload" variant="soft" size="sm" onPress={up} loading={busy} /></View>;
+  return <View className="flex-row -mt-1 mb-3"><Button testID={own ? 'video-library' : undefined} title={own ? t('ml.choose') : t('admin.f.uploadVideo')} icon={own ? 'folder-multiple-image' : 'upload'} variant="soft" size="sm" onPress={up} loading={busy} />{chooser.node}</View>;
 }
 
 /**

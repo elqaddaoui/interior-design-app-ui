@@ -292,6 +292,7 @@ const ar: Dict = {
       sections: 'شرائح الاستكشاف',
       categories: 'فئات الاستكشاف',
       inspirations: 'صور الإلهام',
+      media: 'مكتبة الوسائط',
       styles: 'الأساليب',
       roomTypes: 'أنواع الغرف',
       palettes: 'لوحات الألوان',

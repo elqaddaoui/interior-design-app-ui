@@ -29,6 +29,10 @@ External download rules (`server/remote-media.js`):
 Upload limits (env, in MB): `MEDIA_MAX_IMAGE_MB` (default 10) and `MEDIA_MAX_VIDEO_MB` (default 100). Allowed types: PNG,
 JPEG, WebP, GIF, AVIF, SVG (admin inline uploads only), MP4, WebM and QuickTime.
 
+## Choosing the storage at runtime (multi-tenant)
+
+The platform owner picks the primary storage in **Super admin > Media & storage**: *Cloudflare R2*, *App directory* or *database*. The choice is stored in the database and overrides the deployment default (R2 variables set -> R2; `MEDIA_STORAGE=app` or `MEDIA_DIR` -> app directory). R2 keys are `media/<hash>.<ext>` for every store: the hash is a shared namespace, so a cloned or restored store points at the same object (only rows are copied) and the object is deleted only when its last owner deletes it. Older per-store files under `t/<tenantId>/media/<name>` keep working until they are moved. **Move all media** copies each file, verifies it, repoints the database and keeps the old copy in `saas_media_old` until you press **Clean up old copies** (available 24 h later), so a failed or cancelled move never loses a file. Selecting R2 without the `R2_*` variables is refused (`R2_NOT_CONFIGURED`).
+
 ## 1. Create the bucket
 
 1. Cloudflare dashboard → **R2** → **Create bucket** (for example `dwira-media`). For the location, choose one near `fra1` (Europe).
