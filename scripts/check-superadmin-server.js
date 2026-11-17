@@ -303,8 +303,9 @@ test('assigning to an EXISTING admin re-uses their login; AI provider keys never
   const { demo, admin: demoAdmin } = (await api('/demos', { method: 'POST', body: { name: 'Keys Demo' } })).body;
   const cookie = await tenantLogin(backend, demo.slug, demoAdmin.id, demoAdmin.password);
   // Put a provider key into the template: in a model entry and in the image-keys setting.
+  // (A demo is platform-managed, so its administrator cannot edit models through the API: the entry is written straight to the table.)
   const models = (await call(backend, `/${demo.slug}/api/admin/content/models`, { headers: cookie })).status;
-  await call(backend, `/${demo.slug}/api/admin/content/models/m-secret`, { method: 'PUT', headers: cookie, body: { name: 'Secret model', provider: 'x', apiKey: 'sk-TEMPLATE-SECRET-123456' } });
+  await db.query("INSERT INTO content_items(tenant_id,coll,id,data,updated_at) VALUES($1,'models','m-secret',$2,0)", [demo.tenantId, JSON.stringify({ id: 'm-secret', name: 'Secret model', provider: 'x', apiKey: 'sk-TEMPLATE-SECRET-123456' })]);
   await db.query("INSERT INTO settings(tenant_id,key,value) VALUES($1,'image_keys',$2),($1,'vapid','{\"priv\":1}'),($1,'image_rotation','{}')", [demo.tenantId, JSON.stringify({ pollinations: 'sk-IMAGE-SECRET-123456' })]);
   assert.ok(models !== undefined);
 

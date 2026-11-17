@@ -194,7 +194,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     id: row.id, slug: row.slug, name: row.name, kind: row.kind, status: row.status, plan: row.plan, ownerEmail: row.owner_email,
     sourceDemoId: row.source_demo_id, sourceDemoVersion: num(row.source_demo_version), notes: row.notes,
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at), suspendedAt: num(row.suspended_at), ...urls(row),
-    creditLimit: num(row.credit_limit), creditsUsed: Number(row.credits_used || 0), apiMode: row.api_mode === 'platform' ? 'platform' : 'own', apiLinks: linksOf(row), ...platform.aiView(row),
+    creditLimit: num(row.credit_limit), creditsUsed: Number(row.credits_used || 0), apiMode: row.kind === 'demo' || row.api_mode === 'platform' ? 'platform' : 'own', apiLinks: linksOf(row), ...platform.aiView(row),
     ...(row.allocated !== undefined ? { creditsAllocated: Number(row.allocated) } : {}),
     ...(row.clients !== undefined ? { counts: { clients: row.clients, requests: row.requests, admins: row.admins, domains: row.domains } } : {}),
   });
@@ -830,6 +830,14 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
       if (method === 'GET') return ok({ apis: await platform.list(), catalog: platform.CATALOG });
       if (method === 'POST') { const view = await platform.create(await readBody(req)); await audit(actor, 'api.create', null, view.id, `${view.kind}/${view.provider}`); return ok(view, 201); }
     }
+    // Keys the backend holds outside the manager (host variables, store administrators' own keys): find them, move them in, remove them from the stores.
+    if (path === '/apis/discover' && method === 'GET') return ok(await platform.discover());
+    if (path === '/apis/import' && method === 'POST') {
+      const body = await readBody(req);
+      const view = await platform.importKey(body);
+      await audit(actor, 'api.import', body.source === 'store' ? body.tenantId : null, view.id, `${view.kind}/${view.provider} from ${body.source}${body.clear ? ', removed from the store' : ''}`);
+      return ok(view, 201);
+    }
     if ((m = /^\/apis\/(api_[a-f0-9]{10})$/.exec(path))) {
       if (method === 'PATCH') { const body = await readBody(req); const view = await platform.update(m[1], body); await audit(actor, 'api.update', null, m[1], Object.keys(body || {}).map(k => (k === 'apiKey' ? 'key' : k)).join(',')); return ok(view); }
       if (method === 'DELETE') { const row = await platform.remove(m[1]); await audit(actor, 'api.delete', null, m[1], `${row.kind}/${row.provider}`); return ok({ ok: true }); }
@@ -868,6 +876,22 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     if (path === '/media/storage' && method === 'PUT') return ok(await setMediaStorage(await readBody(req), actor));
     if (path === '/media/move/step' && method === 'POST') return ok(await ops().move.step());
     if (path === '/media/move/cancel' && method === 'POST') { const status = await ops().move.cancel(); await audit(actor, 'media.move.cancel', null, '', ''); return ok(status); }
+    // Every file of the platform (stores, demos, themes), with who uses it; delete whole files; compare the database with the storages and fix it.
+    if (path === '/media/files' && method === 'GET') return ok(await ops().library(Object.fromEntries(url.searchParams)));
+    if (path === '/media/files/delete' && method === 'POST') {
+      const body = await readBody(req);
+      if (!body?.allUnused && !(Array.isArray(body?.ids) && body.ids.length)) throw fail(400, 'SELECT_FILES');
+      const result = await ops().deleteFiles({ ids: body.ids, force: body.force === true, allUnused: body.allUnused === true });
+      await audit(actor, 'media.files.delete', null, body.allUnused ? 'all unused' : `${result.removed.length} files`, `${result.removed.length} removed, ${result.blocked.length} kept${body.force ? ', forced' : ''}`);
+      return ok(result);
+    }
+    if (path === '/media/audit' && method === 'POST') return ok(await ops().audit());
+    if (path === '/media/repair' && method === 'POST') {
+      const body = await readBody(req);
+      const result = await ops().repair({ orphans: body?.orphans === true, broken: body?.broken === true });
+      await audit(actor, 'media.repair', null, '', result);
+      return ok(result);
+    }
     if (path === '/media/cleanup' && method === 'POST') {
       const result = await ops().cleanup();
       await audit(actor, 'media.cleanup', null, '', result);

@@ -395,6 +395,7 @@ const ar: Dict = {
       down: 'للأسفل',
       showHide: 'إظهار / إخفاء',
       required: 'حقل مطلوب',
+      error: 'تعذّرت العملية. حاول مرة أخرى.',
     },
     brand: { appName: 'اسم التطبيق', logo: 'الشعار', upload: 'رفع شعار', remove: 'إزالة', note: 'يظهر الشعار والاسم أعلى الصفحة الرئيسية.' },
     theme: {
@@ -454,6 +455,8 @@ const ar: Dict = {
       waMsg: 'مرحبًا {{name}}، هذا تصميمك من دويرة!',
       sentAuto: 'تم الإرسال تلقائيًا',
       deliveredToast: 'تم التحديد كمُسلَّم',
+      deleteConfirm: 'حذف {{count}} طلب؟ هذا الإجراء نهائي.',
+      deletedToast: 'تم حذف {{count}} طلب',
     },
   },
 };

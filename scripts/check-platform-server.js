@@ -49,9 +49,9 @@ function fakeImageApi() {
   return { fetch, calls };
 }
 
-async function setup(imageApi = fakeImageApi()) {
+async function setup(imageApi = fakeImageApi(), extraEnv = {}) {
   const db = await freshDb();
-  const backend = createBackend({ env: ENV, db, media: { storage: null, download: offline }, imageFetch: imageApi.fetch });
+  const backend = createBackend({ env: { ...ENV, ...extraEnv }, db, media: { storage: null, download: offline }, imageFetch: imageApi.fetch });
   await backend.db.query('select 1');
   await db.query("INSERT INTO saas_tenants(id,slug,name,kind,status,created_at,updated_at) VALUES('default','default','Default','default','active',0,0) ON CONFLICT (id) DO NOTHING");
   backend.tenants.invalidate();
@@ -336,4 +336,39 @@ test('the store admin sees its own credit limit (session + sync), kept current a
   // The old request endpoints are gone.
   assert.equal((await call(backend, '/ask-shop/api/admin/change-requests', { headers: owner })).status, 404);
   void db;
+});
+
+test('backend-held keys (host variables, a store\'s own keys) are found, moved into the API manager, removed from the store; the owner can delete the connection again', async () => {
+  const { api, backend, db } = await setup(fakeImageApi(), { GROQ_API_KEY: 'gsk_host_variable_key_9999' });
+  const own = (await api('/tenants', { method: 'POST', body: { name: 'Own Keys', slug: 'own-keys' } })).body;
+  const owner = await login(backend, 'own-keys', 'admin', own.admin.password);
+  assert.equal((await call(backend, '/own-keys/api/admin/ai/keys', { method: 'PATCH', headers: owner, body: { pollinations: 'sk_store_pollen_123456' } })).status, 200);
+  const found = (await api('/apis/discover')).body;
+  assert.deepEqual(found.env.map(e => [e.provider, e.variable, e.hint, e.added]), [['groq', 'GROQ_API_KEY', '…9999', false]]);
+  assert.deepEqual(found.stores.map(e => [e.slug, e.kind, e.provider, e.hint, e.added]), [['own-keys', 'image', 'pollinations', '…3456', false]]);
+  assert.ok(!JSON.stringify(found).includes('gsk_host_variable') && !JSON.stringify(found).includes('sk_store_pollen'), 'no key is ever returned');
+  assert.equal((await call(backend, '/api/super-admin/apis/discover')).status, 401);
+  assert.equal((await call(backend, '/own-keys/api/super-admin/apis/discover', { headers: owner })).status, 404);
+
+  // Host variable -> manager (the variable itself stays: only the host can remove it).
+  const fromEnv = await api('/apis/import', { method: 'POST', body: { source: 'env', kind: 'text', provider: 'groq' } });
+  assert.equal(fromEnv.status, 201, JSON.stringify(fromEnv.body));
+  assert.equal(fromEnv.body.keyHint, '…9999');
+  assert.equal((await api('/apis/import', { method: 'POST', body: { source: 'env', kind: 'text', provider: 'groq' } })).status, 409, 'not twice');
+  assert.equal((await api('/apis/import', { method: 'POST', body: { source: 'env', kind: 'text', provider: 'mistral' } })).status, 404, 'a variable that is not set');
+  assert.equal((await api('/apis/discover')).body.env[0].added, true);
+
+  // A store's own key -> manager, and removed from the store ("clear").
+  const moved = await api('/apis/import', { method: 'POST', body: { source: 'store', tenantId: own.tenant.id, kind: 'image', provider: 'pollinations', clear: true } });
+  assert.equal(moved.status, 201, JSON.stringify(moved.body));
+  assert.equal(moved.body.isDefault, true, 'the first image connection becomes the default');
+  assert.equal(JSON.parse((await db.query("SELECT value FROM settings WHERE tenant_id=$1 AND key='image_keys'", [own.tenant.id]))[0].value).pollinations, undefined, 'gone from the store');
+  assert.equal((await api('/apis/discover')).body.stores.length, 0);
+  assert.equal((await api('/apis/import', { method: 'POST', body: { source: 'store', tenantId: 'nope', kind: 'image', provider: 'pollinations' } })).status, 404);
+  assert.equal((await api('/apis/import', { method: 'POST', body: { source: 'x', kind: 'image', provider: 'pollinations' } })).status, 400);
+
+  // Removing a connection: the owner can delete what was added; stores fall back to the next default.
+  assert.equal((await api(`/apis/${moved.body.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await api('/apis')).body.apis.some(a => a.id === moved.body.id), false);
+  assert.ok((await api('/audit?limit=30')).body.some(e => e.action === 'api.import'));
 });

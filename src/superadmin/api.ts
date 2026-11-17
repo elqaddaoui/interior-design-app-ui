@@ -38,6 +38,8 @@ const MESSAGES: Record<string, string> = {
   TOO_MANY_APIS: 'Thirty connections of one kind at most.', DEFAULT_REQUIRED: 'Choose another connection as the default instead.', INVALID_KIND: 'Unknown kind.',
   STORE_POOL_EXCEEDED: 'The clients of this store would hold more credits than its limit allows.', INVALID_LIMIT: 'This value is out of range.',
   NO_RECIPIENT: 'No e-mail address to send warnings to. Enter one above.', NO_MAIL_TRANSPORT: 'The server has no e-mail service configured yet.', EMAIL_FAILED: 'The e-mail could not be sent.',
+  SELECT_FILES: 'Choose at least one file.', STORAGE_UNAVAILABLE: 'That storage is not available on this server.',
+  INVALID_SOURCE: 'Unknown source.', KEY_NOT_FOUND: 'That key is no longer there.', ALREADY_ADDED: 'This key is already in the API manager.',
   MOVE_RUNNING: 'A move is already running. Wait for it to finish or stop it.',
   INVALID_STORAGE: 'Choose Cloudflare R2 or the app folder.', R2_NOT_CONFIGURED: 'Cloudflare R2 is not configured on this server.',
   APP_STORAGE_UNAVAILABLE: 'The app folder is not usable on this host (read-only or not persistent).',

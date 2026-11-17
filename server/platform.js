@@ -15,6 +15,7 @@
 const crypto = require('node:crypto');
 const { PROVIDERS, safeUrl } = require('./chat');
 const { createUsage } = require('./usage');
+const TENANT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const KINDS = ['image', 'text', 'other'];
@@ -53,10 +54,13 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   async function policyOf(tenantId) {
     const hit = policies.get(tenantId);
     if (ttl && hit && clock() - hit.at < ttl) return hit;
-    const row = (await db.query('SELECT api_mode, api_links FROM saas_tenants WHERE id=$1', [tenantId]))[0];
+    const row = (await db.query('SELECT api_mode, api_links, kind FROM saas_tenants WHERE id=$1', [tenantId]))[0];
     let links = {};
     try { links = JSON.parse(row?.api_links || '{}') || {}; } catch { /* corrupt value = no links */ }
-    const value = { at: clock(), mode: row?.api_mode === 'platform' ? 'platform' : 'own', links };
+    // A DEMO always runs on the platform's API manager, exactly like a store set to "Managed by me": it has no keys of its own, its
+    // administrators see no API detail, and every call is metered against the shared default connection. Its "Use API" switch (see `gate`)
+    // decides WHEN it may call out; this decides WHICH keys it uses.
+    const value = { at: clock(), mode: row?.kind === 'demo' || row?.api_mode === 'platform' ? 'platform' : 'own', links };
     policies.set(tenantId, value);
     if (policies.size > 2000) policies.delete(policies.keys().next().value);
     return value;
@@ -109,7 +113,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
     const now = clock();
     const code = row.ai_paused ? 'AI_PAUSED' : row.kind === 'demo' && !(row.ai_until != null && Number(row.ai_until) > now) ? 'AI_DISABLED_DEMO' : '';
     if (code) {
-      await usage.record(tenantId, { kind, op, provider: 'gate', mode: row.api_mode, blocked: true });
+      await usage.record(tenantId, { kind, op, provider: 'gate', mode: row.kind === 'demo' ? 'platform' : row.api_mode, blocked: true });
       throw Object.assign(fail(code === 'AI_PAUSED' ? 403 : 503, code), { gate: code });
     }
     if (row.kind === 'demo' && Number(row.ai_until) - now < IDLE * 0.8) await db.query("UPDATE saas_tenants SET ai_until=$2 WHERE id=$1 AND kind='demo'", [tenantId, now + IDLE]);
@@ -138,7 +142,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
    * `over` = how far the commitment (used + allocated) is past the limit (e.g. after the limit was lowered).
    */
   async function infoOf(tenantId) {
-    const row = (await db.query('SELECT credit_limit, credits_used, api_mode, ai_paused FROM saas_tenants WHERE id=$1', [tenantId]))[0];
+    const row = (await db.query('SELECT credit_limit, credits_used, api_mode, ai_paused, kind FROM saas_tenants WHERE id=$1', [tenantId]))[0];
     if (!row) return { credits: { limit: null, used: 0, left: null, allocated: 0, available: null, over: 0, state: 'ok' }, apiMode: 'own', aiPaused: false };
     const limit = num(row.credit_limit), used = Number(row.credits_used);
     const allocated = await allocatedTo(tenantId);
@@ -147,7 +151,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
     const state = limit == null ? 'ok' : over > 0 ? 'over' : limit > 0 && committed / limit >= 0.9 ? 'near' : 'ok';
     return {
       credits: { limit, used, left: limit == null ? null : Math.max(0, limit - used), allocated, available: limit == null ? null : Math.max(0, limit - committed), over, state },
-      apiMode: row.api_mode === 'platform' ? 'platform' : 'own', aiPaused: !!row.ai_paused,
+      apiMode: row.kind === 'demo' || row.api_mode === 'platform' ? 'platform' : 'own', aiPaused: !!row.ai_paused,
     };
   }
 
@@ -171,8 +175,17 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   const oldDue = (before, limit) => db.query('SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE moved_at<=$1 ORDER BY moved_at LIMIT $2', [before, limit]);
   const oldSummary = async () => (await db.query('SELECT COUNT(*)::int AS files, COALESCE(SUM(size),0)::bigint AS bytes, MIN(moved_at) AS first FROM saas_media_old'))[0];
   const oldDropTenant = tenantId => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1', [tenantId]);
+  const oldDropFile = (tenantId, id) => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1 AND id=$2', [tenantId, id]);
   const oldOf = tenantId => db.query('SELECT id,mime,storage FROM saas_media_old WHERE tenant_id=$1', [tenantId]);
-  const media = { oldOf, oldAdd, oldList, oldDel, oldDue, oldSummary, oldDropTenant, forget: () => { mediaChoice.cache = { at: -Infinity, value: null }; }, storageChoice: mediaStorageChoice, setStorageChoice: setMediaStorageChoice, kvGet, kvSet };
+  // Read-only registry lookups for the media audit/library (server/media-ops.js never names a platform table itself).
+  const mediaOwners = async () => ({
+    tenants: await db.query('SELECT id,slug,name,kind FROM saas_tenants'),
+    themes: await db.query('SELECT id,name FROM saas_themes'),
+  });
+  /** (theme id, media id) pairs for every `/api/media/<hash>.` a theme snapshot shows. `pattern` is a POSIX regex with ONE capture group. */
+  const mediaThemeRefs = pattern => db.query('SELECT DISTINCT t.id AS owner, m[1] AS id FROM saas_themes t, regexp_matches(t.snapshot, $1, \'g\') AS m', [pattern.replace(/^'|'$/g, '')]);
+  const oldAll = () => db.query('SELECT tenant_id,id,storage,mime FROM saas_media_old');
+  const media = { owners: mediaOwners, themeRefs: mediaThemeRefs, oldAll, oldOf, oldDropFile, oldAdd, oldList, oldDel, oldDue, oldSummary, oldDropTenant, forget: () => { mediaChoice.cache = { at: -Infinity, value: null }; }, storageChoice: mediaStorageChoice, setStorageChoice: setMediaStorageChoice, kvGet, kvSet };
 
   // ---------- Console: AI switches ----------
   /** The "use API" switch of a demo. On = until now + the idle window; off = closed at once. Only demos have it. */
@@ -246,7 +259,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   });
   /** How many platform-managed stores use each connection (explicit link, or the default of its kind). */
   async function linkedCounts() {
-    const stores = await db.query("SELECT api_mode, api_links FROM saas_tenants WHERE kind IN ('default','instance') AND api_mode='platform'");
+    const stores = await db.query("SELECT api_mode, api_links FROM saas_tenants WHERE kind='demo' OR (kind IN ('default','instance') AND api_mode='platform')");
     const rows = await apiRows();
     const count = new Map();
     for (const store of stores) {
@@ -319,6 +332,77 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
     forget();
     return apiView((await db.query('SELECT * FROM saas_apis WHERE id=$1', [row.id]))[0]);
   }
+  // ---------- Console: keys that live OUTSIDE the manager ----------
+  /** Environment variables (host settings) the app reads for each kind. Never returned: only a masked hint. */
+  const ENV_KEYS = [
+    { kind: 'image', provider: 'pollinations', variable: 'POLLINATIONS_API_KEY', baseVariable: 'POLLINATIONS_BASE_URL' },
+    { kind: 'image', provider: 'openai', variable: 'IMAGEGEN_API_KEY', baseVariable: 'IMAGEGEN_BASE_URL' },
+    ...Object.keys(PROVIDERS).filter(id => PROVIDERS[id].env).map(id => ({ kind: 'text', provider: id, variable: PROVIDERS[id].env })),
+  ];
+  const STORE_KEYS = [{ setting: 'image_keys', kind: 'image' }, { setting: 'chat_keys', kind: 'text' }];
+  const hintOf = key => `…${String(key).slice(-4)}`;
+  const labelOf = (kind, provider) => CATALOG[kind].find(p => p.id === provider)?.label ?? provider;
+  /**
+   * Every provider key the backend holds on its own: host environment variables and the keys store administrators typed in their own
+   * "AI keys" screens. `added` = the manager already holds the same key. Keys are never returned, only the last four characters.
+   */
+  async function discover() {
+    const known = new Set((await db.query('SELECT kind,provider,api_key FROM saas_apis')).map(row => `${row.kind}|${row.provider}|${row.api_key}`));
+    const envKeys = [];
+    for (const item of ENV_KEYS) {
+      const value = String(env[item.variable] || '').trim();
+      if (value) envKeys.push({ kind: item.kind, provider: item.provider, label: labelOf(item.kind, item.provider), variable: item.variable, hint: hintOf(value), added: known.has(`${item.kind}|${item.provider}|${value}`) });
+    }
+    const stores = [];
+    const tenants = new Map((await db.query('SELECT id,slug,name,kind FROM saas_tenants')).map(row => [row.id, row]));
+    for (const { setting, kind } of STORE_KEYS) {
+      for (const row of await db.query('SELECT tenant_id,value FROM settings WHERE key=$1', [setting])) {
+        let keys = {};
+        try { keys = JSON.parse(row.value) || {}; } catch { continue; }
+        const tenant = tenants.get(row.tenant_id);
+        for (const [provider, value] of Object.entries(keys)) {
+          if (typeof value !== 'string' || !value || !(kind === 'image' ? IMAGE_PROVIDERS : TEXT_PROVIDERS).includes(provider)) continue;
+          stores.push({ tenantId: row.tenant_id, store: tenant?.name || row.tenant_id, slug: tenant?.slug || '', storeKind: tenant?.kind || 'gone', kind, provider, label: labelOf(kind, provider), hint: hintOf(value), added: known.has(`${kind}|${provider}|${value}`) });
+        }
+      }
+    }
+    return { env: envKeys, stores };
+  }
+  /**
+   * Copies a backend-held key into the manager. `source: 'env'` copies the host variable (the variable itself stays: only the host can remove
+   * it); `source: 'store'` copies a store's own key and, with `clear`, removes it from that store so the manager is the only holder.
+   */
+  async function importKey(body) {
+    const kind = body?.kind, provider = String(body?.provider || '');
+    if (!KINDS.includes(kind)) throw fail(400, 'INVALID_KIND');
+    let key = '', base = '', where = null;
+    if (body?.source === 'env') {
+      const item = ENV_KEYS.find(x => x.kind === kind && x.provider === provider);
+      key = item ? String(env[item.variable] || '').trim() : '';
+      base = item?.baseVariable ? String(env[item.baseVariable] || '').trim() : '';
+    } else if (body?.source === 'store') {
+      const spec = STORE_KEYS.find(x => x.kind === kind);
+      if (!spec || !TENANT_ID.test(String(body.tenantId))) throw fail(404, 'NOT_FOUND');
+      const row = (await db.query('SELECT value FROM settings WHERE tenant_id=$1 AND key=$2', [body.tenantId, spec.setting]))[0];
+      let keys = {};
+      try { keys = JSON.parse(row?.value || '{}') || {}; } catch { /* none */ }
+      key = typeof keys[provider] === 'string' ? keys[provider] : '';
+      where = { tenantId: body.tenantId, spec, keys };
+    } else throw fail(400, 'INVALID_SOURCE');
+    if (!key) throw fail(404, 'KEY_NOT_FOUND');
+    if ((await db.query('SELECT 1 FROM saas_apis WHERE kind=$1 AND provider=$2 AND api_key=$3', [kind, provider, key])).length) {
+      if (where && body.clear === true) await clearStoreKey(where, provider);
+      throw fail(409, 'ALREADY_ADDED');
+    }
+    const view = await create({ kind, provider, apiKey: key, baseUrl: base && safeUrl(base) ? base : undefined, isDefault: body.isDefault === true });
+    if (where && body.clear === true) await clearStoreKey(where, provider);
+    return view;
+  }
+  async function clearStoreKey({ tenantId, spec, keys }, provider) {
+    const next = { ...keys };
+    delete next[provider];
+    await db.query('UPDATE settings SET value=$3 WHERE tenant_id=$1 AND key=$2', [tenantId, spec.setting, JSON.stringify(next)]);
+  }
   /** Removes a connection; stores linked to it fall back to the shared default of that kind. The oldest remaining one becomes the default. */
   async function remove(id) {
     const row = (await db.query('SELECT * FROM saas_apis WHERE id=$1', [String(id)]))[0];
@@ -337,7 +421,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
     return row;
   }
 
-  return { media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
+  return { discover, importKey, media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
 }
 
 module.exports = { createPlatform, KINDS };

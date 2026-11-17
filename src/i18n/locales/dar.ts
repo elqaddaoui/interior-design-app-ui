@@ -385,7 +385,7 @@ const dar: Dict = {
       mode: 'الوضع + الألوان',
       model: 'اختيار الموديل',
     },
-    crud: { hidden: 'مخبّي', addNew: 'زيد', editItem: 'عدّل', confirmDelete: 'تمسح هاد العنصر؟', noItems: 'ما كاين والو', saved: 'تسجل', up: 'فوق', down: 'تحت', showHide: 'بيّن / خبّي', required: 'خانة ضرورية' },
+    crud: { hidden: 'مخبّي', addNew: 'زيد', editItem: 'عدّل', confirmDelete: 'تمسح هاد العنصر؟', noItems: 'ما كاين والو', saved: 'تسجل', up: 'فوق', down: 'تحت', showHide: 'بيّن / خبّي', required: 'خانة ضرورية', error: 'ما تمّاتش العملية. عاود جرب.' },
     brand: { appName: 'سمية التطبيق', logo: 'اللوغو', upload: 'حمّل لوغو', remove: 'مسح', note: 'اللوغو والسمية كيبانو فوق فالصفحة الرئيسية.' },
     theme: {
       title: 'ثيم التطبيق',
@@ -444,6 +444,8 @@ const dar: Dict = {
       waMsg: 'سلام {{name}}، هادا هو التصميم ديالك من دويرة!',
       sentAuto: 'تصيفط أوتوماتيكيا',
       deliveredToast: 'تحط كتسلّم',
+      deleteConfirm: 'مسح {{count}} طلب؟ ما غاديش يرجعو.',
+      deletedToast: 'تمسحو {{count}} طلب',
     },
   },
 };
