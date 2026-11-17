@@ -394,6 +394,7 @@ const fr = {
       down: 'Descendre',
       showHide: 'Afficher / masquer',
       required: 'Champ obligatoire',
+      error: 'Opération impossible. Réessayez.',
     },
     brand: { appName: 'Nom de l’application', logo: 'Logo', upload: 'Importer un logo', remove: 'Retirer', note: 'Le logo et le nom s’affichent en haut de l’accueil.' },
     theme: {
@@ -453,6 +454,8 @@ const fr = {
       waMsg: 'Bonjour {{name}}, voici votre design Dwira !',
       sentAuto: 'Envoi automatique effectué',
       deliveredToast: 'Marqué comme livré',
+      deleteConfirm: 'Supprimer {{count}} demande(s) ? Cette action est définitive.',
+      deletedToast: '{{count}} demande(s) supprimée(s)',
     },
   },
 };

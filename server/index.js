@@ -626,6 +626,18 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           await sync.bump('clients', 'requests', ...(Array.isArray(body.ids) ? body.ids.flatMap(id => typeof id === 'string' ? (body.action === 'delete' ? touch(id) : touch(id, 'requests')) : []) : []));
           return json(200, result);
         }
+        // Delete several render requests at once (one round trip, one sync bump per affected client).
+        if (url.pathname === '/api/admin/requests/bulk' && req.method === 'POST') {
+          admin();
+          const body = await readBody(req);
+          if (body?.action !== 'delete' || !Array.isArray(body.ids)) throw fail(400, 'INVALID_BULK');
+          const ids = [...new Set(body.ids.filter(id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id)))].slice(0, 500);
+          if (!ids.length) return json(200, { ok: true, removed: 0 });
+          await db.query('DELETE FROM outbox WHERE tenant_id=:tenant AND request_id=ANY($1)', [ids]);
+          const gone = await db.query('DELETE FROM requests WHERE tenant_id=:tenant AND id=ANY($1) RETURNING id,user_id', [ids]);
+          await sync.bump('requests', ...[...new Set(gone.map(row => row.user_id))].flatMap(user => touch(user, 'requests')));
+          return json(200, { ok: true, removed: gone.length });
+        }
         const contentItem = url.pathname.match(/^\/api\/admin\/content\/([A-Za-z]+)(?:\/([A-Za-z0-9_-]{1,100}))?$/);
         if (contentItem) {
           admin();

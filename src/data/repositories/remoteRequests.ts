@@ -23,6 +23,6 @@ export function remoteRequests(): CollectionRepo<RenderRequest> {
     create: input => api<RenderRequest>('/requests', { method: 'POST', client: true, body: { ...input, id: input.id || uid('req') } }),
     update: (id, patch) => api<RenderRequest>(`/requests/${encodeURIComponent(id)}`, { method: 'PATCH', client: true, body: patch }),
     remove: async id => { await api(`/requests/${encodeURIComponent(id)}`, { method: 'DELETE' }); },
-    async removeMany(ids) { for (const id of ids) await this.remove(id); },
+    async removeMany(ids) { for (let i = 0; i < ids.length; i += 200) await api('/admin/requests/bulk', { method: 'POST', body: { action: 'delete', ids: ids.slice(i, i + 200) } }); },
   };
 }

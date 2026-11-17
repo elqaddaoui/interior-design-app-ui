@@ -7,7 +7,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Icon } from '@/components/ui/Icon';
 import { MediaView } from '@/components/ui/MediaView';
 import { RequestInfo, RequestViewer, Shot, useRequestShots } from '@/components/admin/RequestDetail';
-import { Sheet } from '@/components/ui/Sheet';
+import { ConfirmSheet, Sheet } from '@/components/ui/Sheet';
 import { Toggle } from '@/components/ui/Toggle';
 import { Txt } from '@/components/ui/Txt';
 import { SettingAnchor } from '@/components/admin/AudienceBadge';
@@ -95,7 +95,7 @@ function Thumb({ r, onOpen }: { r: RenderRequest; onOpen: () => void }) {
   );
 }
 
-function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
+function Detail({ id, onClose, onDelete }: { id: string | null; onClose: () => void; onDelete: (id: string) => void }) {
   const s = useStore();
   const { t } = useT();
   const r = s.requests.find((x) => x.id === id);
@@ -127,6 +127,7 @@ function Detail({ id, onClose }: { id: string | null; onClose: () => void }) {
         <Button testID="req-processing" title={t('admin.req.markProcessing')} variant="soft" className="flex-1" disabled={r.status === 'processing'} onPress={() => set('processing')} />
         <Button testID="req-delivered" title={t('admin.req.markDelivered')} className="flex-1" disabled={r.status === 'delivered'} onPress={() => set('delivered', final ? { finalResult: final } : {})} />
       </View>
+      <Button testID="req-delete" icon="trash-can-outline" title={t('common.delete')} variant="ghost" className="mt-3" onPress={() => onDelete(r.id)} />
       <RequestViewer r={r} index={shot} onIndex={setShot} onClose={() => setShot(null)} />
     </Sheet>
   );
@@ -139,6 +140,11 @@ export default function Requests() {
   const [open, setOpen] = useViewState<string | null>('open', null);
   const [filter, setFilter] = useViewState<RequestStatus | 'all'>('filter', 'all');
   const [preview, setPreview] = React.useState<string | null>(null);
+  // Select mode: off by default so the list stays clean; one button turns it on, a bar at the bottom does the rest.
+  const [picking, setPicking] = React.useState(false);
+  const [picked, setPicked] = React.useState<string[]>([]);
+  const [toDelete, setToDelete] = React.useState<string[] | null>(null);
+  const [busy, setBusy] = React.useState(false);
   const previewRow = s.requests.find((x) => x.id === preview);
   const { target, open: requestedOpen, call } = useLocalSearchParams<{ target?: string; open?: string; call?: string }>();
   useFocusEffect(React.useCallback(() => {
@@ -149,6 +155,20 @@ export default function Requests() {
     if (requestedOpen && openedNotification.current !== requestedOpen && s.requests.some(row => row.id === requestedOpen)) { openedNotification.current = requestedOpen; setOpen(requestedOpen); }
   }, [requestedOpen, s.requests, setOpen]);
   const rows = [...s.requests].sort((a, b) => b.createdAt - a.createdAt).filter((r) => r.id === target || filter === 'all' || r.status === filter);
+  const togglePick = (id: string) => setPicked((old) => (old.includes(id) ? old.filter((x) => x !== id) : [...old, id]));
+  const stopPicking = () => { setPicking(false); setPicked([]); };
+  const confirmDelete = async () => {
+    const ids = toDelete || [];
+    setToDelete(null);
+    if (!ids.length) return;
+    setBusy(true);
+    try {
+      await s.removeMany('requests', ids);
+      setPicked((old) => old.filter((x) => !ids.includes(x)));
+      if (open && ids.includes(open)) setOpen(null);
+      toast(t('admin.req.deletedToast', { count: ids.length }));
+    } catch { toast(t('admin.crud.error')); } finally { setBusy(false); }
+  };
   const menuOf = (r: RenderRequest): MenuItem[] => {
     const mark = async (status: RequestStatus) => {
       await s.update('requests', r.id, { status });
@@ -163,12 +183,24 @@ export default function Requests() {
       { key: 'wa', label: t('admin.req.openWa'), icon: 'whatsapp', onPress: () => Linking.openURL(waLink(r.whatsapp, t('admin.req.waMsg', { name: r.name }))) },
       { key: 'call', label: t('push.call'), icon: 'phone', onPress: () => Linking.openURL(`tel:${r.whatsapp.replace(/[^\d+]/g, '')}`) },
       { key: 'copy', label: t('ax.copyNumber'), icon: 'content-copy', onPress: copy },
+      sep('s2'),
+      { key: 'select', label: t('common.select'), icon: 'checkbox-marked-circle-outline', onPress: () => { setPicking(true); setPicked([r.id]); } },
+      { key: 'delete', label: t('common.delete'), icon: 'trash-can-outline', danger: true, onPress: () => setToDelete([r.id]) },
     ];
   };
   const { draft: settings, patch } = useDraftDoc('settings');
   const auto = settings.autoSendWhatsApp;
   return (
-    <AdminPage title={t('admin.req.title')}>
+    <AdminPage title={t('admin.req.title')}
+      floating={picking ? (
+        <Card testID="req-bulk-bar" className="px-3 py-2.5 rounded-full flex-row items-center gap-2" style={{ boxShadow: '0 8px 30px rgba(0,0,0,0.18)' } as any}>
+          <View className="bg-primary rounded-full min-w-[28px] h-7 px-2 items-center justify-center"><Txt className="text-onprimary font-bold text-[13px]">{picked.length}</Txt></View>
+          <Pressable testID="req-select-all" accessibilityRole="button" onPress={() => setPicked(picked.length === rows.length ? [] : rows.map((r) => r.id))} className="px-2 h-9 justify-center"><Txt className="font-semibold text-[13px]">{picked.length === rows.length && rows.length ? t('ax.deselect') : t('common.all')}</Txt></Pressable>
+          <View className="flex-1" />
+          <Button testID="req-bulk-delete" size="sm" icon="trash-can-outline" title={t('common.delete')} variant="ghost" disabled={!picked.length || busy} onPress={() => setToDelete(picked)} />
+          <Button testID="req-bulk-done" size="sm" title={t('common.done')} variant="soft" onPress={stopPicking} />
+        </Card>
+      ) : undefined}>
       <PushNotifications />
       {typeof call === 'string' && /^\+?\d{6,20}$/.test(call) ? <Button testID="push-call-fallback" title={t('push.call')} icon="phone" onPress={() => Linking.openURL(`tel:${call}`)} className="mb-3" /> : null}
       <SettingAnchor id="autoWhatsApp"><Card className="p-4 mb-4 flex-row items-center gap-3">
@@ -181,6 +213,7 @@ export default function Requests() {
             <Txt className={`text-[13px] font-semibold ${filter === k ? 'text-onprimary' : ''}`}>{k === 'all' ? t('common.select') : t(`admin.enums.${k}`)}{k !== 'all' ? ` · ${s.requests.filter((r) => r.status === k).length}` : ''}</Txt>
           </Pressable>
         ))}
+        {rows.length ? <Pressable testID="req-select-mode" accessibilityRole="button" accessibilityState={{ selected: picking }} onPress={() => (picking ? stopPicking() : setPicking(true))} className={`px-3.5 h-9 rounded-full justify-center flex-row items-center gap-1.5 ms-auto border ${picking ? 'border-primary' : 'border-line'}`}><Icon name="checkbox-marked-circle-outline" size={16} tone={picking ? 'primary' : 'muted'} /><Txt className="text-[13px] font-semibold">{t('common.select')}</Txt></Pressable> : null}
       </View>
       {!s.adminLoaded && !rows.length ? <AdminLoading /> : !rows.length ? <EmptyState icon="inbox-outline" title={t('admin.crud.noItems')} /> : (
         <Card className="overflow-hidden">
@@ -191,7 +224,8 @@ export default function Requests() {
             </View>
           ) : null}
           {rows.map((r) => (
-            <SearchTarget key={r.id} id={r.id}><RightClick items={() => menuOf(r)}><Pressable testID={`req-${r.id}`} onPress={() => setOpen(r.id)} className="px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3">
+            <SearchTarget key={r.id} id={r.id}><RightClick items={() => menuOf(r)}><Pressable testID={`req-${r.id}`} onPress={() => (picking ? togglePick(r.id) : setOpen(r.id))} className={`px-4 py-3 border-t border-line active:bg-surface2 flex-row items-center gap-3 ${picked.includes(r.id) ? 'bg-surface2' : ''}`}>
+              {picking ? <Icon name={picked.includes(r.id) ? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'} size={22} tone={picked.includes(r.id) ? 'primary' : 'muted'} /> : null}
               <Thumb r={r} onOpen={() => setPreview(r.id)} />
               {desktop ? (<>
                 <Txt className="font-bold" style={{ flex: 1.2 }} numberOfLines={1}>{r.name}</Txt>
@@ -212,7 +246,8 @@ export default function Requests() {
           ))}
         </Card>
       )}
-      <Detail id={open} onClose={() => setOpen(null)} />
+      <Detail id={open} onClose={() => setOpen(null)} onDelete={(id) => setToDelete([id])} />
+      <ConfirmSheet visible={!!toDelete} onClose={() => setToDelete(null)} message={t('admin.req.deleteConfirm', { count: toDelete?.length || 0 })} confirmLabel={t('common.delete')} cancelLabel={t('common.cancel')} onConfirm={() => { void confirmDelete(); }} />
       {previewRow ? <RequestViewer r={previewRow} index={previewRow.photoUri ? 0 : 0} onClose={() => setPreview(null)} /> : null}
     </AdminPage>
   );

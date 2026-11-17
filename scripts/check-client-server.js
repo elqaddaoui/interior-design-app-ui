@@ -166,6 +166,40 @@ test('admin credit grant ends the paywall: a client who used the free design and
   } finally { backend.server.emit('close'); }
 });
 
+test('admin deletes several render requests in one call: admin only, only the listed ones, history of other clients untouched', async () => {
+  const offline = async () => { throw Object.assign(new Error('offline'), { code: 'OFFLINE', policy: false }); };
+  const backend = createBackend({ env: { ...memory }, db: await freshDb(), media: { download: offline } });
+  try {
+    const a = await backend.clients.login('Alpha', '+212611111111');
+    const b = await backend.clients.login('Bravo', '+212622222222');
+    const c = await backend.clients.login('Charlie', '+212633333333');
+    const make = async (who, id) => (await call(backend, '/api/requests', { method: 'POST', headers: { 'x-user-token': who.token, 'x-demand-token': 'a'.repeat(64) }, body: demand(id) })).body;
+    const r1 = await make(a, 'bulk-req-a-0001'), r2 = await make(c, 'bulk-req-c-0001'), r3 = await make(b, 'bulk-req-b-0001');
+    const admin = await call(backend, '/api/admin/login', { method: 'POST', headers: native, body: { email: 'admin', password: 'admin' } });
+    const adminAuth = { authorization: `Bearer ${admin.body.token}` };
+    const bulk = (body, headers = adminAuth) => call(backend, '/api/admin/requests/bulk', { method: 'POST', headers, body });
+    // admin only: no token and a client token are both refused, nothing is deleted
+    assert.equal((await bulk({ action: 'delete', ids: [r1.id] }, {})).status, 401);
+    assert.notEqual((await bulk({ action: 'delete', ids: [r1.id] }, { 'x-user-token': a.token })).status, 200);
+    assert.equal((await call(backend, '/api/requests', { headers: adminAuth })).body.length, 3);
+    // malformed bodies are refused
+    assert.equal((await bulk({ action: 'nuke', ids: [r1.id] })).status, 400);
+    assert.equal((await bulk({ action: 'delete', ids: 'x' })).status, 400);
+    assert.equal((await bulk({ action: 'delete', ids: [] })).body.removed, 0);
+    // two of three, plus an unknown id and a duplicate: only the real, listed ones go
+    const done = await bulk({ action: 'delete', ids: [r1.id, r1.id, r3.id, 'does-not-exist', 42, '../x'] });
+    assert.equal(done.status, 200);
+    assert.equal(done.body.removed, 2);
+    const left = (await call(backend, '/api/requests', { headers: adminAuth })).body;
+    assert.deepEqual(left.map(r => r.id), [r2.id]);
+    // the owners' own lists shrink too (sync), the untouched client keeps theirs, and a second identical call removes nothing
+    assert.equal((await call(backend, '/api/user/requests', { headers: { 'x-user-token': a.token } })).body.length, 0);
+    assert.equal((await call(backend, '/api/user/requests', { headers: { 'x-user-token': b.token } })).body.length, 0);
+    assert.equal((await call(backend, '/api/user/requests', { headers: { 'x-user-token': c.token } })).body.length, 1);
+    assert.equal((await bulk({ action: 'delete', ids: [r1.id, r3.id] })).body.removed, 0);
+  } finally { backend.server.emit('close'); }
+});
+
 test('admin can edit credits, block, unblock and delete one client; blocked clients are locked out', async () => {
   const backend = createBackend({ env: { ...memory }, db: await freshDb() });
   try {

@@ -38,6 +38,8 @@ const CACHE = 'public, max-age=31536000, immutable';
 const R2_VARS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET', 'R2_PUBLIC_BASE_URL'];
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
+/** The only object keys this app ever writes. Listings (storage audit) return nothing else, so a bucket shared with other things stays untouched. */
+const KEY_SHAPE = /^(?:media|t\/[a-z0-9][a-z0-9_-]{0,62}\/media)\/[a-f0-9]{32}\.[a-z0-9]+$/;
 const mb = (value, fallback) => Math.max(1, Math.min(5000, Number(value) || fallback)) * 1024 * 1024;
 const limitsOf = env => ({ image: mb(env.MEDIA_MAX_IMAGE_MB, 10), video: mb(env.MEDIA_MAX_VIDEO_MB, 100), audio: mb(env.MEDIA_MAX_AUDIO_MB, 8) });
 const kindOf = mime => (VIDEO_TYPES.includes(mime) ? 'video' : IMAGE_TYPES.includes(mime) ? 'image' : AUDIO_TYPES.includes(audioType(mime)) ? 'audio' : '');
@@ -116,6 +118,17 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
       return out.Body;
     },
     async remove(key) { await connection().send(new (s3().DeleteObjectCommand)({ Bucket: bucket, Key: key })); },
+    /** Every object of ours under `prefix` ('media/' and 't/'): [{ key, size, modified }]. Keys of any other shape are never returned. */
+    async list(prefix) {
+      const out = [];
+      let token;
+      do {
+        const page = await connection().send(new (s3().ListObjectsV2Command)({ Bucket: bucket, Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 }));
+        for (const item of page.Contents || []) if (KEY_SHAPE.test(item.Key)) out.push({ key: item.Key, size: Number(item.Size), modified: item.LastModified ? new Date(item.LastModified).getTime() : 0 });
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token && out.length < 2000000);
+      return out;
+    },
     /** Server-side copy inside the bucket (nothing travels through this server: a clone of a store with large videos costs no bandwidth). */
     async copy(from, to) {
       await connection().send(new (s3().CopyObjectCommand)({ Bucket: bucket, Key: to, CopySource: `${bucket}/${from.split('/').map(encodeURIComponent).join('/')}`, CacheControl: CACHE }));
@@ -167,6 +180,23 @@ function createFsStorage(env = process.env) {
     async getRange(key, length) { const handle = await fs.promises.open(file(key), 'r'); try { const buffer = Buffer.alloc(length); const { bytesRead } = await handle.read(buffer, 0, length, 0); return buffer.subarray(0, bytesRead); } finally { await handle.close(); } },
     stream: async key => fs.createReadStream(file(key)),
     remove: async key => { await fs.promises.rm(file(key), { force: true }); },
+    /** Every file of ours under `prefix` ('media/' or 't/'): [{ key, size, modified }]. Anything that is not one of our keys is ignored. */
+    async list(prefix) {
+      const out = [];
+      await fs.promises.stat(root); // a missing root (an unmounted disk) must read as "cannot list", never as "no files"
+      const walk = async (dir, rel) => {
+        let entries;
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+          const key = rel ? `${rel}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) { await walk(nodePath.join(dir, entry.name), key); continue; }
+          if (!SAFE_KEY.test(key) || !key.startsWith(prefix)) continue;
+          try { const st = await fs.promises.stat(nodePath.join(dir, entry.name)); out.push({ key, size: st.size, modified: Math.round(st.mtimeMs) }); } catch { /* vanished */ }
+        }
+      };
+      await walk(prefix === 't/' ? nodePath.join(root, 't') : nodePath.join(root, 'media'), prefix === 't/' ? 't' : 'media');
+      return out;
+    },
     /** Writable? (the backup screen reports it before offering this target) */
     async writable() { try { await fs.promises.mkdir(root, { recursive: true, mode: 0o750 }); await fs.promises.access(root, fs.constants.W_OK); return true; } catch { return false; } },
   };
@@ -241,6 +271,9 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env) || 
       if (kind) {
         await db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at,lib,title,ns) VALUES(:tenant,$1,$2,'',NULL,$3,$5,$4,$6,$7,1) ON CONFLICT (tenant_id,id) DO UPDATE SET storage=EXCLUDED.storage, ns=1, size=EXCLUDED.size, body=NULL, data='', lib=GREATEST(media.lib,EXCLUDED.lib), title=CASE WHEN EXCLUDED.title<>'' THEN EXCLUDED.title ELSE media.title END", [id, mime, body.length, Date.now(), kind, flag, label]);
         meta.delete(id);
+        // Another store may have deleted the LAST other row (and with it the object) between the check above and this insert: make sure the
+        // object is still there now that this row exists, and write it again if it is not.
+        if (kind === reuse && !(await adapters[kind].head(sharedKey(name)).catch(() => ({ size: 0 })))) await adapters[kind].put(sharedKey(name), body, mime);
       } else if (!existing) {
         // Fallback without any storage: raw bytes (BYTEA), never base64 text. When another store already holds the same bytes this row stays empty and points at them.
         const hold = found?.storage === 'db';
@@ -642,15 +675,24 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env) || 
     const name = `${row.id}.${EXT[row.mime]}`;
     const others = shared ? await shared.others(tenantId, row.id) : 0;
     let object = false;
+    // Leftovers of a layout migration (`legacy-<storage>` records, see media-ops `repair`): this store's OWN old copy under its prefix.
+    // It is never shared with anybody, so it goes with the row whether or not other stores still use the shared object.
+    const olds = hub ? await hub.old.list(tenantId, [row.id]) : [];
+    const ownCopy = old => old.storage.startsWith('legacy-');
+    const adapterOf = old => adapters[old.storage.replace(/^legacy-/, '') === 'fs' ? 'fs' : 'r2'];
+    const keyOfOld = old => (ownCopy(old) ? keyFor(tenantId)(name) : keyOfRow(tenantId, row, name));
     if (!others) {
       const key = keyOfRow(tenantId, row, name);
       if (row.storage === 'r2' || row.storage === 'fs') {
         try { await adapters[row.storage]?.remove(key); object = true; } catch { return { error: true }; }
       }
-      if (hub) for (const old of await hub.old.list(tenantId, [row.id])) { try { await adapters[old.storage === 'fs' ? 'fs' : 'r2']?.remove(key); await hub.old.del(tenantId, row.id, old.storage); } catch { /* the console cleanup retries */ } }
+      for (const old of olds) { try { await adapterOf(old)?.remove(keyOfOld(old)); await hub.old.del(tenantId, row.id, old.storage); } catch { /* the console cleanup retries */ } }
     } else {
       if (shared && row.storage === 'db') await shared.handOver(tenantId, row.id);
-      if (hub) for (const old of await hub.old.list(tenantId, [row.id])) await hub.old.del(tenantId, row.id, old.storage).catch(() => {});
+      for (const old of olds) {
+        if (ownCopy(old)) await adapterOf(old)?.remove(keyOfOld(old)).catch(() => {});
+        await hub.old.del(tenantId, row.id, old.storage).catch(() => {});
+      }
     }
     await db.query('DELETE FROM media WHERE tenant_id=:tenant AND id=$1', [row.id]);
     meta.delete(row.id); bodies.delete(row.id); saved.delete(row.id);
@@ -660,4 +702,4 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env) || 
   return { storeMedia, storeRaw, rawLimit, readMedia, fetchBytes, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, backup, library, stats, get mode() { return modeNow(); } };
 }
 
-module.exports = { keyFor, createMedia, createR2Storage, createFsStorage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };
+module.exports = { KEY_SHAPE, keyFor, createMedia, createR2Storage, createFsStorage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };

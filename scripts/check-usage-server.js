@@ -154,7 +154,11 @@ test('demos use no API unless the "use API" switch is on; it closes by itself af
   assert.equal(demo.aiUntil, null);
   assert.equal(demo.creditLimit, undefined, 'a demo has no credit limit');
   const owner = await login(backend, demo.slug, 'admin', made.admin.password);
-  await call(backend, `/${demo.slug}/api/admin/ai/keys`, { method: 'PATCH', headers: owner, body: { pollinations: 'sk_store_key_123456' } });
+  // A demo is managed by the platform exactly like a store set to "Managed by me": its administrator cannot hold keys of its own, and
+  // it uses the platform's default connection of each kind.
+  assert.equal((await call(backend, `/${demo.slug}/api/admin/ai/keys`, { method: 'PATCH', headers: owner, body: { pollinations: 'sk_store_key_123456' } })).status, 403);
+  assert.equal((await call(backend, `/${demo.slug}/api/admin/session`, { headers: owner })).body.instance?.apiMode, 'platform');
+  assert.equal((await api('/apis', { method: 'POST', body: { kind: 'image', provider: 'pollinations', apiKey: 'sk_platform_key_123456' } })).status, 201);
   const client = await clientOf(backend, demo.slug, tenantId, 20);
   // Image generation, translation and the assistant are all refused, and nothing leaves the server.
   const refused = await render(backend, demo.slug, client);
@@ -180,6 +184,9 @@ test('demos use no API unless the "use API" switch is on; it closes by itself af
   assert.equal(on.aiIdleMin, 15);
   assert.equal((await render(backend, demo.slug, client)).status, 200);
   assert.equal(imageApi.calls.length, 1);
+  assert.match(JSON.stringify(imageApi.calls[0]), /sk_platform_key_123456/, 'the demo called out with the platform key, like a managed store');
+  const metered = await report(api, `?tenant=${tenantId}`);
+  assert.ok(metered.byProvider.some(p => p.kind === 'image' && p.mode === 'platform' && p.calls >= 1), 'and the call is metered as platform-managed');
   assert.equal((await call(backend, `/${demo.slug}/api/admin/translate`, { method: 'POST', headers: owner, body: { from: 'fr', to: ['ar'], texts: ['Bonjour'] } })).status, 200);
   // After the quiet period the switch is off again, by itself.
   await db.query('UPDATE saas_tenants SET ai_until=$2 WHERE id=$1', [tenantId, Date.now() - 1000]);

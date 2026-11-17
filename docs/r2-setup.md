@@ -99,6 +99,18 @@ node scripts/migrate-media-to-r2.js --videos               # optional: external 
 - URLs that cannot be downloaded are kept unchanged and listed at the end.
 - Exit code `0` = success, `2` = some database rows could not be copied (run it again), `1` = configuration error.
 
+## Checking and fixing the bucket layout
+
+Old versions stored each store's files under its own prefix (`t/<store>/media/<name>`, `ns = 0`). Current versions store one object per file at `media/<hash>.<ext>` (`ns = 1`) shared by every store and demo. Seeing both in the bucket is normal after an upgrade: the old keys are leftovers of files uploaded before the shared layout.
+
+Open **Super admin > Media & storage > Storage health**:
+
+1. **Check storage** only reads (R2 listing + database) and changes nothing.
+2. **Fix now** copies each old-layout file to `media/<hash>.<ext>`, verifies it, flags the row, and keeps the old copy for 24 h (then *Remove old copies*). It also repoints rows that name the wrong storage and corrects sizes proven by the stored bytes.
+3. Two switches (off by default) additionally delete objects no row owns (older than 1 h) and remove rows whose file is gone.
+
+Safety: a listing that fails, or looks empty while the database expects files, is never treated as "files missing". Run it again after a partial result; it resumes. It is refused while a *Move all* is running.
+
 ## Troubleshooting
 
 - **Images 404 after enabling R2:** run the migration (step 4). Rows still stored in the database keep being served until then.

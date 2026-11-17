@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
-import type { ApiCatalog, ApiConn, ApiKind } from '@/superadmin/types';
+import type { ApiCatalog, ApiConn, ApiKind, FoundKeys } from '@/superadmin/types';
 import { ApiAlerts } from '@/superadmin/ApiAlerts';
 import { ApiUsage } from '@/superadmin/ApiUsage';
 import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Notice, Row, Segmented, Sheet, T, Tabs, useLoad } from '@/superadmin/ui';
@@ -77,6 +77,48 @@ function Connection({ conn, onEdit, onChanged }: { conn: ApiConn; onEdit: () => 
   );
 }
 
+/**
+ * Keys the backend holds outside the manager: host variables (only the host can remove them) and the keys store administrators typed into their own
+ * screens (they can be moved in and cleared from the store, so the manager is the only holder). Only the last four characters are ever shown.
+ */
+function Found({ onChanged }: { onChanged: () => void }) {
+  const { data, error, reload } = useLoad(() => sa<FoundKeys>('/apis/discover'));
+  const [busy, setBusy] = useState('');
+  const [problem, setProblem] = useState<unknown>(null);
+  const todo = (data?.env || []).filter(e => !e.added).length + (data?.stores || []).length;
+  if (!data || (!data.env.length && !data.stores.length)) return <ErrorLine error={error} />;
+  const run = async (key: string, body: Record<string, unknown>) => {
+    setBusy(key); setProblem(null);
+    try { await sa('/apis/import', { method: 'POST', body }); reload(); onChanged(); } catch (e) { setProblem(saMessage(e)); } finally { setBusy(''); }
+  };
+  return (
+    <View style={{ marginBottom: SA.space.xl }} testID="sa-api-found">
+      <T size="lg" weight="bold">{tr('Found on the server')}</T>
+      <T size="sm" color={SA.color.muted} style={{ marginBottom: SA.space.sm }}>{tr('Keys that live outside the API manager. Move them in to see and control every API from here.')}</T>
+      <ErrorLine error={problem} />
+      {data.env.map(e => (
+        <ListRow key={e.variable} title={e.label} testID="sa-api-found-env"
+          meta={<Badge label={e.added ? tr('in the manager') : tr('host setting')} tone={e.added ? 'ok' : 'warn'} />}
+          sub={tr('{variable} · key {hint}. Only your host can remove this setting.', { variable: e.variable, hint: e.hint })}
+          right={e.added ? null : <Btn small label={tr('Add to manager')} busy={busy === e.variable} onPress={() => run(e.variable, { source: 'env', kind: e.kind, provider: e.provider })} />} />
+      ))}
+      {data.stores.map(k => {
+        const key = `${k.tenantId}:${k.kind}:${k.provider}`;
+        return (
+          <ListRow key={key} title={`${k.label} · ${k.store}`} testID="sa-api-found-store"
+            meta={<Badge label={k.storeKind === 'demo' ? tr('Demo') : tr('Store key')} tone="muted" />}
+            sub={tr('Typed in by the store administrator · key {hint}', { hint: k.hint })}
+            right={<Row>
+              <Btn small label={tr('Move to manager')} busy={busy === key} onPress={() => run(key, { source: 'store', tenantId: k.tenantId, kind: k.kind, provider: k.provider, clear: true })} />
+              {!k.added ? <Btn small kind="ghost" label={tr('Copy only')} disabled={busy !== ''} onPress={() => run(key, { source: 'store', tenantId: k.tenantId, kind: k.kind, provider: k.provider })} /> : null}
+            </Row>} />
+        );
+      })}
+      {todo ? <Hint>{tr('Moving a key copies it into the manager and removes it from the store. The store keeps working through the manager only if it is set to “Managed by me”.')}</Hint> : null}
+    </View>
+  );
+}
+
 function Manager() {
   const { data, error, loading, reload } = useLoad(() => sa<{ apis: ApiConn[]; catalog: ApiCatalog }>('/apis'));
   const [editor, setEditor] = useState<{ kind: ApiKind; conn: ApiConn | null } | null>(null);
@@ -86,6 +128,7 @@ function Manager() {
       <Heading title={tr('API manager')} hint={tr('Your AI connections. A store set to “Managed by me” uses the shared default of each kind, or a connection you link to it in its Credits & APIs tab. Stores that keep their own keys are not affected.')} />
       <ErrorLine error={error} />
       <Notice tone="accent">{tr('Each store can have its own connection, or all can share one: leave stores on the default, or link a store to a specific connection.')}</Notice>
+      <Found onChanged={reload} />
       {loading && !data ? <Loading /> : kinds.map(kind => {
         const rows = (data?.apis || []).filter(a => a.kind === kind);
         return (
