@@ -107,7 +107,8 @@ Open **Super admin > Media & storage > Storage health**:
 
 1. **Check storage** only reads (R2 listing + database) and changes nothing.
 2. **Fix now** copies each old-layout file to `media/<hash>.<ext>`, verifies it, flags the row, and keeps the old copy for 24 h (then *Remove old copies*). It also repoints rows that name the wrong storage and corrects sizes proven by the stored bytes.
-3. Two switches (off by default) additionally delete objects no row owns (older than 1 h) and remove rows whose file is gone.
+3. Files whose object is not at the expected key but exists elsewhere (**Copy found elsewhere**) are copied back after a byte check; nothing is deleted. A file is reported **missing** only when no copy exists anywhere readable, and **Not confirmed** when the other storage could not be read.
+4. Two switches (off by default) additionally delete objects no row owns (older than 1 h, never one a row still needs, and only when an identical copy exists) and remove rows whose file exists nowhere.
 
 Safety: a listing that fails, or looks empty while the database expects files, is never treated as "files missing". Run it again after a partial result; it resumes. It is refused while a *Move all* is running.
 

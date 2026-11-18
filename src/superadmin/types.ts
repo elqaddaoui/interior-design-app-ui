@@ -84,12 +84,12 @@ export type MediaFiles = {
 export type MediaAudit = {
   at: number; rows: number; healthy: boolean;
   storages: Record<'r2' | 'fs', { available: boolean; checked: boolean; error: string; objects: number; bytes: number }>;
-  missing: { files: number }; wrongStorage: { files: number }; strayPrefix: { files: number };
+  missing: { files: number }; recoverable: { files: number }; unverified: { files: number }; wrongStorage: { files: number }; strayPrefix: { files: number };
   legacy: { files: number; bytes: number; reclaimFiles: number; reclaimBytes: number };
   sizeMismatch: { files: number }; sizeUnknown: { files: number };
-  orphans: { files: number; bytes: number; deletable: number; deletableBytes: number; recent: number };
+  orphans: { files: number; bytes: number; deletable: number; deletableBytes: number; recent: number; kept: number };
   inDatabase: MediaBucket;
-  samples: { missing: AuditLine[]; wrongStorage: AuditLine[]; strayPrefix: AuditLine[]; legacy: AuditLine[]; sizeMismatch: AuditLine[]; orphans: { key: string; storage: string; size: number; recent: boolean; store: string }[] };
+  samples: { missing: AuditLine[]; recoverable: AuditLine[]; wrongStorage: AuditLine[]; strayPrefix: AuditLine[]; legacy: AuditLine[]; sizeMismatch: AuditLine[]; orphans: { key: string; storage: string; size: number; recent: boolean; store: string }[] };
 };
 export type AuditLine = { id: string; store: string; storage: string; key: string; size: number | null };
-export type MediaRepair = { sizes: number; repointed: number; copied: number; migrated: number; orphansDeleted: number; orphanBytes: number; brokenRemoved: number; failed: number; skipped: number; remaining: number; partial: boolean };
+export type MediaRepair = { sizes: number; repointed: number; copied: number; recovered: number; migrated: number; orphansDeleted: number; orphanBytes: number; brokenRemoved: number; failed: number; skipped: number; remaining: number; partial: boolean };

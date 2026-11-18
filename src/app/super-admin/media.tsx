@@ -165,20 +165,22 @@ export default function MediaStorage() {
 
           <Label>{tr('Client stores')}</Label>
           <Card style={{ padding: 0 }}>
-            {data.stores.filter(s => s.kind !== 'demo').concat(data.stores.filter(s => s.kind === 'demo')).map((s, i) => (
-              <View key={s.id} testID="sa-media-store" style={{ padding: SA.space.md, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
-                <Row style={{ justifyContent: 'space-between' }}>
-                  <View style={{ flexShrink: 1, minWidth: 180 }}>
-                    <T weight="bold" numberOfLines={1}>{s.name}</T>
-                    <T size="xs" color={SA.color.muted} numberOfLines={1}>{`/${s.slug === 'default' ? '' : s.slug} · ${s.kind === 'demo' ? tr('Demo') : s.kind === 'default' ? tr('Main store') : tr('Client store')}`}</T>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <T weight="bold">{size(s.bytes)}</T>
-                    <T size="xs" color={SA.color.muted}>{tr('{n} files', { n: s.files })}</T>
-                  </View>
-                </Row>
+            <Row style={{ padding: SA.space.md, justifyContent: 'space-between', borderBottomWidth: 1, borderColor: SA.color.line, flexWrap: 'nowrap' }}>
+              <T size="xs" weight="bold" color={SA.color.muted} style={{ flex: 1 }}>{tr('Store')}</T>
+              <T size="xs" weight="bold" color={SA.color.muted} style={{ width: 80, textAlign: 'right' }}>{tr('Files')}</T>
+              <T size="xs" weight="bold" color={SA.color.muted} style={{ width: 90, textAlign: 'right' }}>{tr('Size')}</T>
+            </Row>
+            {data.stores.filter(s => s.kind === 'instance').map((s, i) => (
+              <View key={s.id} testID="sa-media-store" style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.sm, padding: SA.space.md, justifyContent: 'space-between', borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <T weight="bold" numberOfLines={1}>{s.name}</T>
+                  <T size="xs" color={SA.color.muted} numberOfLines={1}>{`/${s.slug}`}</T>
+                </View>
+                <T style={{ width: 80, textAlign: 'right' }}>{String(s.files)}</T>
+                <T weight="bold" style={{ width: 90, textAlign: 'right' }}>{size(s.bytes)}</T>
               </View>
             ))}
+            {!data.stores.some(s => s.kind === 'instance') ? <T size="sm" color={SA.color.muted} style={{ padding: SA.space.md }}>{tr('No client stores yet.')}</T> : null}
           </Card>
           <Hint>{tr('Cloned or restored stores share the same files. A file is removed from storage only when the last store using it deletes it.')}</Hint>
           {data.oldCopies.oldestAt ? <T size="xs" color={SA.color.muted}>{tr('Last move {when}', { when: ago(data.oldCopies.oldestAt) })}</T> : null}
