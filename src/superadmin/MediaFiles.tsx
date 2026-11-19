@@ -14,6 +14,7 @@ const PAGE = 50;
 const TYPES: MediaTypeFilter[] = ['all', 'image', 'video', 'audio', 'other'];
 const typeLabel = (t: MediaTypeFilter) => (t === 'image' ? tr('Images') : t === 'video' ? tr('Videos') : t === 'audio' ? tr('Audio') : t === 'other' ? tr('Other files') : tr('All types'));
 const storageName = (s?: string) => (s === 'r2' ? tr('Cloudflare R2') : s === 'app' ? tr('App folder (self-hosted)') : tr('Database'));
+type Source = MediaSummary['storage'];
 type Mode = '' | 'type' | 'owner';
 type Group = 'store' | 'demo' | 'theme' | 'other';
 const GROUPS: Group[] = ['store', 'demo', 'theme', 'other'];
@@ -61,12 +62,15 @@ function Preview({ item }: { item: MediaItem }) {
  *   - by store, demo, theme or other: the files one of them holds.
  * Files are listed as plain rows (name, folder, size); a preview is loaded only for the one file the owner opens and asks to see.
  */
-export function MediaFiles({ storage, onChanged }: { storage: string; onChanged: () => void }) {
+export function MediaFiles({ storage, storages, onChanged }: { storage: Source; storages: Source[]; onChanged: () => void }) {
+  const [selectedStorage, setSelectedStorage] = useState<Source | null>(null);
+  const source = selectedStorage && storages.includes(selectedStorage) ? selectedStorage : storage;
   const [mode, setMode] = useState<Mode>('');
   const [type, setType] = useState<MediaTypeFilter>('all');
   const [group, setGroup] = useState<Group>('store');
   const [owner, setOwner] = useState<MediaOwner | null>(null);
   const [summary, setSummary] = useState<MediaSummary | null>(null);
+  const currentSummary = summary?.storage === source ? summary : null;
   const [owners, setOwners] = useState<MediaOwners | null>(null);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [more, setMore] = useState(false);
@@ -88,21 +92,21 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
 
   const list = useCallback((view: Mode, t: MediaTypeFilter, who: MediaOwner | null, after: string) => guard('list', async () => {
     const mine = ++seq.current;
-    const query = `view=${view}&type=${t}&limit=${PAGE}${view === 'owner' && who ? `&owner=${encodeURIComponent(who.id)}` : ''}${after ? `&after=${encodeURIComponent(after)}` : ''}`;
+    const query = `view=${view}&type=${t}&limit=${PAGE}${view === 'type' ? `&storage=${source}` : ''}${view === 'owner' && who ? `&owner=${encodeURIComponent(who.id)}` : ''}${after ? `&after=${encodeURIComponent(after)}` : ''}`;
     const page = await sa<Page>(`/media/files?${query}`);
     if (mine !== seq.current) return;
     setItems(prev => (after ? prev.concat(page.items) : page.items)); setMore(page.more); setCursor(page.cursor); setLoaded(true);
-  }), [guard]);
+  }), [guard, source]);
 
   const reset = () => { seq.current++; setItems([]); setMore(false); setCursor(''); setLoaded(false); setQ(''); setOpen(null); setNote(''); };
   const pickMode = (next: Mode) => {
     reset(); setMode(next); setOwner(null); setType('all'); setError(null);
-    if (next === 'type' && !summary) guard('summary', async () => setSummary(await sa<MediaSummary>('/media/summary')));
+    if (next === 'type' && !currentSummary) recount(source);
     if (next === 'owner' && !owners) guard('owners', async () => setOwners(await sa<MediaOwners>('/media/owners')));
   };
   const pickType = (t: MediaTypeFilter) => { reset(); setType(t); if (mode === 'type' || owner) list(mode, t, owner, ''); };
   const pickOwner = (o: MediaOwner) => { reset(); setOwner(o); list('owner', type, o, ''); };
-  const recount = () => guard('summary', async () => setSummary(await sa<MediaSummary>('/media/summary')));
+  const recount = (where: Source) => guard('summary', async () => setSummary(await sa<MediaSummary>(`/media/summary?storage=${where}`)));
 
   const remove = (item: MediaItem) => guard('delete', async () => {
     const r = await sa<{ removed: string[]; blocked: { id: string; reason: string }[] }>('/media/files/delete', { method: 'POST', body: { ids: [item.id] } });
@@ -114,7 +118,7 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
   const needle = q.trim().toLowerCase();
   const shown = needle ? items.filter(i => `${i.name} ${i.title} ${i.stores.join(' ')} ${i.folder}`.toLowerCase().includes(needle)) : items;
   const count = (t: MediaTypeFilter): number | undefined => {
-    if (mode === 'type' && summary) return t === 'all' ? Object.values(summary.types).reduce((n, v) => n + v.files, 0) : summary.types[t as MediaType].files;
+    if (mode === 'type' && currentSummary) return t === 'all' ? Object.values(currentSummary.types).reduce((n, v) => n + v.files, 0) : currentSummary.types[t as MediaType].files;
     if (mode === 'owner' && owners) return t === 'all' ? Object.values(owners.types).reduce((n, v) => n + v, 0) : owners.types[t as MediaType];
     return undefined;
   };
@@ -123,7 +127,7 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
   return (
     <View testID="sa-media-files">
       <Row style={{ alignItems: 'stretch', marginBottom: SA.space.md }}>
-        <Option id="sa-files-by-type" title={tr('All media by type')} hint={tr('Every file hosted in {storage}, in any folder: images, videos, audio and other files.', { storage: storageName(storage) })} on={mode === 'type'} onPress={() => pickMode('type')} />
+        <Option id="sa-files-by-type" title={tr('All media by type')} hint={tr('Every file hosted in {storage}, in any folder: images, videos, audio and other files.', { storage: storageName(source) })} on={mode === 'type'} onPress={() => pickMode('type')} />
         <Option id="sa-files-by-owner" title={tr('By store, demo, theme or other')} hint={tr('The files one store, demo, theme or other owner holds.')} on={mode === 'owner'} onPress={() => pickMode('owner')} />
       </Row>
       {!mode ? <Notice>{tr('Nothing is loaded until you choose how to look at the files. Pictures are shown only when you open a file and ask for its preview.')}</Notice> : null}
@@ -146,15 +150,23 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
         </Card>
       ) : null}
 
-      {mode === 'type' && summary ? (
+      {mode === 'type' && storages.length > 1 ? (
+        <Row style={{ marginBottom: SA.space.sm }}>
+          {storages.map(where => <Chip key={where} testID={`sa-files-storage-${where}`} label={storageName(where)} on={source === where} onPress={() => {
+            if (source === where || busy) return;
+            reset(); setSelectedStorage(where); setType('all'); recount(where);
+          }} />)}
+        </Row>
+      ) : null}
+      {mode === 'type' && currentSummary ? (
         <Card>
           <Row style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
             <View style={{ flexShrink: 1 }}>
-              <T size="sm" color={SA.color.muted}>{tr('{n} files found in {storage}.', { n: summary.scanned, storage: storageName(summary.storage) })}</T>
-              {!summary.complete ? <T size="xs" color={SA.color.warn}>{tr('The count stopped early: the storage holds a very large number of files.')}</T> : null}
-              {Object.values(summary.types).some(v => v.outside > 0) ? <T size="xs" color={SA.color.muted}>{tr('{n} of them are outside media/ (kept as they are: only the app\'s own pictures are moved by One media folder).', { n: Object.values(summary.types).reduce((n, v) => n + v.outside, 0) })}</T> : null}
+              <T size="sm" color={SA.color.muted}>{tr('{n} files found in {storage}.', { n: currentSummary.scanned, storage: storageName(currentSummary.storage) })}</T>
+              {!currentSummary.complete ? <T size="xs" color={SA.color.warn}>{tr('The count stopped early: the storage holds a very large number of files.')}</T> : null}
+              {Object.values(currentSummary.types).some(v => v.outside > 0) ? <T size="xs" color={SA.color.muted}>{tr('{n} of them are outside media/ (kept as they are: only the app\'s own pictures are moved by One media folder).', { n: Object.values(currentSummary.types).reduce((n, v) => n + v.outside, 0) })}</T> : null}
             </View>
-            <Btn small kind="ghost" label={tr('Count again')} onPress={recount} busy={busy === 'summary'} disabled={busy !== ''} />
+            <Btn small kind="ghost" label={tr('Count again')} onPress={() => recount(source)} busy={busy === 'summary'} disabled={busy !== ''} />
           </Row>
         </Card>
       ) : null}
@@ -167,7 +179,7 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
           {mode === 'owner' && !owner ? <Empty>{tr('Choose a store, demo, theme or other owner above.')}</Empty> : (
             <View>
               {!loaded && busy === 'list' ? <Loading /> : null}
-              {loaded && !items.length ? <Empty>{tr('No files of this kind.')}</Empty> : null}
+              {loaded && !items.length && !more ? <Empty>{tr('No files of this kind.')}</Empty> : null}
               {!loaded && !busy ? <Btn testID="sa-files-load" label={tr('Show the list')} onPress={() => list(mode, type, owner, '')} /> : null}
               {items.length ? (
                 <View>
@@ -186,10 +198,11 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
                       </Pressable>
                     ))}
                   </Card>
-                  {more ? <View style={{ marginTop: SA.space.md }}><Btn kind="ghost" testID="sa-files-more" label={tr('Load more')} onPress={() => list(mode, type, owner, cursor)} busy={busy === 'list'} disabled={busy !== ''} /></View> : null}
+
                   <T size="xs" color={SA.color.muted} style={{ marginTop: SA.space.sm }}>{tr('{n} files loaded', { n: items.length })}</T>
                 </View>
               ) : null}
+              {more ? <View style={{ marginTop: SA.space.md }}><Btn kind="ghost" testID="sa-files-more" label={tr('Load more')} onPress={() => list(mode, type, owner, cursor)} busy={busy === 'list'} disabled={busy !== ''} /></View> : null}
             </View>
           )}
         </View>

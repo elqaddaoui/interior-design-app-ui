@@ -58,7 +58,7 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
   };
 
   const unreadable = plan ? (['r2', 'fs'] as const).filter(k => plan.storages[k].available && !plan.storages[k].checked) : [];
-  const movable = plan ? plan.totals.move + plan.totals.merge : 0;
+  const movable = plan ? plan.totals.move + plan.totals.merge + (plan.database.target ? plan.database.files : 0) : 0;
 
   return (
     <Card>
@@ -73,8 +73,8 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
         <ErrorLine error={error} />
         {note ? <Notice tone="ok">{note}</Notice> : null}
         {result ? (
-          <Notice tone={result.failed || result.conflicts || result.unreadable.length ? 'warn' : 'ok'} testID="sa-media-folder-done">
-            {tr('Moved {moved} files into media/ ({size}), {merged} were already there. {failed} could not be moved and {conflicts} were left alone because media/ holds a different file under the same name. The old copies wait 24 hours, or remove them now below.', { moved: result.moved, size: size(result.bytes), merged: result.merged, failed: result.failed, conflicts: result.conflicts })}
+          <Notice tone={result.failed || result.dbFailed || result.conflicts || result.partial || result.unreadable.length ? 'warn' : 'ok'} testID="sa-media-folder-done">
+            {tr('Moved {moved} files into media/ ({size}), {merged} were already there. {failed} could not be moved and {conflicts} were left alone because media/ holds a different file under the same name. The old copies wait 24 hours, or remove them now below.', { moved: result.moved + result.dbMoved, size: size(result.bytes), merged: result.merged, failed: result.failed + result.dbFailed, conflicts: result.conflicts })}
             {result.history ? ` ${tr('A restore point was saved first: see Transfer history to put everything back.')}` : ''}
           </Notice>
         ) : null}
@@ -91,7 +91,7 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
               {plan.rows.missing ? <Badge tone="danger" label={tr('{n} files the database lists are missing in storage', { n: plan.rows.missing })} /> : <Badge tone="ok" label={tr('{n} database entries checked, none missing', { n: plan.rows.checked })} />}
             </Row>
 
-            {plan.database.files ? (
+            {plan.database.files && plan.database.target ? (
               <T size="sm" color={SA.color.muted} testID="sa-media-folder-db" style={{ marginBottom: SA.space.sm }}>{tr('{n} files ({size}) are stored inside the database and will be moved into media/ too.', { n: plan.database.files, size: size(plan.database.bytes) })}</T>
             ) : null}
 
@@ -115,7 +115,7 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
                 <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>{tr('Files outside media/')}</T>
                 <View style={{ borderWidth: 1, borderColor: SA.color.line, borderRadius: SA.radius.sm, maxHeight: 280, overflow: 'scroll' as any }}>
                   {plan.files.map((f, i) => (
-                    <View key={`${f.storage}|${f.from}`} testID="sa-media-folder-file" style={{ padding: SA.space.sm, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
+                    <View key={`${f.storage}|${f.from}|${f.to}`} testID="sa-media-folder-file" style={{ padding: SA.space.sm, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
                       <T size="xs" selectable numberOfLines={1}>{f.storage === 'db' ? `${tr('Database')} · ${f.from}` : f.from}</T>
                       <Row style={{ flexWrap: 'nowrap', gap: 4 }}>
                         <T size="xs" color={SA.color.muted}>→</T>

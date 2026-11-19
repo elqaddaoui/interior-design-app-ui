@@ -165,7 +165,11 @@ export default function MediaStorage() {
           <MediaHistory onChanged={reload} />
 
           <Label>{tr('Files')}</Label>
-          <MediaFiles storage={data.storage.current} onChanged={reload} />
+          <MediaFiles key={current} storage={current === 'app' || current === 'r2' ? current : 'database'} storages={[
+            ...(data.storage.r2.available ? ['r2' as const] : []),
+            ...(data.storage.app.available ? ['app' as const] : []),
+            'database',
+          ]} onChanged={reload} />
 
           <Label>{tr('Client stores')}</Label>
           <Card style={{ padding: 0 }}>

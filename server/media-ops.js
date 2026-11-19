@@ -26,7 +26,6 @@ const fileName = row => `${row.id}.${EXT[row.mime]}`;
 const adapterKey = storage => (String(storage).replace(/^legacy-/, '') === 'fs' ? 'fs' : 'r2');
 const isLegacyOld = old => String(old.storage).startsWith('legacy-');
 const HOUR = 3600000;
-const HASH_LIMIT = 40 * 1024 * 1024;
 const DB_LIMIT = 25 * 1024 * 1024; // a restore never puts a file bigger than this back into the database
 const sha256 = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
 const HISTORY_KEEP = 30;
@@ -48,15 +47,6 @@ async function sameBytes(a, keyA, b, keyB) {
     return (await digestOf(a, keyA)) === (await digestOf(b, keyB));
   } catch { return false; }
 }
-/** Same bytes, as far as we can prove: equal size, and (up to HASH_LIMIT) equal digest. Larger objects are compared by size only. */
-async function provenSame(a, keyA, b, keyB) {
-  try {
-    const [headA, headB] = await Promise.all([a.head(keyA), b.head(keyB)]);
-    if (!headA || !headB || headA.size !== headB.size) return false;
-    return headA.size > HASH_LIMIT ? true : sameBytes(a, keyA, b, keyB);
-  } catch { return false; }
-}
-
 function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now }) {
   const { adapters } = hub;
 
@@ -173,26 +163,34 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
   async function transfer(tenantId, row, kind) {
     const key = row.storage === 'db' ? sharedName(row) : keyOfRow(tenantId, row), target = adapters[kind]; // bytes kept in the database always land in media/
     if (!target) throw fail(503, kind === 'fs' ? 'APP_STORAGE_UNAVAILABLE' : 'R2_NOT_CONFIGURED');
-    let size;
+    let size, source, bytes;
     if (row.storage === 'db') {
       const stored = (await db.query('SELECT data,body FROM media WHERE tenant_id=$1 AND id=$2', [tenantId, row.id]))[0];
       let body = stored?.body ? Buffer.from(stored.body) : stored?.data ? Buffer.from(stored.data, 'base64') : null;
       if (!body?.length) body = await hub.shared.body(row.id); // another store's row holds the bytes
       if (!body?.length) throw fail(404, 'SOURCE_MISSING');
-      await target.put(key, body, row.mime);
+      bytes = body;
       size = body.length;
     } else {
-      const source = adapters[adapterKey(row.storage)];
+      source = adapters[adapterKey(row.storage)];
       if (!source) throw fail(503, row.storage === 'fs' ? 'APP_STORAGE_UNAVAILABLE' : 'R2_NOT_CONFIGURED');
       const probe = await source.head(key);
       if (!probe) throw fail(404, 'SOURCE_MISSING');
       size = probe.size;
-      if (kind === 'fs') await target.putStream(key, await source.stream(key));
-      else await target.put(key, await source.get(key), row.mime);
     }
-    const written = await target.head(key);
     const expected = row.size == null ? size : Number(row.size);
-    if (!written || written.size !== size || (expected && size !== expected)) {
+    if (expected !== size) throw fail(502, 'VERIFY_FAILED');
+    const matches = async () => bytes
+      ? (await target.head(key))?.size === size && (await digestOf(target, key)) === sha256(bytes)
+      : sameBytes(source, key, target, key);
+    if (await target.head(key)) {
+      if (!(await matches())) throw fail(409, 'TARGET_CONFLICT');
+      return size;
+    }
+    if (bytes) await target.put(key, bytes, row.mime);
+    else if (target.putStream) await target.putStream(key, await source.stream(key));
+    else await target.put(key, await source.get(key), row.mime);
+    if (!(await matches())) {
       await target.remove(key).catch(() => {});
       throw fail(502, 'VERIFY_FAILED');
     }
@@ -292,6 +290,8 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     if (from.storage === 'db') { bytes = await dbBytes(); if (!bytes?.length) throw fail(404, 'SOURCE_MISSING'); }
     let size = row.size1 == null ? Number(row.size || 0) : Number(row.size1);
     if (to.storage === 'db') {
+      // The retained original wins over a potentially damaged hosted copy.
+      bytes ||= await dbBytes();
       if (!bytes) {
         const head = await fromAdapter.head(keyAt(from.ns));
         if (!head) throw fail(404, 'SOURCE_MISSING');
@@ -307,7 +307,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
       const fromKey = keyAt(from.ns), toKey = keyAt(to.ns);
       if (!(fromAdapter === target && fromKey === toKey)) {
         const there = await target.head(toKey);
-        const same = async () => (bytes ? (await target.head(toKey))?.size === bytes.length && (await digestOf(target, toKey)) === sha256(bytes) : provenSame(fromAdapter, fromKey, target, toKey));
+        const same = async () => (bytes ? (await target.head(toKey))?.size === bytes.length && (await digestOf(target, toKey)) === sha256(bytes) : sameBytes(fromAdapter, fromKey, target, toKey));
         if (there) { if (!(await same())) return 'conflict'; }
         else {
           if (bytes) await target.put(toKey, bytes, mime);
@@ -381,12 +381,8 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
           const row = (await db.query('SELECT storage,size,ns FROM media WHERE tenant_id=$1 AND id=$2', [old.tenant_id, old.id]))[0];
           const name = fileName(old), adapter = adapters[adapterKey(old.storage)];
           if (!adapter) { kept++; continue; }
-          if (row) {
-            const live = row.storage === 'db' ? true : Number(row.ns) === 1 ? await adapters[adapterKey(row.storage)]?.head(keyFor('default')(name)) : null;
-            if (!live || (live !== true && row.size != null && live.size !== Number(row.size))) { kept++; continue; }
-            // The shared object must hold exactly the bytes of the old copy about to go (size alone is not proof).
-            if (live !== true && !(await provenSame(adapter, keyFor(old.tenant_id)(name), adapters[adapterKey(row.storage)], keyFor('default')(name)))) { kept++; continue; }
-          } else if (!(await provenSame(adapter, keyFor(old.tenant_id)(name), adapter, keyFor('default')(name)))) { kept++; continue; } // no row any more: the copy in media/ must be identical
+          if (!row || !['r2', 'fs'].includes(row.storage) || Number(row.ns) !== 1
+            || !(await sameBytes(adapter, keyFor(old.tenant_id)(name), adapters[adapterKey(row.storage)], keyFor('default')(name)))) { kept++; continue; }
           await adapter.remove(keyFor(old.tenant_id)(name));
           await platform.oldDel(old.tenant_id, old.id, old.storage);
           removed++; bytes += Number(old.size || 0);
@@ -396,11 +392,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
       // The row that tells where the file lives now: the store's own, else any row of the shared object (the store itself may be gone).
       const current = (await db.query("SELECT tenant_id,storage,size,ns FROM media WHERE id=$2 AND storage IN ('r2','fs','db') AND (tenant_id=$1 OR ns=1 OR tenant_id='default') ORDER BY (tenant_id=$1) DESC LIMIT 1", [old.tenant_id, old.id]))[0];
       const key = current ? keyOfRow(current.tenant_id, { ...current, id: old.id, mime: old.mime }) : keyFor('default')(fileName(old));
-      if (!current) { // nothing points at the file any more: its old copy is garbage (best effort), the record goes either way
-        try { if (old.storage !== 'db') await adapters[adapterKey(old.storage)]?.remove(key); } catch { /* nothing to do */ }
-        await platform.oldDel(old.tenant_id, old.id, old.storage);
-        continue;
-      }
+      if (!current) { kept++; continue; } // No proof that a live copy exists.
       try {
         // Never delete the last good copy: the file must be present in the storage the row points at, with the expected size.
         const live = current.storage === 'db' ? true : await adapters[adapterKey(current.storage)]?.head(key);
@@ -416,12 +408,14 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
           if (holders.some(h => sha256(h.body ? Buffer.from(h.body) : Buffer.from(h.data, 'base64')) !== stored)) { kept++; continue; }
         }
         if (old.storage === 'db') await db.query("UPDATE media SET body=NULL, data='' WHERE id=$2 AND storage<>'db' AND (tenant_id=$1 OR ns=1 OR tenant_id='default')", [old.tenant_id, old.id]);
-        else await adapters[adapterKey(old.storage)].remove(key);
+        else {
+          if (current.storage === 'db' || !(await sameBytes(adapters[adapterKey(old.storage)], key, adapters[adapterKey(current.storage)], key))) { kept++; continue; }
+          await adapters[adapterKey(old.storage)].remove(key);
+        }
         await platform.oldDel(old.tenant_id, old.id, old.storage);
         removed++; bytes += Number(old.size || 0);
       } catch { kept++; }
     }
-    if (removed) for (const adapter of Object.values(adapters)) await adapter?.prune?.().catch(() => {});
     if (removed) { hub.bump(); platform.forget(); }
     if (logged) { if (removed) await platform.history.setStats(logged, { waiting: await oldCopies().catch(() => null), now: force, result: { removed, bytes, kept } }); else await platform.history.drop(logged).catch(() => {}); }
     return { removed, bytes, kept, due: due.length };
@@ -520,11 +514,11 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
    * Everything this app stores lives at `media/<hash>.<ext>` (new uploads, demo clones, restores and the migration script all write there).
    * Files written by older versions sit under their store's own folder (`t/<store>/media/<hash>.<ext>`): `consolidate` moves them into `media/`
    * and the old `t/` folders disappear with their last file (R2 has no real folders; on the server disk the empty directories are removed).
-   * Nothing else is ever listed, copied or deleted: keys of any other shape (the rest of the bucket) are invisible to this code.
+   * Only exact legacy paths backed by a media row or old-copy record are eligible. A path that looks like ours is not proof of ownership.
    *
    * Per file, in this order, each step guarded by what the previous one proved:
    *   1 copy      to `media/<name>` (never overwrites: when something is already there, the two objects are compared byte for byte instead)
-   *   2 verify    same size and same SHA-256 (videos above HASH_LIMIT: same size)
+   *   2 verify    same size and same SHA-256, including large files
    *   3 rows      the store's database row is pointed at the shared place (`ns = 1`)
    *   4 delete    the old object, and only now
    * A copy that cannot be verified is removed again; a DIFFERENT file that already sits at the target name is a conflict and is left completely
@@ -533,6 +527,16 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
   const MIME_OF = Object.fromEntries(Object.entries(EXT).map(([mime, ext]) => [ext, mime]));
   const STRAY = /^t\/([a-z0-9][a-z0-9_-]{0,62})\/media\/([a-f0-9]{32}\.[a-z0-9]+)$/;
   const strayOf = key => { const m = STRAY.exec(key); return m ? { tenant: m[1], name: m[2] } : null; };
+  async function ownedLegacyKeys(rows) {
+    const keys = new Set();
+    for (const row of rows) {
+      if (EXT[row.mime] && !isShared(row) && row.tenant_id !== 'default') keys.add(`${row.storage}|${keyOfRow(row.tenant_id, row)}`);
+    }
+    for (const old of await platform.oldAll()) {
+      if (EXT[old.mime] && isLegacyOld(old) && old.tenant_id !== 'default') keys.add(`${adapterKey(old.storage)}|${keyFor(old.tenant_id)(fileName(old))}`);
+    }
+    return keys;
+  }
 
   /** Every object of ours in every available storage: kind -> { available, complete, error, objects: Map(key -> { size, modified }) }. */
   async function listStorages() {
@@ -556,6 +560,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
   async function consolidation({ limit = 300 } = {}) {
     const stores = await listStorages();
     const rows = await db.query("SELECT tenant_id,id,mime,size,storage,ns FROM media WHERE storage IN ('r2','fs')");
+    const owned = await ownedLegacyKeys(rows);
     const owners = await ownersMap();
     // Files whose bytes still sit inside the database go to media/ of the storage in use too (nothing to move when the database IS the storage in use).
     const choice = await hub.choice();
@@ -578,7 +583,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
       if (!s.complete) continue;
       for (const [key, object] of s.objects) {
         const stray = strayOf(key);
-        if (!stray) continue;
+        if (!stray || !owned.has(`${kind}|${key}`)) continue;
         const target = s.objects.get(`media/${stray.name}`);
         const action = !target ? 'move' : target.size === object.size ? 'merge' : 'conflict';
         out.storages[kind].outside++;
@@ -613,11 +618,11 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     if (!source) return 'gone'; // a concurrent run removed it already
     let created = false;
     if (await adapter.head(target)) {
-      if (!(await provenSame(adapter, key, adapter, target))) return 'conflict'; // another file under the same name: nothing is touched
+      if (!(await sameBytes(adapter, key, adapter, target))) return 'conflict'; // another file under the same name: nothing is touched
     } else {
       await adapter.copy(key, target);
       created = true;
-      if (!(await provenSame(adapter, key, adapter, target))) { await adapter.remove(target).catch(() => {}); throw fail(502, 'VERIFY_FAILED'); }
+      if (!(await sameBytes(adapter, key, adapter, target))) { await adapter.remove(target).catch(() => {}); throw fail(502, 'VERIFY_FAILED'); }
     }
     // The bytes at media/ are proven to be the old file: the store's row points there now.
     await db.query('UPDATE media SET ns=1, size=$4 WHERE tenant_id=$1 AND id=$2 AND ns=0 AND storage=$3', [tenant, id, kind, source.size]);
@@ -644,11 +649,12 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     try {
       // The restore point comes FIRST: where every file lives now, and the stats of the preview. (A continuation of the same run keeps its point.)
       if (!out.history) {
-        const plan = await consolidation({ limit: 0 });
-        out.history = await recordHistory('consolidate', { actor, stats: { totals: plan.totals, database: plan.database, storages: plan.storages, rows: { checked: plan.rows.checked, missing: plan.rows.missing } } });
+        const { files: _files, ...previewStats } = await consolidation({ limit: 0 });
+        out.history = await recordHistory('consolidate', { actor, stats: previewStats });
         created = true;
-      } else if (!(await platform.history.get(out.history))) throw fail(404, 'NOT_FOUND');
+      } else if ((await platform.history.get(out.history))?.op !== 'consolidate') throw fail(404, 'NOT_FOUND');
       const stores = await listStorages();
+      const owned = await ownedLegacyKeys(await db.query("SELECT tenant_id,id,mime,storage,ns FROM media WHERE storage IN ('r2','fs') AND ns=0"));
       for (const kind of ['r2', 'fs']) {
         const s = stores[kind], adapter = adapters[kind];
         if (!adapter) continue;
@@ -656,7 +662,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
         let kindRemaining = 0;
         for (const [key, object] of s.objects) {
           const stray = strayOf(key);
-          if (!stray) continue;
+          if (!stray || !owned.has(`${kind}|${key}`)) continue;
           if (clock() - started > budgetMs) { kindRemaining++; continue; }
           try {
             const result = await consolidateOne(kind, adapter, key, stray);
@@ -687,7 +693,8 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
             after = row.id;
             if (clock() - started > budgetMs) { over = true; out.remaining++; continue; }
             if (!EXT[row.mime]) continue;
-            try { const size = await transfer(row.tenant_id, row, kind); await repointDb(row, kind, size); out.dbMoved++; out.bytes += size; } catch { out.dbFailed++; }
+            try { const size = await transfer(row.tenant_id, row, kind); await repointDb(row, kind, size); out.dbMoved++; out.bytes += size; }
+            catch (error) { if (error.message === 'TARGET_CONFLICT') out.conflicts++; else out.dbFailed++; }
           }
         }
       }
@@ -824,16 +831,19 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     const ids = [...new Set(items.map(item => item.id).filter(Boolean))];
     const known = new Map();
     if (ids.length) {
-      for (const row of await db.query("SELECT tenant_id,id,title FROM media WHERE id=ANY($1) AND storage<>'pending'", [ids])) {
-        if (!known.has(row.id)) known.set(row.id, { title: '', stores: [] });
-        const k = known.get(row.id); k.stores.push(ownerOf(map, row.tenant_id).name); if (row.title && !k.title) k.title = row.title;
+      for (const row of await db.query(`SELECT tenant_id,id,title,mime,storage,ns FROM media WHERE id=ANY($1) AND storage IN ${SETTLED}`, [ids])) {
+        const where = row.storage === 'db' ? 'database' : row.storage === 'fs' ? 'app' : 'r2';
+        const key = row.storage === 'db' ? sharedName(row) : keyOfRow(row.tenant_id, row);
+        const lookup = `${where}|${key}`;
+        if (!known.has(lookup)) known.set(lookup, { title: '', stores: [] });
+        const k = known.get(lookup); k.stores.push(ownerOf(map, row.tenant_id).name); if (row.title && !k.title) k.title = row.title;
       }
     }
     const view_ = items.map(item => {
-      const name = item.key.slice(item.key.lastIndexOf('/') + 1), info = item.id ? known.get(item.id) : null, kind = typeOfKey(name);
+      const name = item.key.slice(item.key.lastIndexOf('/') + 1), info = known.get(`${item.where}|${item.key}`), kind = typeOfKey(name);
       return {
         key: item.key, name, id: item.id, type: kind, folder: item.key.includes('/') ? item.key.slice(0, item.key.lastIndexOf('/') + 1) : '/', inMedia: item.key.startsWith('media/'),
-        size: item.size, modified: item.modified, mime: item.mime || '', stray: STRAY.test(item.key), inDatabase: !!info, title: item.title || info?.title || '',
+        size: item.size, modified: item.modified, mime: item.mime || '', stray: !!info && STRAY.test(item.key), inDatabase: !!info, title: item.title || info?.title || '',
         stores: info ? info.stores.slice(0, 3) : [], storeCount: info ? info.stores.length : 0, storage: item.where || choice,
         url: previewUrl(item.where === 'database' ? 'database' : item.where === 'fs' ? 'app' : item.where || choice, item.key),
       };

@@ -549,6 +549,91 @@ test('one folder: files whose bytes sit in the database go to media/ too; a rest
     assert.deepEqual([restored.storage, restored.ns], ['db', 0]);
     const served = await call(s.backend, `/shop-a/api/media/${rows[0].id}.png`);
     assert.equal(served.status, 200);
+    const restoredBodies = await s.db.query('SELECT id,body FROM media WHERE tenant_id=$1', [a.tenant.id]);
+    for (const { id, body } of rows) assert.deepEqual(Buffer.from(restoredBodies.find(row => row.id === id).body), body, 'restore keeps original bytes, including the retained DB copy');
+  } finally { s.cleanup(); }
+});
+
+test('one folder: mixed R2 and Hostinger-style disk consolidation preserves untracked files and restores both layouts after cleanup', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const r2Id = await legacyize(s, a.tenant.id, await s.upload(a, 170));
+    const fsId = idOf(await s.upload(a, 171));
+    const disk = createFsStorage({ MEDIA_DIR: s.dir });
+    const legacy = id => `t/${a.tenant.id}/media/${id}.png`;
+    const shared = id => `media/${id}.png`;
+    const originals = [bodyOf(s.r2, legacy(r2Id)), bodyOf(s.r2, shared(fsId))];
+    await disk.put(legacy(fsId), originals[1]);
+    await s.r2.remove(shared(fsId));
+    await s.db.query("UPDATE media SET storage='fs', ns=0 WHERE id=$1", [fsId]);
+    // Even an app-shaped path (or an id used on the OTHER backend) is not proof of ownership.
+    await disk.put(legacy(r2Id), Buffer.from('manual disk file'));
+    await s.r2.put(legacy(fsId), Buffer.from('manual R2 file'), 'image/png');
+    assert.equal((await consolidation(s)).totals.files, 2);
+    const done = await consolidate(s);
+    assert.equal(done.moved, 2);
+    assert.equal(done.conflicts + done.failed + done.remaining, 0);
+    assert.deepEqual(bodyOf(s.r2, shared(r2Id)), originals[0]);
+    assert.deepEqual(await disk.get(shared(fsId)), originals[1]);
+    const point = (await history(s)).find(item => item.id === done.history);
+    assert.equal(point.stats.folders.length, 2);
+    assert.equal((await s.api('/media/cleanup', { method: 'POST', body: { now: true } })).body.removed, 2);
+    assert.equal(await s.r2.head(legacy(r2Id)), null);
+    assert.equal(await disk.head(legacy(fsId)), null);
+    assert.deepEqual(await disk.get(legacy(r2Id)), Buffer.from('manual disk file'));
+    assert.deepEqual(await s.r2.get(legacy(fsId)), Buffer.from('manual R2 file'));
+    for (const [storage, movedId, manualId] of [['r2', r2Id, fsId], ['app', fsId, r2Id]]) {
+      const summary = await s.api(`/media/summary?storage=${storage}`);
+      assert.equal(summary.status, 200);
+      assert.equal(summary.body.storage, storage);
+      assert.deepEqual([summary.body.types.image.inMedia, summary.body.types.image.outside], [1, 1]);
+      const files = await s.api(`/media/files?view=type&type=image&storage=${storage}`);
+      assert.equal(files.status, 200);
+      assert.deepEqual(files.body.items.map(item => item.key).sort(), [shared(movedId), legacy(manualId)].sort());
+      assert.equal(files.body.items.find(item => item.key === shared(movedId)).inDatabase, true);
+      const manual = files.body.items.find(item => item.key === legacy(manualId));
+      assert.equal(manual.inDatabase, false, 'a matching basename does not give a manual file app ownership');
+      assert.equal(manual.stray, false);
+    }
+    assert.equal(await s.r2.head(shared(fsId)), null);
+    assert.equal(await disk.head(shared(r2Id)), null);
+    assert.equal((await consolidation(s)).clean, true);
+    const back = await s.api(`/media/history/${point.id}/restore`, { method: 'POST', body: {} });
+    assert.equal(back.body.restored, 2, JSON.stringify(back.body));
+    assert.equal(back.body.left, 0);
+    assert.deepEqual(await s.r2.get(legacy(r2Id)), originals[0]);
+    assert.deepEqual(await disk.get(legacy(fsId)), originals[1]);
+  } finally { s.cleanup(); }
+});
+
+test('database transfer never overwrites a different same-size object on either configured backend', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const bytes = Buffer.from(png(172).split(',')[1], 'base64');
+    const id = require('node:crypto').createHash('sha256').update(bytes.toString('base64')).digest('hex').slice(0, 32);
+    const key = `media/${id}.png`;
+    const different = Buffer.alloc(bytes.length, 17);
+    const disk = createFsStorage({ MEDIA_DIR: s.dir });
+    await s.db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at,ns) VALUES($1,$2,'image/png','',$3,$4,'db',1,0)", [a.tenant.id, id, bytes, bytes.length]);
+    await s.r2.put(key, different, 'image/png');
+    await disk.put(key, different);
+    for (const [storage, adapter] of [['r2', s.r2], ['app', disk]]) {
+      const setting = await s.api('/media/storage', { method: 'PUT', body: { storage } });
+      assert.equal(setting.status, 200);
+      const result = await consolidate(s);
+      assert.equal(result.dbMoved, 0);
+      assert.equal(result.conflicts, 1);
+      assert.deepEqual(await adapter.get(key), different);
+      assert.equal((await rowsOfId(s, id))[0].storage, 'db');
+      assert.deepEqual(Buffer.from((await s.db.query('SELECT body FROM media WHERE id=$1', [id]))[0].body), bytes);
+    }
+    // An identical target can be adopted without replacing it.
+    await disk.put(key, bytes);
+    assert.equal((await consolidate(s)).dbMoved, 1);
+    assert.equal((await rowsOfId(s, id))[0].storage, 'fs');
+    assert.deepEqual(await disk.get(key), bytes);
   } finally { s.cleanup(); }
 });
 
