@@ -70,26 +70,32 @@ export type FoundKeys = {
   stores: { tenantId: string; store: string; slug: string; storeKind: string; kind: ApiKind; provider: string; label: string; hint: string; added: boolean }[];
 };
 
-export type MediaOwner = { id: string; name: string; slug?: string; kind: string };
-/** One stored file of the whole platform (a hash), however many stores / demos / themes hold a row for it. */
-export type MediaFile = {
-  id: string; mime: string; kind: 'image' | 'video' | 'audio'; size: number; bytes: number; copies: number; storage: string; createdAt: number; title: string;
-  inLibrary: boolean; used: boolean; inClientData: boolean; legacy: boolean; owners: MediaOwner[]; usedBy: MediaOwner[]; preview: string;
+/** What is hosted, grouped as the Files manager shows it. */
+export type MediaType = 'image' | 'video' | 'audio' | 'other';
+export type MediaTypeFilter = MediaType | 'all';
+/** One hosted file, read from the storage (any path) or from the rows of one owner. `inMedia` = sits in `media/`; `stray` = in an old `t/<store>/media/` folder. */
+export type MediaItem = {
+  key: string; name: string; id: string; type: MediaType; folder: string; inMedia: boolean; size: number; modified: number; mime: string; stray: boolean;
+  inDatabase: boolean; title: string; stores: string[]; storeCount: number; storage: string; url: string;
 };
-export type MediaFiles = {
-  items: MediaFile[]; total: number; more: boolean;
-  totals: { files: number; bytes: number; unused: MediaBucket; duplicates: MediaBucket; legacy: MediaBucket };
-  owners: MediaOwner[];
+export type MediaFiles = { view: 'type' | 'owner'; storage: 'r2' | 'app' | 'database'; items: MediaItem[]; more: boolean; cursor: string };
+export type MediaSummary = { storage: 'r2' | 'app' | 'database'; at: number; complete: boolean; scanned: number; types: Record<MediaType, { files: number; bytes: number; inMedia: number; outside: number }> };
+export type MediaOwner = { id: string; name: string; slug: string; files: number; bytes: number; main?: boolean };
+export type MediaOwners = { groups: { store: MediaOwner[]; demo: MediaOwner[]; theme: MediaOwner[]; other: MediaOwner[] }; types: Record<MediaType, number> };
+/** One restore point: what the hosting looked like before an operation. */
+export type MediaHistoryEntry = {
+  id: string; at: number; op: 'consolidate' | 'move' | 'restore' | 'cleanup'; label: string; actor: string; files: number; bytes: number; restoredAt: number | null;
+  stats: Record<string, any>; restorable: boolean; changed: number;
 };
-export type MediaAudit = {
-  at: number; rows: number; healthy: boolean;
-  storages: Record<'r2' | 'fs', { available: boolean; checked: boolean; error: string; objects: number; bytes: number }>;
-  missing: { files: number }; wrongStorage: { files: number }; strayPrefix: { files: number };
-  legacy: { files: number; bytes: number; reclaimFiles: number; reclaimBytes: number };
-  sizeMismatch: { files: number }; sizeUnknown: { files: number };
-  orphans: { files: number; bytes: number; deletable: number; deletableBytes: number; recent: number };
-  inDatabase: MediaBucket;
-  samples: { missing: AuditLine[]; wrongStorage: AuditLine[]; strayPrefix: AuditLine[]; legacy: AuditLine[]; sizeMismatch: AuditLine[]; orphans: { key: string; storage: string; size: number; recent: boolean; store: string }[] };
+export type MediaRestoreResult = { restored: number; conflicts: number; failed: number; bytes: number; left: number; partial: boolean; cursor: [string, string]; backup: string; done: boolean };
+export type ConsolidationAction = 'move' | 'merge' | 'conflict';
+export type Consolidation = {
+  at: number; clean: boolean;
+  storages: Record<'r2' | 'fs', { available: boolean; checked: boolean; error: string; media: MediaBucket; outside: number }>;
+  database: { files: number; bytes: number; target: '' | 'r2' | 'app' };
+  folders: { storage: 'r2' | 'fs'; path: string; store: string; files: number; bytes: number }[];
+  files: { storage: 'r2' | 'fs' | 'db'; from: string; to: string; size: number; action: ConsolidationAction; store: string }[];
+  totals: { files: number; bytes: number; move: number; merge: number; conflict: number };
+  rows: { checked: number; missing: number; samples: { id: string; store: string; storage: string; key: string }[] };
 };
-export type AuditLine = { id: string; store: string; storage: string; key: string; size: number | null };
-export type MediaRepair = { sizes: number; repointed: number; copied: number; migrated: number; orphansDeleted: number; orphanBytes: number; brokenRemoved: number; failed: number; skipped: number; remaining: number; partial: boolean };
+export type ConsolidateResult = { moved: number; merged: number; waiting: number; bytes: number; conflicts: number; failed: number; rowsFixed: number; dbMoved: number; dbFailed: number; unreadable: string[]; remaining: number; partial: boolean; history: string };

@@ -1,131 +1,229 @@
-import React, { useState } from 'react';
-import { Image, View } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { Image, Platform, Pressable, View } from 'react-native';
 import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
-import type { MediaFile, MediaFiles } from '@/superadmin/types';
-import { Badge, Btn, Card, Empty, ErrorLine, Field, Hint, Loading, Notice, Row, Segmented, T, useLoad } from '@/superadmin/ui';
+import type { MediaFiles as Page, MediaItem, MediaOwner, MediaOwners, MediaSummary, MediaType, MediaTypeFilter } from '@/superadmin/types';
+import { Badge, Btn, Card, Empty, ErrorLine, Field, Loading, Notice, Row, Sheet, T } from '@/superadmin/ui';
 
 const size = (bytes: number | null | undefined) => {
   const n = Number(bytes || 0);
   return n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
 };
-type Usage = 'all' | 'unused' | 'used';
-const PAGE = 40;
+const PAGE = 50;
+const TYPES: MediaTypeFilter[] = ['all', 'image', 'video', 'audio', 'other'];
+const typeLabel = (t: MediaTypeFilter) => (t === 'image' ? tr('Images') : t === 'video' ? tr('Videos') : t === 'audio' ? tr('Audio') : t === 'other' ? tr('Other files') : tr('All types'));
+const storageName = (s?: string) => (s === 'r2' ? tr('Cloudflare R2') : s === 'app' ? tr('App folder (self-hosted)') : tr('Database'));
+type Mode = '' | 'type' | 'owner';
+type Group = 'store' | 'demo' | 'theme' | 'other';
+const GROUPS: Group[] = ['store', 'demo', 'theme', 'other'];
+const groupLabel = (g: Group) => (g === 'store' ? tr('Stores') : g === 'demo' ? tr('Demos') : g === 'theme' ? tr('Themes') : tr('Other'));
 
-/** Every stored file of the platform, once, with who owns it and whether anything still shows it. Delete whole files; used ones are protected. */
-export function AllFiles({ onChanged }: { onChanged: () => void }) {
-  const [usage, setUsage] = useState<Usage>('unused');
-  const [kind, setKind] = useState<'' | 'image' | 'video' | 'audio'>('');
-  const [q, setQ] = useState('');
-  const [sort, setSort] = useState<'new' | 'old' | 'size'>('size');
-  const [pages, setPages] = useState(1);
-  const [picked, setPicked] = useState<string[]>([]);
+/** A tappable option block (the two ways to look at the hosted files). */
+function Option({ id, title, hint, on, onPress }: { id: string; title: string; hint: string; on: boolean; onPress: () => void }) {
+  return (
+    <Pressable testID={id} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={onPress}
+      style={{ flexGrow: 1, flexBasis: 260, padding: SA.space.md, borderRadius: SA.radius.md, borderWidth: 2, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: on ? SA.color.accentSoft : SA.color.panel }}>
+      <T weight="bold" color={on ? SA.color.accent : SA.color.text}>{title}</T>
+      <T size="sm" color={SA.color.muted}>{hint}</T>
+    </Pressable>
+  );
+}
+function Chip({ label, on, onPress, testID, count }: { label: string; on: boolean; onPress: () => void; testID?: string; count?: number }) {
+  return (
+    <Pressable testID={testID} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={onPress}
+      style={{ paddingVertical: 6, paddingHorizontal: 12, borderRadius: SA.radius.sm, borderWidth: 1, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: on ? SA.color.accentSoft : SA.color.panel }}>
+      <T size="sm" weight={on ? 'bold' : 'medium'} color={on ? SA.color.accent : SA.color.text}>{count == null ? label : `${label} · ${count}`}</T>
+    </Pressable>
+  );
+}
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ marginBottom: SA.space.sm }}>
+      <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</T>
+      <T selectable>{value}</T>
+    </View>
+  );
+}
+
+/** Plays or shows one file. Only mounted after the owner asks for it: nothing is downloaded before that. */
+function Preview({ item }: { item: MediaItem }) {
+  if (item.type === 'image') return <Image source={{ uri: item.url }} style={{ width: '100%', height: 280 }} resizeMode="contain" />;
+  if (Platform.OS === 'web' && (item.type === 'video' || item.type === 'audio')) {
+    return React.createElement(item.type, { src: item.url, controls: true, preload: 'metadata', style: { width: '100%', maxHeight: 320 } });
+  }
+  return <T size="sm" color={SA.color.muted}>{tr('This kind of file has no preview here.')}</T>;
+}
+
+/**
+ * The Files manager. Nothing is loaded when the page opens: no picture, no list, no count. The owner first picks HOW to look:
+ *   - all the media by type: everything hosted in the storage in use, whatever its folder (media/, old folders, files put there by hand), as images / videos / audio / other.
+ *   - by store, demo, theme or other: the files one of them holds.
+ * Files are listed as plain rows (name, folder, size); a preview is loaded only for the one file the owner opens and asks to see.
+ */
+export function MediaFiles({ storage, onChanged }: { storage: string; onChanged: () => void }) {
+  const [mode, setMode] = useState<Mode>('');
+  const [type, setType] = useState<MediaTypeFilter>('all');
+  const [group, setGroup] = useState<Group>('store');
+  const [owner, setOwner] = useState<MediaOwner | null>(null);
+  const [summary, setSummary] = useState<MediaSummary | null>(null);
+  const [owners, setOwners] = useState<MediaOwners | null>(null);
+  const [items, setItems] = useState<MediaItem[]>([]);
+  const [more, setMore] = useState(false);
+  const [cursor, setCursor] = useState('');
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState('');
-  const [problem, setProblem] = useState<unknown>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState<MediaItem | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [confirm, setConfirm] = useState(false);
   const [note, setNote] = useState('');
-  const [confirm, setConfirm] = useState<'picked' | 'unused' | null>(null);
-  const query = `?usage=${usage}&sort=${sort}&limit=${PAGE * pages}${kind ? `&kind=${kind}` : ''}${q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ''}`;
-  const { data, error, loading, reload } = useLoad(() => sa<MediaFiles>(`/media/files${query}`), [query]);
+  const seq = useRef(0);
 
-  const toggle = (id: string) => setPicked(list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]));
-  const remove = async (body: Record<string, unknown>) => {
-    setBusy('delete'); setProblem(null); setNote('');
-    try {
-      let removed = 0, blocked = 0, bytes = 0;
-      for (let round = 0; round < 60; round++) {
-        const r = await sa<{ removed: string[]; blocked: unknown[]; bytes: number; remaining?: number }>('/media/files/delete', { method: 'POST', body });
-        removed += r.removed.length; blocked += r.blocked.length; bytes += r.bytes;
-        if (!body.allUnused || !r.remaining || !r.removed.length) break;
-      }
-      setNote(tr('Deleted {n} files ({size}). {kept} were kept because something still uses them.', { n: removed, size: size(bytes), kept: blocked }));
-      setPicked([]); setConfirm(null); reload(); onChanged();
-    } catch (e) { setProblem(saMessage(e)); } finally { setBusy(''); }
+  const guard = useCallback(async (key: string, job: () => Promise<void>) => {
+    setBusy(key); setError(null);
+    try { await job(); } catch (e) { setError(saMessage(e)); } finally { setBusy(''); }
+  }, []);
+
+  const list = useCallback((view: Mode, t: MediaTypeFilter, who: MediaOwner | null, after: string) => guard('list', async () => {
+    const mine = ++seq.current;
+    const query = `view=${view}&type=${t}&limit=${PAGE}${view === 'owner' && who ? `&owner=${encodeURIComponent(who.id)}` : ''}${after ? `&after=${encodeURIComponent(after)}` : ''}`;
+    const page = await sa<Page>(`/media/files?${query}`);
+    if (mine !== seq.current) return;
+    setItems(prev => (after ? prev.concat(page.items) : page.items)); setMore(page.more); setCursor(page.cursor); setLoaded(true);
+  }), [guard]);
+
+  const reset = () => { seq.current++; setItems([]); setMore(false); setCursor(''); setLoaded(false); setQ(''); setOpen(null); setNote(''); };
+  const pickMode = (next: Mode) => {
+    reset(); setMode(next); setOwner(null); setType('all'); setError(null);
+    if (next === 'type' && !summary) guard('summary', async () => setSummary(await sa<MediaSummary>('/media/summary')));
+    if (next === 'owner' && !owners) guard('owners', async () => setOwners(await sa<MediaOwners>('/media/owners')));
   };
+  const pickType = (t: MediaTypeFilter) => { reset(); setType(t); if (mode === 'type' || owner) list(mode, t, owner, ''); };
+  const pickOwner = (o: MediaOwner) => { reset(); setOwner(o); list('owner', type, o, ''); };
+  const recount = () => guard('summary', async () => setSummary(await sa<MediaSummary>('/media/summary')));
 
-  const items = data?.items || [];
-  const sub = (f: MediaFile) => [
-    f.kind === 'image' ? tr('Image') : f.kind === 'video' ? tr('Video') : tr('Audio'),
-    f.storage === 'r2' ? tr('Cloudflare R2') : f.storage === 'fs' ? tr('App folder (self-hosted)') : f.storage === 'db' ? tr('Database') : tr('Mixed'),
-    new Date(f.createdAt).toLocaleDateString(),
-  ].join(' · ');
-  const names = (list: MediaFile['owners']) => list.slice(0, 3).map(o => o.name).join(', ') + (list.length > 3 ? ` +${list.length - 3}` : '');
+  const remove = (item: MediaItem) => guard('delete', async () => {
+    const r = await sa<{ removed: string[]; blocked: { id: string; reason: string }[] }>('/media/files/delete', { method: 'POST', body: { ids: [item.id] } });
+    if (r.removed.length) { setItems(prev => prev.filter(i => i.id !== item.id)); setNote(tr('Deleted {name}.', { name: item.name })); onChanged(); }
+    else setNote(tr('Kept: a store still uses this picture.'));
+    setOpen(null); setConfirm(false);
+  });
+
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? items.filter(i => `${i.name} ${i.title} ${i.stores.join(' ')} ${i.folder}`.toLowerCase().includes(needle)) : items;
+  const count = (t: MediaTypeFilter): number | undefined => {
+    if (mode === 'type' && summary) return t === 'all' ? Object.values(summary.types).reduce((n, v) => n + v.files, 0) : summary.types[t as MediaType].files;
+    if (mode === 'owner' && owners) return t === 'all' ? Object.values(owners.types).reduce((n, v) => n + v, 0) : owners.types[t as MediaType];
+    return undefined;
+  };
+  const showList = mode === 'type' || (mode === 'owner' && owner);
 
   return (
     <View testID="sa-media-files">
-      <T size="lg" weight="bold" style={{ marginBottom: 2 }}>{tr('All files')}</T>
-      <T size="sm" color={SA.color.muted} style={{ marginBottom: SA.space.sm }}>{tr('Every file stored for every store, demo and theme, once. See who owns it and whether anything still shows it, then keep or delete.')}</T>
-      <ErrorLine error={error || problem} />
-      {note ? <Notice tone="ok">{note}</Notice> : null}
-      {data ? (
-        <Row style={{ marginBottom: SA.space.sm }}>
-          <Badge label={tr('{n} files · {size}', { n: data.totals.files, size: size(data.totals.bytes) })} tone="muted" />
-          <Badge label={tr('{n} not used by anyone · {size}', { n: data.totals.unused.files, size: size(data.totals.unused.bytes) })} tone={data.totals.unused.files ? 'warn' : 'ok'} />
-        </Row>
-      ) : null}
-      <Segmented<Usage> testID="sa-media-usage" value={usage} onChange={v => { setUsage(v); setPages(1); setPicked([]); }}
-        options={[{ value: 'unused', label: tr('Not used') }, { value: 'used', label: tr('Used') }, { value: 'all', label: tr('All') }]} />
-      <View style={{ height: SA.space.sm }} />
-      <Row>
-        <Segmented<'' | 'image' | 'video' | 'audio'> value={kind} onChange={v => { setKind(v); setPages(1); }} options={[{ value: '', label: tr('Any type') }, { value: 'image', label: tr('Images') }, { value: 'video', label: tr('Videos') }, { value: 'audio', label: tr('Audio') }]} />
-        <Segmented<'size' | 'new' | 'old'> value={sort} onChange={v => { setSort(v); setPages(1); }} options={[{ value: 'size', label: tr('Biggest') }, { value: 'new', label: tr('Newest') }, { value: 'old', label: tr('Oldest') }]} />
+      <Row style={{ alignItems: 'stretch', marginBottom: SA.space.md }}>
+        <Option id="sa-files-by-type" title={tr('All media by type')} hint={tr('Every file hosted in {storage}, in any folder: images, videos, audio and other files.', { storage: storageName(storage) })} on={mode === 'type'} onPress={() => pickMode('type')} />
+        <Option id="sa-files-by-owner" title={tr('By store, demo, theme or other')} hint={tr('The files one store, demo, theme or other owner holds.')} on={mode === 'owner'} onPress={() => pickMode('owner')} />
       </Row>
-      <View style={{ height: SA.space.sm }} />
-      <Field label={tr('Search by store, demo or title')} value={q} onChangeText={(v: string) => { setQ(v); setPages(1); }} />
+      {!mode ? <Notice>{tr('Nothing is loaded until you choose how to look at the files. Pictures are shown only when you open a file and ask for its preview.')}</Notice> : null}
+      <ErrorLine error={error} />
+      {note ? <Notice tone="ok">{note}</Notice> : null}
+      {busy === 'summary' || busy === 'owners' ? <Loading /> : null}
 
-      {picked.length || usage === 'unused' ? (
-        <Row style={{ marginBottom: SA.space.sm }}>
-          {picked.length ? <Btn small kind="danger" testID="sa-media-delete-picked" label={tr('Delete {n} selected', { n: picked.length })} onPress={() => setConfirm('picked')} disabled={busy !== ''} /> : null}
-          {picked.length ? <Btn small kind="ghost" label={tr('Clear selection')} onPress={() => setPicked([])} /> : null}
-          {usage === 'unused' && data?.totals.unused.files ? <Btn small kind="ghost" testID="sa-media-delete-unused" label={tr('Delete all unused')} onPress={() => setConfirm('unused')} disabled={busy !== ''} /> : null}
-        </Row>
-      ) : null}
-      {confirm ? (
-        <Notice tone="warn" testID="sa-media-files-confirm">
-          {confirm === 'picked'
-            ? tr('Delete {n} files from every store and from storage? This cannot be undone. Files that a store still shows are kept.', { n: picked.length })
-            : tr('Delete every file nobody uses? Files from the last 24 hours, files kept in a store library, and anything in a client’s history are kept.')}
-          <Row style={{ marginTop: SA.space.sm }}>
-            <Btn small kind="danger" testID="sa-media-files-go" label={tr('Delete now')} busy={busy === 'delete'} onPress={() => remove(confirm === 'picked' ? { ids: picked } : { allUnused: true })} />
-            <Btn small kind="ghost" label={tr('Cancel')} onPress={() => setConfirm(null)} />
+      {mode === 'owner' && owners ? (
+        <Card>
+          <Row style={{ marginBottom: SA.space.sm }}>
+            {GROUPS.map(g => <Chip key={g} testID={`sa-files-group-${g}`} label={groupLabel(g)} count={owners.groups[g].reduce((n, o) => n + o.files, 0)} on={group === g} onPress={() => { setGroup(g); setOwner(null); reset(); }} />)}
           </Row>
-        </Notice>
+          {owners.groups[group].length ? (
+            <Row>
+              {owners.groups[group].map(o => (
+                <Chip key={o.id} testID="sa-files-owner" label={o.name || tr('Other')} count={o.files} on={owner?.id === o.id} onPress={() => pickOwner(o)} />
+              ))}
+            </Row>
+          ) : <T size="sm" color={SA.color.muted}>{tr('Nothing here holds files yet.')}</T>}
+        </Card>
       ) : null}
 
-      {loading && !data ? <Loading /> : !items.length ? <Empty>{usage === 'unused' ? tr('No unused files. Nothing to clean.') : tr('No files found.')}</Empty> : (
-        <Card style={{ padding: 0 }}>
-          {items.map((f, i) => {
-            const on = picked.includes(f.id);
-            return (
-              <View key={f.id} testID="sa-media-file" style={{ padding: SA.space.md, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line, backgroundColor: on ? SA.color.panel2 : 'transparent' }}>
-                <Row style={{ flexWrap: 'nowrap' }}>
-                  <View style={{ width: 52, height: 52, borderRadius: SA.radius.sm, backgroundColor: SA.color.panel2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
-                    {f.preview ? <Image source={{ uri: f.preview }} style={{ width: 52, height: 52 }} resizeMode="cover" /> : <T size="xs" color={SA.color.muted}>{f.kind === 'video' ? '▶' : f.kind === 'audio' ? '♪' : '▢'}</T>}
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T weight="bold" numberOfLines={1}>{f.title || `${f.id.slice(0, 8)}…`}</T>
-                    <T size="xs" color={SA.color.muted} numberOfLines={1}>{sub(f)}</T>
-                    <T size="xs" color={SA.color.muted} numberOfLines={2}>{`${tr('Owner')}: ${names(f.owners)}`}</T>
-                    <Row style={{ gap: 4, marginTop: 4 }}>
-                      {f.used ? <Badge label={tr('Used by {names}', { names: names(f.usedBy) })} tone="ok" />
-                        : f.inClientData ? <Badge label={tr('In clients’ history')} tone="accent" />
-                          : <Badge label={tr('Not used')} tone="warn" />}
-                      {f.legacy ? <Badge label={tr('Old layout')} tone="muted" /> : null}
-                      {f.copies > 1 ? <Badge label={tr('{n} copies', { n: f.copies })} tone="danger" /> : null}
-                    </Row>
-                  </View>
-                  <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                    <T weight="bold">{size(f.bytes)}</T>
-                    <Btn small kind={on ? 'solid' : 'ghost'} testID="sa-media-pick" label={on ? tr('Selected') : tr('Select')} onPress={() => toggle(f.id)} />
-                  </View>
-                </Row>
-              </View>
-            );
-          })}
+      {mode === 'type' && summary ? (
+        <Card>
+          <Row style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
+            <View style={{ flexShrink: 1 }}>
+              <T size="sm" color={SA.color.muted}>{tr('{n} files found in {storage}.', { n: summary.scanned, storage: storageName(summary.storage) })}</T>
+              {!summary.complete ? <T size="xs" color={SA.color.warn}>{tr('The count stopped early: the storage holds a very large number of files.')}</T> : null}
+              {Object.values(summary.types).some(v => v.outside > 0) ? <T size="xs" color={SA.color.muted}>{tr('{n} of them are outside media/ (kept as they are: only the app\'s own pictures are moved by One media folder).', { n: Object.values(summary.types).reduce((n, v) => n + v.outside, 0) })}</T> : null}
+            </View>
+            <Btn small kind="ghost" label={tr('Count again')} onPress={recount} busy={busy === 'summary'} disabled={busy !== ''} />
+          </Row>
         </Card>
-      )}
-      {data?.more ? <View style={{ marginTop: SA.space.sm }}><Btn kind="ghost" label={tr('Show more')} onPress={() => setPages(p => p + 1)} /></View> : null}
-      <Hint>{tr('A file two stores share is one line: deleting it here removes it for both. To only remove it from one store, use that store’s own library.')}</Hint>
+      ) : null}
+
+      {showList ? (
+        <View>
+          <Row style={{ marginVertical: SA.space.sm }}>
+            {TYPES.map(t => <Chip key={t} testID={`sa-files-type-${t}`} label={typeLabel(t)} count={count(t)} on={type === t} onPress={() => pickType(t)} />)}
+          </Row>
+          {mode === 'owner' && !owner ? <Empty>{tr('Choose a store, demo, theme or other owner above.')}</Empty> : (
+            <View>
+              {!loaded && busy === 'list' ? <Loading /> : null}
+              {loaded && !items.length ? <Empty>{tr('No files of this kind.')}</Empty> : null}
+              {!loaded && !busy ? <Btn testID="sa-files-load" label={tr('Show the list')} onPress={() => list(mode, type, owner, '')} /> : null}
+              {items.length ? (
+                <View>
+                  <View style={{ maxWidth: 320 }}><Field label={tr('Search loaded files')} value={q} onChangeText={(v: string) => setQ(v)} /></View>
+                  <Card style={{ padding: 0 }}>
+                    {shown.map((item, i) => (
+                      <Pressable key={`${item.storage}|${item.key}|${i}`} testID="sa-files-row" onPress={() => { setOpen(item); setShowPreview(false); setConfirm(false); setNote(''); }}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.sm, padding: SA.space.sm, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <T numberOfLines={1}>{item.title || item.name}</T>
+                          <T size="xs" color={SA.color.muted} numberOfLines={1}>{item.folder}</T>
+                        </View>
+                        {!item.inMedia ? <Badge label={item.stray ? tr('Old folder') : tr('Outside media/')} tone="warn" /> : null}
+                        <Badge label={typeLabel(item.type)} tone="muted" />
+                        <T size="xs" color={SA.color.muted} style={{ width: 64, textAlign: 'right' }}>{size(item.size)}</T>
+                      </Pressable>
+                    ))}
+                  </Card>
+                  {more ? <View style={{ marginTop: SA.space.md }}><Btn kind="ghost" testID="sa-files-more" label={tr('Load more')} onPress={() => list(mode, type, owner, cursor)} busy={busy === 'list'} disabled={busy !== ''} /></View> : null}
+                  <T size="xs" color={SA.color.muted} style={{ marginTop: SA.space.sm }}>{tr('{n} files loaded', { n: items.length })}</T>
+                </View>
+              ) : null}
+            </View>
+          )}
+        </View>
+      ) : null}
+
+      {open ? (
+        <Sheet title={open.title || open.name} onClose={() => { setOpen(null); setConfirm(false); }} testID="sa-media-detail">
+          {showPreview ? (
+            <View style={{ alignItems: 'center', backgroundColor: SA.color.panel2, borderRadius: SA.radius.sm, marginBottom: SA.space.md }}><Preview item={open} /></View>
+          ) : (
+            <View style={{ marginBottom: SA.space.md }}><Btn small kind="ghost" testID="sa-files-preview" label={tr('Show preview')} onPress={() => setShowPreview(true)} /></View>
+          )}
+          <Detail label={tr('File')} value={open.name} />
+          <Detail label={tr('Folder')} value={open.folder} />
+          <Detail label={tr('Kind')} value={typeLabel(open.type)} />
+          <Detail label={tr('Size')} value={size(open.size)} />
+          <Detail label={tr('Stored in')} value={storageName(open.storage)} />
+          {open.modified ? <Detail label={tr('Added')} value={new Date(open.modified).toLocaleString()} /> : null}
+          <Detail label={tr('Used by')} value={open.inDatabase ? open.stores.join(', ') + (open.storeCount > open.stores.length ? ` +${open.storeCount - open.stores.length}` : '') : tr('No store in the database')} />
+          {open.stray ? <Notice tone="warn">{tr('This picture sits outside media/. Use One media folder above to move it.')}</Notice> : null}
+          {!open.inMedia && !open.stray ? <Notice>{tr('This file is not one of the app\'s own pictures. It is shown so you can see everything hosted; the app never moves or deletes it.')}</Notice> : null}
+          {open.inDatabase && open.id ? (
+            confirm ? (
+              <Notice tone="warn">
+                {tr('Delete this picture from every store and from storage? This cannot be undone. A picture a store still shows is kept.')}
+                <Row style={{ marginTop: SA.space.sm }}>
+                  <Btn small kind="danger" testID="sa-media-delete-go" label={tr('Delete now')} onPress={() => remove(open)} busy={busy === 'delete'} />
+                  <Btn small kind="ghost" label={tr('Cancel')} onPress={() => setConfirm(false)} />
+                </Row>
+              </Notice>
+            ) : <Btn small kind="danger" testID="sa-media-delete" label={tr('Delete')} onPress={() => setConfirm(true)} />
+          ) : null}
+        </Sheet>
+      ) : null}
     </View>
   );
 }
