@@ -10,7 +10,7 @@ const size = (bytes: number | null | undefined) => {
   const n = Number(bytes || 0);
   return n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
 };
-const where = (storage: string) => (storage === 'r2' ? tr('Cloudflare R2') : tr('App folder (self-hosted)'));
+const where = (storage: string) => (storage === 'r2' ? tr('Cloudflare R2') : storage === 'db' ? tr('Database') : tr('App folder (self-hosted)'));
 const ACTION: Record<ConsolidationAction, { label: () => string; tone: 'ok' | 'muted' | 'danger' }> = {
   move: { label: () => tr('Will move'), tone: 'ok' },
   merge: { label: () => tr('Already in media/'), tone: 'muted' },
@@ -38,8 +38,8 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
     try {
       let total: ConsolidateResult | null = null;
       for (let round = 0; round < 200; round++) {
-        const r: ConsolidateResult = await sa<ConsolidateResult>('/media/consolidate', { method: 'POST' });
-        total = total ? { ...r, moved: total.moved + r.moved, merged: total.merged + r.merged, waiting: total.waiting + r.waiting, bytes: total.bytes + r.bytes, rowsFixed: total.rowsFixed + r.rowsFixed, failed: total.failed + r.failed } : r;
+        const r: ConsolidateResult = await sa<ConsolidateResult>('/media/consolidate', { method: 'POST', body: { history: total?.history || '' } });
+        total = total ? { ...r, history: r.history || total.history, moved: total.moved + r.moved, merged: total.merged + r.merged, waiting: total.waiting + r.waiting, bytes: total.bytes + r.bytes, rowsFixed: total.rowsFixed + r.rowsFixed, failed: total.failed + r.failed, conflicts: total.conflicts + r.conflicts, dbMoved: total.dbMoved + r.dbMoved, dbFailed: total.dbFailed + r.dbFailed } : r;
         if (!r.partial) break;
       }
       setResult(total);
@@ -75,6 +75,7 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
         {result ? (
           <Notice tone={result.failed || result.conflicts || result.unreadable.length ? 'warn' : 'ok'} testID="sa-media-folder-done">
             {tr('Moved {moved} files into media/ ({size}), {merged} were already there. {failed} could not be moved and {conflicts} were left alone because media/ holds a different file under the same name. The old copies wait 24 hours, or remove them now below.', { moved: result.moved, size: size(result.bytes), merged: result.merged, failed: result.failed, conflicts: result.conflicts })}
+            {result.history ? ` ${tr('A restore point was saved first: see Transfer history to put everything back.')}` : ''}
           </Notice>
         ) : null}
         {plan ? (
@@ -89,6 +90,10 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
               ))}
               {plan.rows.missing ? <Badge tone="danger" label={tr('{n} files the database lists are missing in storage', { n: plan.rows.missing })} /> : <Badge tone="ok" label={tr('{n} database entries checked, none missing', { n: plan.rows.checked })} />}
             </Row>
+
+            {plan.database.files ? (
+              <T size="sm" color={SA.color.muted} testID="sa-media-folder-db" style={{ marginBottom: SA.space.sm }}>{tr('{n} files ({size}) are stored inside the database and will be moved into media/ too.', { n: plan.database.files, size: size(plan.database.bytes) })}</T>
+            ) : null}
 
             {plan.folders.length ? (
               <View testID="sa-media-folder-folders" style={{ marginBottom: SA.space.sm }}>
@@ -111,7 +116,7 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
                 <View style={{ borderWidth: 1, borderColor: SA.color.line, borderRadius: SA.radius.sm, maxHeight: 280, overflow: 'scroll' as any }}>
                   {plan.files.map((f, i) => (
                     <View key={`${f.storage}|${f.from}`} testID="sa-media-folder-file" style={{ padding: SA.space.sm, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
-                      <T size="xs" selectable numberOfLines={1}>{f.from}</T>
+                      <T size="xs" selectable numberOfLines={1}>{f.storage === 'db' ? `${tr('Database')} · ${f.from}` : f.from}</T>
                       <Row style={{ flexWrap: 'nowrap', gap: 4 }}>
                         <T size="xs" color={SA.color.muted}>→</T>
                         <T size="xs" selectable numberOfLines={1} style={{ flex: 1 }}>{f.to}</T>
@@ -133,7 +138,7 @@ export function MediaFolder({ oldCopies, onChanged }: { oldCopies: number; onCha
         {plan && movable ? (
           <View style={{ marginTop: SA.space.md }}>
             <Btn testID="sa-media-folder-go" label={tr('Move {n} files into media/', { n: movable })} onPress={move} busy={busy === 'move'} disabled={busy !== '' || unreadable.length > 0} />
-            <Hint>{tr('Each file is copied, checked byte for byte, and only then does its database entry point to media/. Nothing is deleted by this step; the pictures keep loading all along.')}</Hint>
+            <Hint>{tr('A restore point is saved first. Each file is copied, checked byte for byte, and only then does its database entry point to media/. Nothing is deleted by this step; the pictures keep loading all along.')}</Hint>
           </View>
         ) : null}
         {oldCopies > 0 ? (

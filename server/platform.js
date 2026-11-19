@@ -172,7 +172,8 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   const oldAdd = (tenantId, id, storage, mime, size) => db.query('INSERT INTO saas_media_old(tenant_id,id,storage,mime,size,moved_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,id,storage) DO UPDATE SET moved_at=EXCLUDED.moved_at', [tenantId, id, storage, mime, size ?? null, clock()]);
   const oldList = (tenantId, ids) => db.query('SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE tenant_id=$1 AND id=ANY($2)', [tenantId, ids]);
   const oldDel = (tenantId, id, storage) => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1 AND id=$2 AND storage=$3', [tenantId, id, storage]);
-  const oldDue = (before, limit, legacyOnly = false) => db.query(`SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE moved_at<=$1${legacyOnly ? " AND storage LIKE 'legacy-%'" : ''} ORDER BY moved_at LIMIT $2`, [before, limit]);
+  // `legacyOnly` = what the \"One media folder\" step leaves behind: old per-store folders and bytes that were kept in the database.
+  const oldDue = (before, limit, legacyOnly = false) => db.query(`SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE moved_at<=$1${legacyOnly ? " AND (storage LIKE 'legacy-%' OR storage='db')" : ''} ORDER BY moved_at LIMIT $2`, [before, limit]);
   const oldSummary = async () => (await db.query('SELECT COUNT(*)::int AS files, COALESCE(SUM(size),0)::bigint AS bytes, MIN(moved_at) AS first FROM saas_media_old'))[0];
   const oldDropTenant = tenantId => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1', [tenantId]);
   const oldDropFile = (tenantId, id) => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1 AND id=$2', [tenantId, id]);
@@ -184,8 +185,36 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   });
   /** (theme id, media id) pairs for every `/api/media/<hash>.` a theme snapshot shows. `pattern` is a POSIX regex with ONE capture group. */
   const mediaThemeRefs = pattern => db.query('SELECT DISTINCT t.id AS owner, m[1] AS id FROM saas_themes t, regexp_matches(t.snapshot, $1, \'g\') AS m', [pattern.replace(/^'|'$/g, '')]);
+  // Transfer history (restore points of the media moves, see server/media-ops.js).
+  const history = {
+    add: (id, at, op, label, actor, stats) => db.query('INSERT INTO saas_media_history(id,at,op,label,actor,stats) VALUES($1,$2,$3,$4,$5,$6)', [id, at, op, label, actor, JSON.stringify(stats || {})]),
+    /** Saves where every file matched by `where` (SQL on the media table, alias m) lives right now. Returns { files, bytes }. */
+    async snapshot(id, where, params = []) {
+      await db.query(`INSERT INTO saas_media_history_rows(hid,tenant_id,id,mime,size,storage,ns) SELECT $${params.length + 1},m.tenant_id,m.id,m.mime,m.size,m.storage,m.ns FROM media m WHERE ${where} ON CONFLICT DO NOTHING`, [...params, id]);
+      const r = (await db.query('SELECT COUNT(*)::int AS files, COALESCE(SUM(size),0)::bigint AS bytes FROM saas_media_history_rows WHERE hid=$1', [id]))[0];
+      await db.query('UPDATE saas_media_history SET files=$2, bytes=$3 WHERE id=$1', [id, r.files, r.bytes]);
+      return { files: Number(r.files), bytes: Number(r.bytes) };
+    },
+    list: limit => db.query('SELECT id,at,op,label,actor,stats,files,bytes,restored_at FROM saas_media_history ORDER BY at DESC, id DESC LIMIT $1', [limit]),
+    get: async id => (await db.query('SELECT id,at,op,label,actor,stats,files,bytes,restored_at FROM saas_media_history WHERE id=$1', [id]))[0] || null,
+    /** Rows of a restore point that are not where the point says any more (`after` = the last (tenant, id) handled). */
+    async pending(id, after, limit) {
+      return db.query('SELECT h.tenant_id,h.id,h.mime,h.size,h.storage AS storage0,h.ns AS ns0,m.storage AS storage1,m.ns AS ns1,m.size AS size1 FROM saas_media_history_rows h JOIN media m ON m.tenant_id=h.tenant_id AND m.id=h.id WHERE h.hid=$1 AND (m.storage<>h.storage OR m.ns<>h.ns) AND (h.tenant_id,h.id) > ($2,$3) ORDER BY h.tenant_id,h.id LIMIT $4', [id, after[0], after[1], limit]);
+    },
+    async stray(id) { return Number((await db.query("SELECT COUNT(*) AS n FROM saas_media_history_rows h JOIN media m ON m.tenant_id=h.tenant_id AND m.id=h.id WHERE h.hid=$1 AND (m.storage<>h.storage OR m.ns<>h.ns)", [id]))[0].n); },
+    setStats: (id, stats) => db.query('UPDATE saas_media_history SET stats=$2 WHERE id=$1', [id, JSON.stringify(stats)]),
+    markRestored: (id, at) => db.query('UPDATE saas_media_history SET restored_at=$2 WHERE id=$1', [id, at]),
+    async drop(id) { await db.query('DELETE FROM saas_media_history_rows WHERE hid=$1', [id]); await db.query('DELETE FROM saas_media_history WHERE id=$1', [id]); },
+    /** Keeps the newest `keep` restore points, drops the rest (and their rows). */
+    async prune(keep) {
+      const old = await db.query('SELECT id FROM saas_media_history ORDER BY at DESC, id DESC OFFSET $1', [keep]);
+      for (const row of old) await history.drop(row.id);
+      return old.length;
+    },
+    rows: (id, limit) => db.query('SELECT tenant_id,id,mime,size,storage,ns FROM saas_media_history_rows WHERE hid=$1 ORDER BY tenant_id,id LIMIT $2', [id, limit]),
+  };
   const oldAll = () => db.query('SELECT tenant_id,id,storage,mime FROM saas_media_old');
-  const media = { owners: mediaOwners, themeRefs: mediaThemeRefs, oldAll, oldOf, oldDropFile, oldAdd, oldList, oldDel, oldDue, oldSummary, oldDropTenant, forget: () => { mediaChoice.cache = { at: -Infinity, value: null }; }, storageChoice: mediaStorageChoice, setStorageChoice: setMediaStorageChoice, kvGet, kvSet };
+  const media = { history, owners: mediaOwners, themeRefs: mediaThemeRefs, oldAll, oldOf, oldDropFile, oldAdd, oldList, oldDel, oldDue, oldSummary, oldDropTenant, forget: () => { mediaChoice.cache = { at: -Infinity, value: null }; }, storageChoice: mediaStorageChoice, setStorageChoice: setMediaStorageChoice, kvGet, kvSet };
 
   // ---------- Console: AI switches ----------
   /** The "use API" switch of a demo. On = until now + the idle window; off = closed at once. Only demos have it. */

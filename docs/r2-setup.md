@@ -105,13 +105,22 @@ Old versions stored each store's files under its own prefix (`t/<store>/media/<n
 
 Open **Super admin > Media & storage > One media folder**:
 
-1. **Preview** only reads (R2 listing + database). It lists the old folders and every file outside `media/` with its destination, and checks that every database row has its object. Read it, then continue.
-2. **Move into media/** copies each file, verifies it byte for byte, and only then points its database row at `media/`. Nothing is deleted; pictures keep loading. A different file already under the same name is never overwritten (shown as *Different file, left alone*).
-3. **Remove old copies and folders now** deletes each old copy only after it is proven identical to the one in `media/`. Without clicking, the old copies are removed automatically after 24 h. Run **Preview** again: it should report *Everything is in media/*.
+1. **Preview** only reads (storage listing + database). It lists the old folders, every app picture outside `media/` with its destination, and the files still stored inside the database (they go to `media/` of the storage in use too). It also checks that every database row has its object. Read it, then continue.
+2. **Move into media/** first saves a **restore point** (see below), then copies each file, verifies it byte for byte, and only then points its database row at `media/`. Nothing is deleted; pictures keep loading. A different file already under the same name is never overwritten (shown as *Different file, left alone*). Files you uploaded yourself that are not the app's pictures are never touched.
+3. **Remove old copies and folders now** deletes each old copy only after it is proven identical to the one in `media/`. Without clicking, the old copies are removed automatically after 24 h. If a file is already in `media/`, the copy outside it is removed this way. Run **Preview** again: it should report *Everything is in media/*.
 
 Safety: a listing that fails, or looks empty while the database expects files, is never treated as "files missing" and nothing is moved or removed for that storage. Run it again after a partial result; it resumes. It is refused while a *Move all* is running.
 
-The **Files** grid below it shows what is really in the storage in use, so you can check the result by eye.
+### Transfer history (restore points)
+
+Before every transfer (**One media folder** and **Move all media here**) the server saves a restore point: where every media row lived (R2, app folder or database, and in which namespace). **Super admin > Media & storage > Transfer history** lists them with date, actor and counts. **Restore this state** puts every file back where it was, with the same verified copy rule (a different file in the way is left alone and reported), and saves its own restore point first, so a restore can itself be undone. A restore is time-boxed and resumable. Restore points hold locations, not second copies of the bytes: the old copies kept for 24 h after a transfer are what make a restore possible, and the restore point keeps the matching old copy from being removed while it is still the only way back.
+
+### Files manager
+
+**Files** shows nothing until you pick one of two blocks, and never loads pictures by itself (a preview is requested per file):
+
+- **All media by type**: everything hosted in the storage in use, in any folder (not only `media/`), split into Images, Videos, Audio and Other files.
+- **By store, demo, theme or other**: the files one owner holds, chosen from Stores, Demos, Themes or Other.
 
 ## Troubleshooting
 

@@ -732,7 +732,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     await platform.media.setStorageChoice(kind);
     bundles.hub.bump();
     await audit(actor, 'media.storage', null, kind, body?.move === true ? 'with move' : '');
-    if (body?.move === true) await ops().move.start(kind);
+    if (body?.move === true) await ops().move.start(kind, { actor });
     return mediaOverview();
   }
 
@@ -876,16 +876,31 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     if (path === '/media/storage' && method === 'PUT') return ok(await setMediaStorage(await readBody(req), actor));
     if (path === '/media/move/step' && method === 'POST') return ok(await ops().move.step());
     if (path === '/media/move/cancel' && method === 'POST') { const status = await ops().move.cancel(); await audit(actor, 'media.move.cancel', null, '', ''); return ok(status); }
-    // One folder: the preview of what is outside media/, the move into it, and the grid of the pictures that are in the storage.
+    // One folder: the preview of what is outside media/ and the move into it. A restore point is saved before the first file moves.
     if (path === '/media/consolidation' && method === 'GET') return ok(await ops().consolidation());
     if (path === '/media/consolidate' && method === 'POST') {
-      const result = await ops().consolidate();
-      await audit(actor, 'media.consolidate', null, '', result);
+      const body = await readBody(req).catch(() => ({}));
+      const result = await ops().consolidate({ history: typeof body?.history === 'string' ? body.history : '', actor });
+      await audit(actor, 'media.consolidate', null, result.history, result);
       return ok(result);
     }
-    if (path === '/media/browse' && method === 'GET') return ok(await ops().browse({ after: url.searchParams.get('after') || '', limit: url.searchParams.get('limit') || 48 }));
+    // Transfer history: every restore point (what the hosting looked like before an operation) and the restore.
+    if (path === '/media/history' && method === 'GET') return ok(await ops().history.list());
+    if ((m = /^\/media\/history\/(mh_[a-f0-9]{12})\/restore$/.exec(path)) && method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const result = await ops().history.restore(m[1], { cursor: Array.isArray(body?.cursor) ? body.cursor : ['', ''], backup: typeof body?.backup === 'string' && /^mh_[a-f0-9]{12}$/.test(body.backup) ? body.backup : '', actor });
+      await audit(actor, 'media.restore', null, m[1], result);
+      return ok(result);
+    }
+    // The Files manager: nothing is read until it is asked for (counts by type, owners, one page of files).
+    if (path === '/media/summary' && method === 'GET') return ok(await ops().summary({ storage: url.searchParams.get('storage') || '' }));
+    if (path === '/media/owners' && method === 'GET') return ok(await ops().owners());
+    if (path === '/media/files' && method === 'GET') {
+      const q = name => url.searchParams.get(name) || '';
+      return ok(await ops().files({ view: q('view') === 'owner' ? 'owner' : 'type', storage: q('storage'), type: q('type') || 'all', owner: q('owner'), after: q('after'), limit: q('limit') || 50 }));
+    }
     if (path === '/media/object' && method === 'GET') {
-      const file = await ops().object(url.searchParams.get('key'));
+      const file = await ops().object(url.searchParams.get('key'), url.searchParams.get('storage') || '');
       if (file.redirect) return { status: 302, data: {}, headers: { Location: file.redirect }, file };
       return { status: 200, data: null, file, headers: { 'Content-Type': file.mime } };
     }
@@ -899,7 +914,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     if (path === '/media/cleanup' && method === 'POST') {
       const body = await readBody(req).catch(() => ({}));
       // `now` = the owner removes the verified old copies without waiting the 24 h (each one is still checked against the copy in media/ first).
-      const result = await ops().cleanup({ force: body?.now === true, legacyOnly: body?.now === true });
+      const result = await ops().cleanup({ force: body?.now === true, legacyOnly: body?.now === true, actor });
       await audit(actor, 'media.cleanup', null, body?.now === true ? 'now' : '', result);
       return ok({ ...result, oldCopies: await ops().oldCopies() });
     }

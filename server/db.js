@@ -179,9 +179,13 @@ CREATE INDEX IF NOT EXISTS media_tenant_lib ON media(tenant_id, lib, created_at 
 CREATE INDEX IF NOT EXISTS media_shared_id ON media(id) WHERE ns=1;
 -- Old copies left behind by "move all files": kept (never deleted at once) until the 24 h redirect cache of /api/media has expired.
 CREATE TABLE IF NOT EXISTS saas_media_old (tenant_id TEXT NOT NULL, id TEXT NOT NULL, storage TEXT NOT NULL, mime TEXT NOT NULL, size BIGINT, moved_at BIGINT NOT NULL, PRIMARY KEY (tenant_id, id, storage));
+-- Transfer history: before every operation that moves files (into media/, to another storage, a restore) the location of every file it can touch is
+-- saved here, with the stats the preview showed. A restore brings the files back to those locations (verified copy first), so any move can be undone.
+CREATE TABLE IF NOT EXISTS saas_media_history (id TEXT PRIMARY KEY, at BIGINT NOT NULL, op TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '', stats TEXT NOT NULL DEFAULT '{}', files INTEGER NOT NULL DEFAULT 0, bytes BIGINT NOT NULL DEFAULT 0, restored_at BIGINT);
+CREATE TABLE IF NOT EXISTS saas_media_history_rows (hid TEXT NOT NULL, tenant_id TEXT NOT NULL, id TEXT NOT NULL, mime TEXT NOT NULL, size BIGINT, storage TEXT NOT NULL, ns INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (hid, tenant_id, id));
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
-const PLATFORM_TABLES = ['saas_media_old', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
+const PLATFORM_TABLES = ['saas_media_old', 'saas_media_history', 'saas_media_history_rows', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
 
 /**
  * What a backup holds (server/backup/dump.js reads this; it lives here because this file owns the schema). One entry per table, parents before

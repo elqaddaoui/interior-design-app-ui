@@ -42,6 +42,11 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 const KEY_SHAPE = /^(?:media|t\/[a-z0-9][a-z0-9_-]{0,62}\/media)\/[a-f0-9]{32}\.[a-z0-9]+$/;
 /** What the Files grid shows. */
 const IMAGE_KEY = /\.(png|jpg|webp|gif|avif|svg)$/;
+/** What a file is, from its extension (any key of the storage, ours or not): the Files manager groups by this. */
+const TYPE_EXT = { image: 'png jpg jpeg webp gif avif svg bmp ico heic heif tif tiff', video: 'mp4 webm mov m4v mkv avi mpeg mpg', audio: 'weba m4a mp3 ogg oga wav aac flac opus' };
+const EXT_TYPE = Object.fromEntries(Object.entries(TYPE_EXT).flatMap(([type, list]) => list.split(' ').map(ext => [ext, type])));
+const typeOfKey = key => EXT_TYPE[String(key).slice(String(key).lastIndexOf('.') + 1).toLowerCase()] || 'other';
+const SCAN_CAP = 20000; // objects looked at by one page of a scan
 const mb = (value, fallback) => Math.max(1, Math.min(5000, Number(value) || fallback)) * 1024 * 1024;
 const limitsOf = env => ({ image: mb(env.MEDIA_MAX_IMAGE_MB, 10), video: mb(env.MEDIA_MAX_VIDEO_MB, 100), audio: mb(env.MEDIA_MAX_AUDIO_MB, 8) });
 const kindOf = mime => (VIDEO_TYPES.includes(mime) ? 'video' : IMAGE_TYPES.includes(mime) ? 'image' : AUDIO_TYPES.includes(audioType(mime)) ? 'audio' : '');
@@ -146,6 +151,26 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
       } while (token);
       return { items, more: false };
     },
+    /**
+     * One page of EVERY object of the bucket, whatever its path or type (read-only: the Files manager shows what is hosted, not only `media/`).
+     * `types` = only these kinds ('image' | 'video' | 'audio' | 'other'). `after` = the cursor of the previous page. Returns { items, more, cursor }.
+     */
+    async scanPage({ after = '', limit = 60, types = null } = {}) {
+      const items = [];
+      let token, scanned = 0, last = after;
+      do {
+        const page = await connection().send(new (s3().ListObjectsV2Command)({ Bucket: bucket, StartAfter: token ? undefined : after || undefined, ContinuationToken: token, MaxKeys: 1000 }));
+        for (const item of page.Contents || []) {
+          last = item.Key; scanned++;
+          if (item.Key.endsWith('/') || (types && !types.includes(typeOfKey(item.Key)))) continue;
+          items.push({ key: item.Key, size: Number(item.Size), modified: item.LastModified ? new Date(item.LastModified).getTime() : 0 });
+          if (items.length >= limit) return { items, more: true, cursor: item.Key };
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+        if (scanned >= SCAN_CAP && token) return { items, more: true, cursor: last };
+      } while (token);
+      return { items, more: false, cursor: last };
+    },
     /** Server-side copy inside the bucket (nothing travels through this server: a clone of a store with large videos costs no bandwidth). */
     async copy(from, to) {
       await connection().send(new (s3().CopyObjectCommand)({ Bucket: bucket, Key: to, CopySource: `${bucket}/${from.split('/').map(encodeURIComponent).join('/')}`, CacheControl: CACHE }));
@@ -167,6 +192,14 @@ function createFsStorage(env = process.env) {
   const root = nodePath.resolve(String(env.MEDIA_DIR || '').trim() || nodePath.join(__dirname, 'data', 'media'));
   const SAFE_KEY = /^(?:media|t\/[a-z0-9][a-z0-9_-]{0,62}\/media)\/[a-f0-9]{32}\.[a-z0-9]+$/;
   const file = key => { if (!SAFE_KEY.test(String(key))) throw fail(400, 'INVALID_MEDIA_KEY'); return nodePath.join(root, ...key.split('/')); };
+  /** ANY path under the media folder (read-only previews of files the app did not write): no empty, `.` or `..` segment, nothing outside the root. */
+  const fileAny = key => {
+    const parts = String(key).split('/');
+    if (!parts.length || parts.some(part => !part || part === '.' || part === '..' || /[\\\0]/.test(part))) throw fail(400, 'INVALID_MEDIA_KEY');
+    const full = nodePath.join(root, ...parts);
+    if (!full.startsWith(root + nodePath.sep)) throw fail(400, 'INVALID_MEDIA_KEY');
+    return full;
+  };
   /** The old per-store folders (`t/<store>/media`) disappear with their last file: no empty directories are left behind. */
   const pruneEmpty = async key => {
     if (!String(key).startsWith('t/')) return;
@@ -178,7 +211,7 @@ function createFsStorage(env = process.env) {
     }
   };
   return {
-    kind: 'fs', root, publicUrl: null, file,
+    kind: 'fs', root, publicUrl: null, file, fileAny,
     async put(key, body) {
       const target = file(key);
       await fs.promises.mkdir(nodePath.dirname(target), { recursive: true, mode: 0o750 });
@@ -252,6 +285,27 @@ function createFsStorage(env = process.env) {
         try { const st = await fs.promises.stat(nodePath.join(dir, name)); items.push({ key: `${prefix}${name}`, size: st.size, modified: Math.round(st.mtimeMs) }); } catch { /* vanished */ }
       }
       return { items, more: wanted.length > limit };
+    },
+    /** One page of EVERY file under the media folder, whatever its path or type (read-only). Same shape as the R2 adapter's `scanPage`. */
+    async scanPage({ after = '', limit = 60, types = null } = {}) {
+      await fs.promises.stat(root); // an unmounted disk reads as \"cannot list\", never as \"no files\"
+      const keys = [];
+      const walk = async (dir, rel) => {
+        let entries;
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+          const key = rel ? `${rel}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) await walk(nodePath.join(dir, entry.name), key);
+          else if (entry.isFile() && !entry.name.endsWith('.tmp') && key > after && (!types || types.includes(typeOfKey(key)))) keys.push(key);
+        }
+      };
+      await walk(root, '');
+      keys.sort();
+      const items = [];
+      for (const key of keys.slice(0, limit)) {
+        try { const st = await fs.promises.stat(nodePath.join(root, ...key.split('/'))); items.push({ key, size: st.size, modified: Math.round(st.mtimeMs) }); } catch { /* vanished */ }
+      }
+      return { items, more: keys.length > limit, cursor: items.length ? items[items.length - 1].key : after };
     },
     /** Writable? (the backup screen reports it before offering this target) */
     async writable() { try { await fs.promises.mkdir(root, { recursive: true, mode: 0o750 }); await fs.promises.access(root, fs.constants.W_OK); return true; } catch { return false; } },
@@ -759,4 +813,4 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env) || 
   return { storeMedia, storeRaw, rawLimit, readMedia, fetchBytes, externalize, importRemote, presignUpload, completeUpload, moveRowToR2, backup, library, stats, get mode() { return modeNow(); } };
 }
 
-module.exports = { KEY_SHAPE, keyFor, createMedia, createR2Storage, createFsStorage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT };
+module.exports = { KEY_SHAPE, keyFor, createMedia, createR2Storage, createFsStorage, r2ClientOptions, r2Status, MEDIA_PREFIX: PREFIX, MEDIA_KEYS, R2_VARS, EXT, typeOfKey };

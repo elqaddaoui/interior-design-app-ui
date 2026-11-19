@@ -16,7 +16,7 @@
  * This file never names a platform table: the registry-side rows (old copies) come through `platform.media` (server/platform.js).
  */
 const crypto = require('node:crypto');
-const { keyFor, EXT, KEY_SHAPE } = require('./media');
+const { keyFor, EXT, KEY_SHAPE, typeOfKey } = require('./media');
 
 const OLD_AFTER_MS = 24 * 3600 * 1000;
 const KINDS = { r2: 'r2', app: 'fs' };
@@ -27,6 +27,13 @@ const adapterKey = storage => (String(storage).replace(/^legacy-/, '') === 'fs' 
 const isLegacyOld = old => String(old.storage).startsWith('legacy-');
 const HOUR = 3600000;
 const HASH_LIMIT = 40 * 1024 * 1024;
+const DB_LIMIT = 25 * 1024 * 1024; // a restore never puts a file bigger than this back into the database
+const sha256 = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
+const HISTORY_KEEP = 30;
+/** Operations whose restore point can be brought back. A cleanup only removes verified duplicates: it is recorded for the log, nothing to restore. */
+const RESTORABLE = new Set(['consolidate', 'move', 'restore']);
+const typeOfMime = mime => (String(mime).startsWith('image/') ? 'image' : String(mime).startsWith('video/') ? 'video' : String(mime).startsWith('audio/') ? 'audio' : 'other');
+const sharedName = row => `media/${row.id}.${EXT[row.mime]}`;
 /** SHA-256 of an object, read as a stream (one chunk in memory at a time). Throws when the object cannot be read. */
 async function digestOf(adapter, key) {
   const hash = crypto.createHash('sha256');
@@ -144,7 +151,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     return job.status === 'idle' ? job : { ...job, lease: undefined, leaseId: undefined };
   }
   /** Checks that the target can really take files, then records the job. The caller has already set the target as the storage for NEW files. */
-  async function start(target) {
+  async function start(target, { actor = '' } = {}) {
     const kind = KINDS[target];
     if (!kind) throw fail(400, 'INVALID_STORAGE');
     if (target === 'r2' && !adapters.r2) throw fail(409, 'R2_NOT_CONFIGURED');
@@ -152,16 +159,19 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
       const info = await hub.appInfo();
       if (!info.available) throw fail(409, 'APP_STORAGE_UNAVAILABLE');
     }
+    if (consolidating) throw fail(409, 'CONSOLIDATE_RUNNING');
     const current = await readJob();
     if (current?.status === 'running' && current.lease > clock()) throw fail(409, 'MOVE_RUNNING');
     const todo = await countToMove(kind);
-    const job = { status: todo.files ? 'running' : 'done', target, kind, startedAt: clock(), finishedAt: todo.files ? null : clock(), total: todo.files, bytes: todo.bytes, done: 0, failed: 0, movedBytes: 0, cursor: ['', ''], lastError: '', lease: 0 };
+    // The restore point is saved BEFORE the first file moves: where every file lives now, and the stats the console showed.
+    const historyId = todo.files ? await recordHistory('move', { actor, label: target, stats: { target, todo, totals: await totals() } }) : '';
+    const job = { status: todo.files ? 'running' : 'done', historyId, target, kind, startedAt: clock(), finishedAt: todo.files ? null : clock(), total: todo.files, bytes: todo.bytes, done: 0, failed: 0, movedBytes: 0, cursor: ['', ''], lastError: '', lease: 0 };
     await writeJob(job);
     return status();
   }
   /** Reads one file as bytes or a stream and writes it to the target adapter. Throws when the source is missing or the copy does not verify. */
   async function transfer(tenantId, row, kind) {
-    const key = keyOfRow(tenantId, row), target = adapters[kind];
+    const key = row.storage === 'db' ? sharedName(row) : keyOfRow(tenantId, row), target = adapters[kind]; // bytes kept in the database always land in media/
     if (!target) throw fail(503, kind === 'fs' ? 'APP_STORAGE_UNAVAILABLE' : 'R2_NOT_CONFIGURED');
     let size;
     if (row.storage === 'db') {
@@ -188,6 +198,12 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     }
     return size;
   }
+  /** Bytes kept in the database were copied to media/ (verified by `transfer`): every store that holds the id points at media/ now. The bytes stay in the row until cleanup verifies them. */
+  async function repointDb(row, kind, size) {
+    const moved = await db.query("UPDATE media SET storage=$2, ns=1, size=$3 WHERE id=$1 AND storage='db' RETURNING tenant_id", [row.id, kind, size]);
+    for (const m of moved) await platform.oldAdd(m.tenant_id, row.id, 'db', row.mime, size);
+    return moved.length;
+  }
   /**
    * Advances the job by one time-boxed slice. Safe to call from several places: a short lease keeps two callers from working at once
    * (another instance may call it too on serverless hosts).
@@ -212,10 +228,13 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
             const size = await transfer(row.tenant_id, row, job.kind);
             // Repoint only if nothing changed meanwhile (a concurrent move / delete): the guard is the old storage value.
             // A shared object moved once: every row that points at it follows (they are skipped when the cursor reaches them).
-            const moved = isShared(row) || row.tenant_id === 'default'
-              ? await db.query("UPDATE media SET storage=$3 WHERE id=$1 AND storage=$2 AND (ns=1 OR tenant_id='default') RETURNING id", [row.id, row.storage, job.kind])
-              : await db.query('UPDATE media SET storage=$4 WHERE tenant_id=$1 AND id=$2 AND storage=$3 RETURNING id', [row.tenant_id, row.id, row.storage, job.kind]);
-            if (moved.length) await platform.oldAdd(row.tenant_id, row.id, row.storage, row.mime, size);
+            if (row.storage === 'db') await repointDb(row, job.kind, size);
+            else {
+              const moved = isShared(row) || row.tenant_id === 'default'
+                ? await db.query("UPDATE media SET storage=$3 WHERE id=$1 AND storage=$2 AND (ns=1 OR tenant_id='default') RETURNING id", [row.id, row.storage, job.kind])
+                : await db.query('UPDATE media SET storage=$4 WHERE tenant_id=$1 AND id=$2 AND storage=$3 RETURNING id', [row.tenant_id, row.id, row.storage, job.kind]);
+              if (moved.length) await platform.oldAdd(row.tenant_id, row.id, row.storage, row.mime, size);
+            }
             job.done++; job.movedBytes += size;
           } catch (error) { job.failed++; job.lastError = String(error.message || 'FAILED').slice(0, 80); }
         }
@@ -235,10 +254,124 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     return status();
   }
 
+  // ---------- Transfer history (restore points) ----------
+  /**
+   * Saves a restore point BEFORE an operation touches any file: one history entry (what, when, who, the stats the console showed) and, unless
+   * `snapshot` is false, where EVERY file of the platform lives right now (storage + folder). `restore` brings files back to exactly that.
+   */
+  async function recordHistory(op, { actor = '', label = '', stats = {}, snapshot = true } = {}) {
+    const id = `mh_${crypto.randomBytes(6).toString('hex')}`;
+    await platform.history.add(id, clock(), op, label, String(actor || '').slice(0, 80), stats);
+    if (snapshot) await platform.history.snapshot(id, "m.storage IN ('r2','fs','db')");
+    await platform.history.prune(HISTORY_KEEP);
+    return id;
+  }
+  async function historyList() {
+    const out = [];
+    for (const row of await platform.history.list(HISTORY_KEEP)) {
+      let stats = {}; try { stats = JSON.parse(row.stats || '{}'); } catch { /* an old row */ }
+      const restorable = RESTORABLE.has(row.op) && Number(row.files) > 0;
+      out.push({ id: row.id, at: Number(row.at), op: row.op, label: row.label, actor: row.actor, files: Number(row.files), bytes: Number(row.bytes), restoredAt: row.restored_at == null ? null : Number(row.restored_at), stats, restorable, changed: restorable ? await platform.history.stray(row.id) : 0 });
+    }
+    return out;
+  }
+
+  /** Puts one file back where the restore point says it was. 'restored' | 'conflict' (something else sits at the old place: untouched) | 'skip'. Throws when a copy cannot be proven. */
+  async function restoreOne(row) {
+    const tenant = row.tenant_id, fid = row.id, mime = row.mime;
+    const to = { storage: row.storage0, ns: Number(row.ns0) }, from = { storage: row.storage1, ns: Number(row.ns1) };
+    if (!EXT[mime] || !['r2', 'fs', 'db'].includes(from.storage) || !['r2', 'fs', 'db'].includes(to.storage)) return 'skip';
+    const keyAt = ns => keyOfRow(tenant, { id: fid, mime, ns });
+    const fromAdapter = from.storage === 'db' ? null : adapters[adapterKey(from.storage)];
+    if (from.storage !== 'db' && !fromAdapter) throw fail(503, 'STORAGE_UNAVAILABLE');
+    let bytes = null; // bytes kept in the database
+    const dbBytes = async () => {
+      const own = (await db.query('SELECT data,body FROM media WHERE tenant_id=$1 AND id=$2', [tenant, fid]))[0];
+      return own?.body ? Buffer.from(own.body) : own?.data ? Buffer.from(own.data, 'base64') : await hub.shared.body(fid);
+    };
+    if (from.storage === 'db') { bytes = await dbBytes(); if (!bytes?.length) throw fail(404, 'SOURCE_MISSING'); }
+    let size = row.size1 == null ? Number(row.size || 0) : Number(row.size1);
+    if (to.storage === 'db') {
+      if (!bytes) {
+        const head = await fromAdapter.head(keyAt(from.ns));
+        if (!head) throw fail(404, 'SOURCE_MISSING');
+        if (head.size > DB_LIMIT) throw fail(413, 'TOO_LARGE_FOR_DATABASE');
+        bytes = Buffer.from(await fromAdapter.get(keyAt(from.ns)));
+      }
+      size = bytes.length;
+      const done = await db.query("UPDATE media SET storage='db', ns=$5, size=$6, body=$7, data='' WHERE tenant_id=$1 AND id=$2 AND storage=$3 AND ns=$4 RETURNING id", [tenant, fid, from.storage, from.ns, to.ns, size, bytes]);
+      if (!done.length) return 'skip';
+    } else {
+      const target = adapters[adapterKey(to.storage)];
+      if (!target) throw fail(503, 'STORAGE_UNAVAILABLE');
+      const fromKey = keyAt(from.ns), toKey = keyAt(to.ns);
+      if (!(fromAdapter === target && fromKey === toKey)) {
+        const there = await target.head(toKey);
+        const same = async () => (bytes ? (await target.head(toKey))?.size === bytes.length && (await digestOf(target, toKey)) === sha256(bytes) : provenSame(fromAdapter, fromKey, target, toKey));
+        if (there) { if (!(await same())) return 'conflict'; }
+        else {
+          if (bytes) await target.put(toKey, bytes, mime);
+          else if (fromAdapter === target && target.copy) await target.copy(fromKey, toKey);
+          else if (target.putStream) await target.putStream(toKey, await fromAdapter.stream(fromKey));
+          else await target.put(toKey, await fromAdapter.get(fromKey), mime);
+          if (!(await same())) { await target.remove(toKey).catch(() => {}); throw fail(502, 'VERIFY_FAILED'); }
+        }
+        size = (await target.head(toKey))?.size ?? size;
+      }
+      const done = await db.query('UPDATE media SET storage=$5, ns=$6, size=$7 WHERE tenant_id=$1 AND id=$2 AND storage=$3 AND ns=$4 RETURNING id', [tenant, fid, from.storage, from.ns, to.storage, to.ns, size]);
+      if (!done.length) return 'skip';
+    }
+    // The file lives at the restored place again: records of "an old copy here" are obsolete. The place it left waits like any old copy.
+    await platform.oldDel(tenant, fid, to.storage);
+    if (to.ns === 0) await platform.oldDel(tenant, fid, `legacy-${to.storage}`);
+    if (from.storage === 'db' && to.storage !== 'db') await platform.oldAdd(tenant, fid, 'db', mime, size);
+    else if (from.storage !== 'db' && from.ns === 0 && to.ns === 1) await platform.oldAdd(tenant, fid, `legacy-${from.storage}`, mime, size);
+    else if (from.storage !== 'db' && from.ns === to.ns && from.storage !== to.storage) await platform.oldAdd(tenant, fid, from.storage, mime, size);
+    return 'restored';
+  }
+
+  /**
+   * Brings every file back to where a restore point says it was. A restore point of its own (the state right now) is saved first, so a restore can
+   * be undone too. Time-boxed and resumable (`partial` + `cursor`: call again with them), idempotent, refused while another move runs.
+   * Copies are verified byte for byte; a different file at the old place is a conflict and nothing touches it.
+   */
+  async function restore(id, { cursor = ['', ''], budgetMs = 15000, actor = '', backup = '' } = {}) {
+    const point = await platform.history.get(String(id || ''));
+    if (!point || !RESTORABLE.has(point.op)) throw fail(404, 'NOT_FOUND');
+    if ((await status()).status === 'running') throw fail(409, 'MOVE_RUNNING');
+    if (consolidating) throw fail(409, 'CONSOLIDATE_RUNNING');
+    consolidating = true;
+    const started = clock();
+    const out = { restored: 0, conflicts: 0, failed: 0, bytes: 0, left: 0, partial: false, cursor, backup, done: false };
+    try {
+      if (!backup) out.backup = await recordHistory('restore', { actor, label: point.id, stats: { from: point.id, op: point.op, at: Number(point.at) } });
+      let at = Array.isArray(cursor) && cursor.length === 2 ? cursor.map(String) : ['', ''];
+      scan: for (;;) {
+        const rows = await platform.history.pending(point.id, at, 50);
+        if (!rows.length) break;
+        for (const row of rows) {
+          if (clock() - started > budgetMs) { out.partial = true; break scan; }
+          try {
+            const result = await restoreOne(row);
+            if (result === 'restored') { out.restored++; out.bytes += Number(row.size || 0); } else if (result === 'conflict') out.conflicts++;
+          } catch { out.failed++; }
+          at = [row.tenant_id, row.id];
+        }
+      }
+      out.cursor = at;
+      out.left = await platform.history.stray(point.id);
+      out.done = !out.partial;
+      if (out.done && !out.left) await platform.history.markRestored(point.id, clock());
+    } finally { consolidating = false; hub.bump(); platform.forget(); }
+    return out;
+  }
+
   // ---------- Old copies ----------
-  async function cleanup({ limit = 200, budgetMs = 15000, force = false, legacyOnly = false } = {}) {
+  async function cleanup({ limit = 200, budgetMs = 15000, force = false, legacyOnly = false, actor = '' } = {}) {
     const started = clock();
     let removed = 0, bytes = 0, kept = 0;
+    // Logged first (what was waiting, as the console showed it); the entry is dropped again when nothing was removed.
+    const logged = await recordHistory('cleanup', { actor, snapshot: false, stats: { waiting: await oldCopies(), now: force } }).catch(() => '');
     // `force` = the owner chose to remove them now instead of waiting the 24 h; every copy is still verified before it goes.
     const due = await platform.oldDue(force ? clock() + 1 : clock() - OLD_AFTER_MS, limit, legacyOnly);
     for (const old of due) {
@@ -272,6 +405,16 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
         // Never delete the last good copy: the file must be present in the storage the row points at, with the expected size.
         const live = current.storage === 'db' ? true : await adapters[adapterKey(current.storage)]?.head(key);
         if (!live || current.storage === old.storage || (live !== true && current.size != null && live.size !== Number(current.size))) { kept++; continue; }
+        // Another row (a restore may be half way) that still points at this very object in the old storage keeps it alive.
+        if (old.storage !== 'db') {
+          const users = await db.query('SELECT tenant_id,ns FROM media WHERE id=$1 AND storage=$2', [old.id, old.storage]);
+          if (users.some(u => keyOfRow(u.tenant_id, { id: old.id, mime: old.mime, ns: u.ns }) === key)) { kept++; continue; }
+        }
+        if (old.storage === 'db' && live !== true) { // the bytes kept in the database must be exactly the ones now in storage before they are cleared
+          const holders = await db.query("SELECT data,body FROM media WHERE id=$2 AND (body IS NOT NULL OR data<>'') AND (tenant_id=$1 OR ns=1 OR tenant_id='default')", [old.tenant_id, old.id]);
+          const stored = await digestOf(adapters[adapterKey(current.storage)], key);
+          if (holders.some(h => sha256(h.body ? Buffer.from(h.body) : Buffer.from(h.data, 'base64')) !== stored)) { kept++; continue; }
+        }
         if (old.storage === 'db') await db.query("UPDATE media SET body=NULL, data='' WHERE id=$2 AND storage<>'db' AND (tenant_id=$1 OR ns=1 OR tenant_id='default')", [old.tenant_id, old.id]);
         else await adapters[adapterKey(old.storage)].remove(key);
         await platform.oldDel(old.tenant_id, old.id, old.storage);
@@ -280,6 +423,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     }
     if (removed) for (const adapter of Object.values(adapters)) await adapter?.prune?.().catch(() => {});
     if (removed) { hub.bump(); platform.forget(); }
+    if (logged) { if (removed) await platform.history.setStats(logged, { waiting: await oldCopies().catch(() => null), now: force, result: { removed, bytes, kept } }); else await platform.history.drop(logged).catch(() => {}); }
     return { removed, bytes, kept, due: due.length };
   }
   async function oldCopies() {
@@ -386,6 +530,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
    * A copy that cannot be verified is removed again; a DIFFERENT file that already sits at the target name is a conflict and is left completely
    * alone. A storage that cannot be listed is never treated as empty: nothing is decided about it.
    */
+  const MIME_OF = Object.fromEntries(Object.entries(EXT).map(([mime, ext]) => [ext, mime]));
   const STRAY = /^t\/([a-z0-9][a-z0-9_-]{0,62})\/media\/([a-f0-9]{32}\.[a-z0-9]+)$/;
   const strayOf = key => { const m = STRAY.exec(key); return m ? { tenant: m[1], name: m[2] } : null; };
 
@@ -412,7 +557,16 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     const stores = await listStorages();
     const rows = await db.query("SELECT tenant_id,id,mime,size,storage,ns FROM media WHERE storage IN ('r2','fs')");
     const owners = await ownersMap();
-    const out = { at: clock(), storages: {}, folders: [], files: [], totals: { files: 0, bytes: 0, move: 0, merge: 0, conflict: 0 }, rows: { checked: 0, missing: 0, samples: [] } };
+    // Files whose bytes still sit inside the database go to media/ of the storage in use too (nothing to move when the database IS the storage in use).
+    const choice = await hub.choice();
+    const target = choice === 'database' ? '' : choice;
+    const inDb = (await db.query(`SELECT COUNT(*) AS files, COALESCE(SUM(size),0) AS bytes FROM (SELECT DISTINCT ON (id) id,size FROM media WHERE storage='db' ORDER BY id) o`))[0];
+    const out = { at: clock(), storages: {}, folders: [], files: [], totals: { files: 0, bytes: 0, move: 0, merge: 0, conflict: 0 }, database: { files: Number(inDb.files), bytes: Number(inDb.bytes), target }, rows: { checked: 0, missing: 0, samples: [] } };
+    if (target && out.database.files && limit > 0) {
+      for (const row of await db.query("SELECT DISTINCT ON (id) tenant_id,id,mime,size FROM media WHERE storage='db' ORDER BY id LIMIT $1", [Math.min(limit, 100)])) {
+        if (EXT[row.mime]) out.files.push({ storage: 'db', from: 'database', to: sharedName(row), size: Number(row.size || 0), action: 'move', store: ownerOf(owners, row.tenant_id).name });
+      }
+    }
     const folderOf = new Map();
     for (const kind of ['r2', 'fs']) {
       const s = stores[kind];
@@ -442,7 +596,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
         }
       }
     }
-    out.clean = !out.totals.files && !out.rows.missing && Object.values(out.storages).every(s => !s.available || s.checked);
+    out.clean = !out.totals.files && !(target && out.database.files) && !out.rows.missing && Object.values(out.storages).every(s => !s.available || s.checked);
     return out;
   }
 
@@ -480,13 +634,20 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
    * between storages runs. Rows of a store that still name an old folder whose object is gone, while the same file (same size) is in `media/`,
    * are pointed at `media/` too.
    */
-  async function consolidate({ budgetMs = 20000 } = {}) {
+  async function consolidate({ budgetMs = 20000, history = '', actor = '' } = {}) {
     if ((await status()).status === 'running') throw fail(409, 'MOVE_RUNNING');
     if (consolidating) throw fail(409, 'CONSOLIDATE_RUNNING');
     consolidating = true;
     const started = clock();
-    const out = { moved: 0, merged: 0, waiting: 0, bytes: 0, conflicts: 0, failed: 0, rowsFixed: 0, unreadable: [], remaining: 0, partial: false };
+    const out = { moved: 0, merged: 0, waiting: 0, bytes: 0, conflicts: 0, failed: 0, rowsFixed: 0, dbMoved: 0, dbFailed: 0, unreadable: [], remaining: 0, partial: false, history: String(history || '') };
+    let created = false;
     try {
+      // The restore point comes FIRST: where every file lives now, and the stats of the preview. (A continuation of the same run keeps its point.)
+      if (!out.history) {
+        const plan = await consolidation({ limit: 0 });
+        out.history = await recordHistory('consolidate', { actor, stats: { totals: plan.totals, database: plan.database, storages: plan.storages, rows: { checked: plan.rows.checked, missing: plan.rows.missing } } });
+        created = true;
+      } else if (!(await platform.history.get(out.history))) throw fail(404, 'NOT_FOUND');
       const stores = await listStorages();
       for (const kind of ['r2', 'fs']) {
         const s = stores[kind], adapter = adapters[kind];
@@ -515,76 +676,188 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
           out.rowsFixed += (await db.query('UPDATE media SET ns=1, size=$4 WHERE tenant_id=$1 AND id=$2 AND ns=0 AND storage=$3 RETURNING id', [row.tenant_id, row.id, kind, size])).length;
         }
       }
+      // Bytes kept in the database: copied to media/ of the storage in use, verified, and only then do the rows point there.
+      const choice = await hub.choice(), kind = choice === 'app' ? 'fs' : choice === 'r2' ? 'r2' : null;
+      if (kind && adapters[kind]) {
+        let after = '', over = false;
+        while (!over) {
+          const rows = await db.query("SELECT DISTINCT ON (id) tenant_id,id,mime,size,storage,ns FROM media WHERE storage='db' AND id > $1 ORDER BY id LIMIT 25", [after]);
+          if (!rows.length) break;
+          for (const row of rows) {
+            after = row.id;
+            if (clock() - started > budgetMs) { over = true; out.remaining++; continue; }
+            if (!EXT[row.mime]) continue;
+            try { const size = await transfer(row.tenant_id, row, kind); await repointDb(row, kind, size); out.dbMoved++; out.bytes += size; } catch { out.dbFailed++; }
+          }
+        }
+      }
       out.partial = out.remaining > 0;
+      // Nothing changed and nothing is left: this run needs no restore point.
+      if (created && !out.partial && !(out.moved + out.merged + out.rowsFixed + out.dbMoved + out.waiting + out.conflicts + out.failed + out.dbFailed)) { await platform.history.drop(out.history).catch(() => {}); out.history = ''; }
     } finally { consolidating = false; hub.bump(); platform.forget(); }
     return out;
   }
 
-  // ---------- Browsing the storage ----------
-  const IMG_EXT = /\.(png|jpg|webp|gif|avif|svg)$/;
-  const MIME_OF = Object.fromEntries(Object.entries(EXT).filter(([mime]) => mime.startsWith('image/')).map(([mime, ext]) => [ext, mime]));
-  const CURSOR = /^(?:media|t)\/[A-Za-z0-9_/.-]{0,200}$/;
+  // ---------- The Files manager ----------
   /**
-   * The pictures of the storage in use (Cloudflare R2, the app folder, or the database), read from the storage itself: `media/` first, then anything
-   * left in an old folder. Cursor paging (`after` = the last key of the previous page). Each item carries what the database knows about it
-   * (title, which stores hold it) and the address of a preview.
+   * Two ways to look at what is hosted, both read-only and both listing (never decoding) files:
+   *   by type     every object of the storage, WHATEVER its path (media/, old t/ folders, files uploaded by hand anywhere else), grouped as
+   *               image / video / audio / other. `summary` counts them; `files({ view: 'type' })` pages through them.
+   *   by owner    the files a store, a demo, a theme (or nobody: "other") holds in the database. `owners` lists them; `files({ view: 'owner' })` pages through one.
+   * Nothing here is fetched until the console asks: no thumbnail, no listing, no count at page load.
    */
-  async function browse({ after = '', limit = 48 } = {}) {
-    const n = Math.max(1, Math.min(100, Number(limit) || 48));
-    const cursor = String(after || '');
-    if (cursor && !CURSOR.test(cursor)) throw fail(400, 'INVALID_CURSOR');
-    const choice = await hub.choice();
-    const owners = await ownersMap();
-    let items = [], more = false, adapter = null;
+  const TYPES = ['image', 'video', 'audio', 'other'];
+  const MIME_PREVIEW = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
+    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', m4v: 'video/mp4',
+    weba: 'audio/webm', m4a: 'audio/mp4', mp3: 'audio/mpeg', ogg: 'audio/ogg', oga: 'audio/ogg', wav: 'audio/wav', aac: 'audio/aac', flac: 'audio/flac', opus: 'audio/ogg',
+  };
+  const extOf = name => name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  const OUR_NAME = /^([a-f0-9]{32})\.[a-z0-9]+$/;
+  const CURSOR_ANY = /^[^\0\\]{0,1100}$/;
+  const OWNER_KIND = { instance: 'store', default: 'store', demo: 'demo', theme: 'theme', gone: 'other' };
+  const ownerGroup = owner => OWNER_KIND[owner.kind] || 'other';
+  const storageOf = async storage => {
+    const choice = storage === 'r2' || storage === 'app' || storage === 'database' ? storage : await hub.choice();
+    if (choice === 'r2' && !adapters.r2) throw fail(409, 'R2_NOT_CONFIGURED');
+    if (choice === 'app' && !adapters.fs) throw fail(409, 'APP_STORAGE_UNAVAILABLE');
+    return choice;
+  };
+  const encodeKey = key => key.split('/').map(encodeURIComponent).join('/');
+  const previewUrl = (choice, key) => (choice === 'r2' ? adapters.r2.publicUrl(encodeKey(key)) : `/api/super-admin/media/object?storage=${choice}&key=${encodeURIComponent(key)}`);
+  const SQL_TYPE = { image: "mime LIKE 'image/%'", video: "mime LIKE 'video/%'", audio: "mime LIKE 'audio/%'", other: "mime NOT LIKE 'image/%' AND mime NOT LIKE 'video/%' AND mime NOT LIKE 'audio/%'" };
+
+  /** What is hosted, counted by type (and "inside media/" vs "elsewhere"), by reading the storage once. On demand only; time-boxed. */
+  async function summary({ storage = '', budgetMs = 20000 } = {}) {
+    const choice = await storageOf(storage);
+    const out = { storage: choice, at: clock(), complete: true, scanned: 0, types: Object.fromEntries(TYPES.map(t => [t, { files: 0, bytes: 0, inMedia: 0, outside: 0 }])) };
     if (choice === 'database') {
-      const rows = await db.query("SELECT id, MAX(mime) AS mime, MAX(size) AS size, MIN(created_at) AS created FROM media WHERE storage='db' AND mime LIKE 'image/%' AND id > $1 GROUP BY id ORDER BY id LIMIT $2", [cursor.replace(/^media\//, '').slice(0, 32), n + 1]);
-      more = rows.length > n;
-      items = rows.slice(0, n).filter(r => EXT[r.mime]).map(r => ({ key: `media/${r.id}.${EXT[r.mime]}`, size: Number(r.size || 0), modified: Number(r.created || 0) }));
-    } else {
-      adapter = adapters[choice === 'app' ? 'fs' : 'r2'];
-      if (!adapter?.listPage) throw fail(409, choice === 'app' ? 'APP_STORAGE_UNAVAILABLE' : 'R2_NOT_CONFIGURED');
-      if (!cursor.startsWith('t/')) {
-        const page = await adapter.listPage('media/', { after: cursor, limit: n });
-        items = page.items; more = page.more;
-        if (!more) { // `media/` is finished: whatever is left in an old folder follows
-          const rest = await adapter.listPage('t/', { limit: items.length < n ? n - items.length : 1 });
-          if (items.length < n) { items = items.concat(rest.items); more = rest.more; } else more = rest.items.length > 0;
-        }
-      } else { const page = await adapter.listPage('t/', { after: cursor, limit: n }); items = page.items; more = page.more; }
+      for (const row of await db.query("SELECT mime, COUNT(*) AS files, COALESCE(SUM(size),0) AS bytes FROM (SELECT DISTINCT ON (id) id,mime,size FROM media WHERE storage='db' ORDER BY id) o GROUP BY mime")) {
+        const t = out.types[typeOfMime(row.mime)]; t.files += Number(row.files); t.bytes += Number(row.bytes); t.inMedia += Number(row.files); out.scanned += Number(row.files);
+      }
+      return out;
     }
-    const ids = [...new Set(items.map(item => item.key.slice(item.key.lastIndexOf('/') + 1, item.key.lastIndexOf('/') + 33)))];
+    const adapter = adapters[choice === 'app' ? 'fs' : 'r2'];
+    const started = clock();
+    let after = '';
+    for (;;) {
+      const page = await adapter.scanPage({ after, limit: 1000 });
+      for (const item of page.items) {
+        const t = out.types[typeOfKey(item.key)]; t.files++; t.bytes += item.size; t[item.key.startsWith('media/') ? 'inMedia' : 'outside']++;
+        out.scanned++;
+      }
+      if (!page.more) break;
+      after = page.cursor;
+      if (clock() - started > budgetMs || out.scanned >= 200000) { out.complete = false; break; }
+    }
+    return out;
+  }
+
+  /** The owners that hold files, grouped as the console shows them: stores, demos, themes, other (rows whose store no longer exists). */
+  async function owners() {
+    const map = await ownersMap();
+    const per = await perStore();
+    const groups = { store: [], demo: [], theme: [], other: [] };
+    const other = { id: 'other', name: '', slug: '', files: 0, bytes: 0 };
+    for (const [id, count] of per) {
+      if (!count.files) continue;
+      const owner = map.get(id);
+      if (!owner) { other.files += count.files; other.bytes += count.bytes; continue; }
+      groups[ownerGroup(owner)].push({ id, name: id === 'default' ? 'default' : owner.name, slug: owner.slug, files: count.files, bytes: count.bytes, main: id === 'default' });
+    }
+    if (other.files) groups.other.push(other);
+    for (const list of Object.values(groups)) list.sort((x, y) => String(x.name).localeCompare(String(y.name)));
+    return { groups, types: await typeCounts() };
+  }
+  /** Files per type that the DATABASE knows (instant: no storage listing). */
+  async function typeCounts() {
+    const out = Object.fromEntries(TYPES.map(t => [t, 0]));
+    for (const row of await db.query("SELECT mime, COUNT(*) AS files FROM (SELECT DISTINCT ON (id) id,mime FROM media WHERE storage IN ('r2','fs','db') ORDER BY id) o GROUP BY mime")) out[typeOfMime(row.mime)] += Number(row.files);
+    return out;
+  }
+
+  /**
+   * One page of files. `view: 'type'`: every object of the storage whatever its path, filtered by `type`. `view: 'owner'`: the files one owner holds
+   * (`owner` = its id, or 'other'), filtered by `type`. Cursor paging. Each item says where it sits, what it is, what the database knows, and its preview address.
+   */
+  async function files({ view = 'type', storage = '', type = 'all', owner = '', after = '', limit = 50 } = {}) {
+    const n = Math.max(1, Math.min(100, Number(limit) || 50));
+    const cursor = String(after || '');
+    if (cursor && !CURSOR_ANY.test(cursor)) throw fail(400, 'INVALID_CURSOR');
+    if (type !== 'all' && !TYPES.includes(type)) throw fail(400, 'INVALID_TYPE');
+    const kinds = type === 'all' ? null : [type];
+    const map = await ownersMap();
+    let items = [], more = false, next = '', choice;
+    if (view === 'owner') {
+      choice = await storageOf(storage || (await hub.choice()));
+      if (!owner) throw fail(400, 'SELECT_OWNER');
+      const [ct, ci] = cursor.split('|');
+      const where = [`storage IN ${SETTLED}`], args = [];
+      if (owner === 'other') { args.push([...map.keys()]); where.push(`tenant_id<>ALL($${args.length})`); } else { args.push(String(owner)); where.push(`tenant_id=$${args.length}`); }
+      if (kinds) where.push(SQL_TYPE[type]);
+      if (cursor) { args.push(ct || '', ci || ''); where.push(`(tenant_id,id) > ($${args.length - 1},$${args.length})`); }
+      args.push(n + 1);
+      const rows = await db.query(`SELECT tenant_id,id,mime,size,storage,ns,created_at,title FROM media WHERE ${where.join(' AND ')} ORDER BY tenant_id,id LIMIT $${args.length}`, args);
+      more = rows.length > n;
+      items = rows.slice(0, n).filter(r => EXT[r.mime]).map(r => {
+        const where = r.storage === 'db' ? 'database' : r.storage === 'fs' ? 'app' : 'r2';
+        const key = r.storage === 'db' ? sharedName(r) : keyOfRow(r.tenant_id, r);
+        return { key, size: Number(r.size || 0), modified: Number(r.created_at || 0), where, id: r.id, mime: r.mime, title: r.title || '', holder: r.tenant_id };
+      });
+      next = items.length ? `${rows[Math.min(n, rows.length) - 1].tenant_id}|${rows[Math.min(n, rows.length) - 1].id}` : '';
+    } else {
+      choice = await storageOf(storage);
+      if (choice === 'database') {
+        const where = ["storage='db'", 'id > $1'];
+        if (kinds) where.push(SQL_TYPE[type]);
+        const rows = await db.query(`SELECT id, MAX(mime) AS mime, MAX(size) AS size, MIN(created_at) AS created FROM media WHERE ${where.join(' AND ')} GROUP BY id ORDER BY id LIMIT $2`, [cursor.replace(/^media\//, '').slice(0, 32), n + 1]);
+        more = rows.length > n;
+        items = rows.slice(0, n).filter(r => EXT[r.mime]).map(r => ({ key: `media/${r.id}.${EXT[r.mime]}`, size: Number(r.size || 0), modified: Number(r.created || 0), where: 'database', id: r.id, mime: r.mime }));
+        next = items.length ? items[items.length - 1].key : '';
+      } else {
+        const adapter = adapters[choice === 'app' ? 'fs' : 'r2'];
+        const page = await adapter.scanPage({ after: cursor, limit: n, types: kinds });
+        items = page.items.map(item => ({ ...item, where: choice, id: OUR_NAME.test(item.key.slice(item.key.lastIndexOf('/') + 1)) ? item.key.slice(item.key.lastIndexOf('/') + 1, item.key.lastIndexOf('/') + 33) : '', mime: MIME_PREVIEW[extOf(item.key)] || '' }));
+        more = page.more; next = page.cursor;
+      }
+    }
+    const ids = [...new Set(items.map(item => item.id).filter(Boolean))];
     const known = new Map();
     if (ids.length) {
       for (const row of await db.query("SELECT tenant_id,id,title FROM media WHERE id=ANY($1) AND storage<>'pending'", [ids])) {
         if (!known.has(row.id)) known.set(row.id, { title: '', stores: [] });
-        const k = known.get(row.id); k.stores.push(ownerOf(owners, row.tenant_id).name); if (row.title && !k.title) k.title = row.title;
+        const k = known.get(row.id); k.stores.push(ownerOf(map, row.tenant_id).name); if (row.title && !k.title) k.title = row.title;
       }
     }
-    const view = items.map(item => {
-      const name = item.key.slice(item.key.lastIndexOf('/') + 1), id = name.slice(0, 32), info = known.get(id);
+    const view_ = items.map(item => {
+      const name = item.key.slice(item.key.lastIndexOf('/') + 1), info = item.id ? known.get(item.id) : null, kind = typeOfKey(name);
       return {
-        key: item.key, name, id, folder: choice === 'database' ? 'database' : item.key.slice(0, item.key.lastIndexOf('/') + 1), size: item.size, modified: item.modified,
-        mime: MIME_OF[name.slice(33)] || 'image/*', stray: item.key.startsWith('t/'), inDatabase: !!info, title: info?.title || '', stores: info ? info.stores.slice(0, 3) : [], storeCount: info ? info.stores.length : 0,
-        url: choice === 'r2' && adapter ? adapter.publicUrl(item.key) : `/api/super-admin/media/object?key=${encodeURIComponent(item.key)}`,
+        key: item.key, name, id: item.id, type: kind, folder: item.key.includes('/') ? item.key.slice(0, item.key.lastIndexOf('/') + 1) : '/', inMedia: item.key.startsWith('media/'),
+        size: item.size, modified: item.modified, mime: item.mime || '', stray: STRAY.test(item.key), inDatabase: !!info, title: item.title || info?.title || '',
+        stores: info ? info.stores.slice(0, 3) : [], storeCount: info ? info.stores.length : 0, storage: item.where || choice,
+        url: previewUrl(item.where === 'database' ? 'database' : item.where === 'fs' ? 'app' : item.where || choice, item.key),
       };
     });
-    return { storage: choice, items: view, more, cursor: view.length ? view[view.length - 1].key : '' };
+    return { view, storage: choice, items: view_, more, cursor: next };
   }
-  /** One picture for the preview of a storage without a public address (app folder, database): { redirect } | { path, mime, size } | { body, mime }. */
-  async function object(key) {
+
+  /** One file for a preview: { redirect } | { path, mime, size } | { body, mime }. The key is a plain path inside the storage (no `..`, no absolute path). */
+  async function object(key, storage = '') {
     const text = String(key || '');
+    if (!text || text.length > 1024 || text.startsWith('/') || /[\0\\]/.test(text) || text.split('/').some(part => !part || part === '.' || part === '..')) throw fail(404, 'NOT_FOUND');
     const name = text.slice(text.lastIndexOf('/') + 1);
-    if (!KEY_SHAPE.test(text) || !IMG_EXT.test(name)) throw fail(404, 'NOT_FOUND');
-    const mime = MIME_OF[name.slice(33)];
-    const choice = await hub.choice();
-    if (choice === 'r2') { if (!adapters.r2) throw fail(404, 'NOT_FOUND'); return { redirect: adapters.r2.publicUrl(text), mime }; }
+    const mime = MIME_PREVIEW[extOf(name)];
+    if (!mime) throw fail(404, 'NOT_FOUND');
+    const choice = await storageOf(storage).catch(() => { throw fail(404, 'NOT_FOUND'); });
+    if (choice === 'r2') return { redirect: adapters.r2.publicUrl(encodeKey(text)), mime };
     if (choice === 'app') {
-      const path = adapters.fs.file(text);
+      const path = adapters.fs.fileAny(text);
       const st = await require('node:fs').promises.stat(path).catch(() => null);
-      if (!st) throw fail(404, 'NOT_FOUND');
+      if (!st || !st.isFile()) throw fail(404, 'NOT_FOUND');
       return { path, mime, size: st.size };
     }
-    const body = await hub.shared.body(name.slice(0, 32));
+    const hit = OUR_NAME.exec(name);
+    const body = hit ? await hub.shared.body(hit[1]) : null;
     if (!body) throw fail(404, 'NOT_FOUND');
     return { body, mime };
   }
@@ -602,7 +875,7 @@ function createMediaOps({ db, hub, platform, env = process.env, clock = Date.now
     return out;
   }
 
-  return { copyRows, purgeRows, move: { start, step, status, cancel }, cleanup, oldCopies, totals, perStore, deleteFiles, consolidation, consolidate, browse, object, OLD_AFTER_MS };
+  return { copyRows, purgeRows, move: { start, step, status, cancel }, cleanup, oldCopies, totals, perStore, deleteFiles, consolidation, consolidate, summary, owners, files, object, history: { list: historyList, restore }, OLD_AFTER_MS };
 }
 
 module.exports = { createMediaOps, OLD_AFTER_MS };

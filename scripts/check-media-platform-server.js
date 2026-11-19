@@ -56,6 +56,13 @@ function fakeR2() {
       const all = [...objects.entries()].filter(([key]) => key.startsWith(prefix) && key > after && /^(?:media|t\/[a-z0-9][a-z0-9_-]*\/media)\/[a-f0-9]{32}\.(png|jpg|webp|gif|avif|svg)$/.test(key)).sort((a, b) => (a[0] < b[0] ? -1 : 1));
       return { items: all.slice(0, limit).map(([key, v]) => ({ key, size: v.body.length, modified: v.modified || 1 })), more: all.length > limit };
     },
+    scanPage: async ({ after = '', limit = 60, types = null } = {}) => {
+      if (r2Failure.on) throw Object.assign(new Error('boom'), { name: 'AccessDenied' });
+      const typeOf = k => { const e = k.slice(k.lastIndexOf('.') + 1); return /^(png|jpg|webp|gif|avif|svg)$/.test(e) ? 'image' : /^(mp4|webm|mov)$/.test(e) ? 'video' : /^(mp3|weba|m4a|wav)$/.test(e) ? 'audio' : 'other'; };
+      const all = [...objects.entries()].filter(([key]) => key > after && (!types || types.includes(typeOf(key)))).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+      const items = all.slice(0, limit).map(([key, v]) => ({ key, size: v.body.length, modified: v.modified || 1 }));
+      return { items, more: all.length > limit, cursor: items.length ? items[items.length - 1].key : after };
+    },
     presignPut: async key => `https://r2.example/${key}`,
   };
 }
@@ -295,50 +302,91 @@ test('one folder: new files, copies for demos and the migration helper all land 
   } finally { s.cleanup(); }
 });
 
-test('files grid: lists the pictures of the storage in use straight from the storage, with paging, previews and what the database knows', async () => {
+const filesOf = async (s, query = '') => { const r = await s.api(`/media/files${query}`); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
+const pageAll = async (s, query) => { let all = [], after = ''; for (let i = 0; i < 20; i++) { const page = await filesOf(s, `${query}&limit=3${after ? `&after=${encodeURIComponent(after)}` : ''}`); all = all.concat(page.items); if (!page.more) break; after = page.cursor; } return all; };
+
+test('files manager: by type it shows EVERY hosted file whatever its path (not only media/ and not only pictures); nothing is listed until asked', async () => {
   const s = await setup();
   try {
-    const a = await s.store('shop-a'), b = await s.store('shop-b');
+    const a = await s.store('shop-a');
     const urls = [];
-    for (let i = 0; i < 5; i++) urls.push(await s.upload(i % 2 ? b : a, 100 + i));
-    await call(s.backend, '/shop-a/api/admin/media', { method: 'POST', headers: a.headers, body: { data: png(100), title: 'Hero picture' } }); // same bytes as the first: titled
-    const orphan = 'media/' + 'e'.repeat(32) + '.png';
-    s.r2.objects.set(orphan, { body: Buffer.alloc(30, 5), mime: 'image/png', modified: 1 });
-    s.r2.objects.set('media/not-ours.txt', { body: Buffer.alloc(5), mime: 'text/plain' });
-    s.r2.objects.set('other-app/logo.png', { body: Buffer.alloc(5), mime: 'image/png' });
-    s.r2.objects.set('media/' + 'f'.repeat(32) + '.mp4', { body: Buffer.alloc(9), mime: 'video/mp4' });
-    const first = await browse(s, '?limit=4');
-    assert.equal(first.storage, 'r2');
-    assert.equal(first.items.length, 4);
-    assert.equal(first.more, true);
-    const second = await browse(s, `?limit=4&after=${encodeURIComponent(first.cursor)}`);
-    assert.equal(second.items.length, 2);
-    assert.equal(second.more, false);
-    const all = [...first.items, ...second.items];
-    assert.equal(new Set(all.map(i => i.key)).size, 6, 'no repeats, nothing skipped');
-    assert.ok(all.every(i => /^media\/[a-f0-9]{32}\.png$/.test(i.key)), 'only pictures of ours: no video, no other file, nothing outside the folder');
-    assert.ok(all.every(i => i.url.startsWith('https://media.example.com/media/')), 'previews are the public R2 address');
-    const titled = all.find(i => i.id === idOf(urls[0]));
-    assert.equal(titled.title, 'Hero picture');
-    assert.equal(titled.inDatabase, true);
-    assert.equal(all.find(i => i.key === orphan).inDatabase, false, 'a file the database does not know is still shown, and marked');
-    assert.equal(all.find(i => i.key === orphan).stray, false);
-    assert.equal((await s.api('/media/browse?after=../../etc')).status, 400);
-    assert.equal((await call(s.backend, '/api/super-admin/media/browse')).status, 401);
-    // Old folders follow media/ in the same grid, marked.
-    await legacyize(s, a.tenant.id, urls[2]);
-    const withOld = await browse(s, '?limit=50');
-    assert.equal(withOld.items.filter(i => i.stray).length, 1);
-    assert.equal(withOld.items.filter(i => i.stray)[0].folder, `t/${a.tenant.id}/media/`);
-    assert.equal(withOld.items.indexOf(withOld.items.find(i => i.stray)), withOld.items.length - 1, 'after everything in media/');
-    // A storage that cannot be listed is an error, never an empty grid.
+    for (let i = 0; i < 3; i++) urls.push(await s.upload(a, 100 + i));
+    // Things the owner put there by hand, outside media/, and things that are not pictures.
+    s.r2.objects.set('my-uploads/logo.png', { body: Buffer.alloc(11, 1), mime: 'image/png' });
+    s.r2.objects.set('themes/ocean/hero.webp', { body: Buffer.alloc(12, 1), mime: 'image/webp' });
+    s.r2.objects.set('demo/intro.mp4', { body: Buffer.alloc(13, 1), mime: 'video/mp4' });
+    s.r2.objects.set('store/voice.mp3', { body: Buffer.alloc(14, 1), mime: 'audio/mpeg' });
+    s.r2.objects.set('docs/readme.txt', { body: Buffer.alloc(15, 1), mime: 'text/plain' });
+    const summary = (await s.api('/media/summary')).body;
+    assert.equal(summary.storage, 'r2');
+    assert.equal(summary.complete, true);
+    assert.deepEqual([summary.types.image.files, summary.types.video.files, summary.types.audio.files, summary.types.other.files], [5, 1, 1, 1]);
+    assert.equal(summary.types.image.inMedia, 3);
+    assert.equal(summary.types.image.outside, 2, 'files I uploaded by hand are counted, and marked as outside media/');
+    const images = await pageAll(s, '?view=type&type=image');
+    assert.equal(images.length, 5);
+    assert.ok(images.some(i => i.key === 'my-uploads/logo.png' && !i.inMedia && i.folder === 'my-uploads/'));
+    assert.ok(images.every(i => i.type === 'image'));
+    assert.equal((await pageAll(s, '?view=type&type=video')).map(i => i.key).join(), 'demo/intro.mp4');
+    assert.equal((await pageAll(s, '?view=type&type=other')).map(i => i.key).join(), 'docs/readme.txt');
+    const all = await pageAll(s, '?view=type&type=all');
+    assert.equal(all.length, 8);
+    assert.equal(new Set(all.map(i => i.key)).size, 8, 'no repeats, nothing skipped');
+    assert.ok(all.every(i => i.url.startsWith('https://media.example.com/')), 'a preview is only an address: the console loads it when asked');
+    const known = all.find(i => i.id === idOf(urls[0]));
+    assert.equal(known.inDatabase, true);
+    assert.equal(known.stores[0], 'Shop shop-a');
+    assert.equal((await s.api('/media/files?after=%00bad')).status, 400);
+    assert.equal((await s.api('/media/files?type=nope')).status, 400);
+    assert.equal((await call(s.backend, '/api/super-admin/media/files')).status, 401);
+    assert.equal((await call(s.backend, '/api/super-admin/media/summary')).status, 401);
+    // The old route that listed pictures at once is gone.
+    assert.equal((await s.api('/media/browse')).status, 404);
+    // A storage that cannot be listed is an error, never an empty list.
     r2Failure.on = true;
-    assert.equal((await s.api('/media/browse')).status === 200, false);
+    assert.equal((await s.api('/media/files?view=type')).status === 200, false);
     r2Failure.on = false;
   } finally { s.cleanup(); }
 });
 
-test('files grid: the app folder is browsed the same way, and its previews are served by the console only', async () => {
+test('files manager: by owner it groups stores, demos, themes and "other", and lists what one owner holds', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const demoMade = await s.api('/demos', { method: 'POST', body: { name: 'Fresh demo' } });
+    const demo = demoMade.body.demo;
+    const demoStore = { slug: demo.slug, tenant: { id: demo.tenantId }, headers: await s.login(demo.slug, demoMade.body.admin.id, demoMade.body.admin.password) };
+    const one = await s.upload(a, 121), two = await s.upload(demoStore, 122);
+    await s.upload(a, 123);
+    // A row whose owner does not exist any more.
+    const ghost = 'f'.repeat(32);
+    await s.db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at,ns) VALUES('t_gone',$1,'image/png','',NULL,9,'r2',1,1)", [ghost]);
+    await s.db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at,ns,lib) VALUES($1,$2,'video/mp4','',NULL,9,'r2',1,1,0)", [a.tenant.id, 'a'.repeat(32)]);
+    const ownersRes = await s.api('/media/owners');
+    assert.equal(ownersRes.status, 200, JSON.stringify(ownersRes.body));
+    const owners = ownersRes.body;
+    assert.equal(owners.groups.store.find(o => o.id === a.tenant.id).files, 3);
+    assert.equal(owners.groups.demo.find(o => o.id === demo.tenantId).files, 1);
+    assert.equal(owners.groups.other[0].files, 1, 'files of a store that is gone are not lost from view');
+    assert.equal(owners.types.image >= 3, true);
+    const mine = await filesOf(s, `?view=owner&owner=${a.tenant.id}&type=image`);
+    assert.equal(mine.items.length, 2, 'two pictures (the third file of this store is a video)');
+    assert.ok(mine.items.every(i => i.type === 'image' && i.inMedia));
+    assert.equal((await filesOf(s, `?view=owner&owner=${a.tenant.id}&type=video`)).items.length, 1);
+    assert.equal((await filesOf(s, `?view=owner&owner=${demo.tenantId}`)).items[0].id, idOf(two));
+    assert.equal((await filesOf(s, '?view=owner&owner=other')).items[0].id, ghost);
+    assert.equal((await s.api('/media/files?view=owner')).status, 400, 'an owner must be chosen');
+    // paging
+    const first = await filesOf(s, `?view=owner&owner=${a.tenant.id}&limit=2`);
+    assert.equal(first.more, true);
+    const rest = await filesOf(s, `?view=owner&owner=${a.tenant.id}&limit=2&after=${encodeURIComponent(first.cursor)}`);
+    assert.equal(first.items.length + rest.items.length, 3);
+    assert.equal(new Set([...first.items, ...rest.items].map(i => i.key)).size, 3);
+    void one;
+  } finally { s.cleanup(); }
+});
+
+test('files manager: the app folder is browsed the same way (any path), previews are served by the console only, and cannot leave the media folder', async () => {
   const s = await setup();
   try {
     const a = await s.store('shop-a');
@@ -347,16 +395,185 @@ test('files grid: the app folder is browsed the same way, and its previews are s
     const fsStore = require('../server/media').createFsStorage({ MEDIA_DIR: s.dir });
     await fsStore.put(`media/${id}.png`, bodyOf(s.r2, `media/${id}.png`));
     await s.db.query("UPDATE media SET storage='fs' WHERE id=$1", [id]);
-    const grid = await browse(s);
+    fs.mkdirSync(path.join(s.dir, 'by-hand', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(s.dir, 'by-hand', 'deep', 'pic.jpg'), Buffer.alloc(7, 2));
+    fs.writeFileSync(path.join(s.dir, 'notes.txt'), 'hi');
+    const grid = await filesOf(s, '?view=type&type=image');
     assert.equal(grid.storage, 'app');
-    assert.equal(grid.items.length, 1);
-    assert.equal(grid.items[0].url, `/api/super-admin/media/object?key=${encodeURIComponent(`media/${id}.png`)}`);
-    const img = await s.api(`/media/object?key=${encodeURIComponent(`media/${id}.png`)}`);
+    assert.deepEqual(grid.items.map(i => i.key).sort(), [`by-hand/deep/pic.jpg`, `media/${id}.png`].sort());
+    assert.equal(grid.items.find(i => i.key === `media/${id}.png`).url, `/api/super-admin/media/object?storage=app&key=${encodeURIComponent(`media/${id}.png`)}`);
+    assert.equal((await filesOf(s, '?view=type&type=other')).items[0].key, 'notes.txt');
+    const img = await s.api(`/media/object?storage=app&key=${encodeURIComponent('by-hand/deep/pic.jpg')}`);
     assert.equal(img.status, 200);
-    assert.equal(img.headers['content-type'], 'image/png');
-    assert.equal((await call(s.backend, `/api/super-admin/media/object?key=${encodeURIComponent(`media/${id}.png`)}`)).status, 401);
-    assert.equal((await s.api(`/media/object?key=${encodeURIComponent('../../etc/passwd')}`)).status, 404);
-    assert.equal((await s.api(`/media/object?key=${encodeURIComponent(`media/${'a'.repeat(32)}.png`)}`)).status, 404);
+    assert.equal(img.headers['content-type'], 'image/jpeg');
+    assert.equal((await call(s.backend, `/api/super-admin/media/object?storage=app&key=${encodeURIComponent(`media/${id}.png`)}`)).status, 401);
+    for (const bad of ['../../etc/passwd', '/etc/passwd', 'media/../../x.png', 'a//b.png', 'media/' + 'a'.repeat(32) + '.png']) {
+      assert.equal((await s.api(`/media/object?storage=app&key=${encodeURIComponent(bad)}`)).status, 404, bad);
+    }
+    const summary = (await s.api('/media/summary')).body;
+    assert.equal(summary.storage, 'app');
+    assert.equal(summary.types.image.files, 2);
+    assert.equal(summary.types.image.outside, 1);
+  } finally { s.cleanup(); }
+});
+
+const history = async s => { const r = await s.api('/media/history'); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
+
+test('transfer history: a restore point is saved BEFORE a consolidation moves anything, and restoring puts every file back (verified), then the move can be redone', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a'), b = await s.store('shop-b');
+    const pics = [await s.upload(a, 131), await s.upload(a, 132), await s.upload(b, 133)];
+    const ids = [];
+    for (const [i, pic] of pics.entries()) ids.push(await legacyize(s, i < 2 ? a.tenant.id : b.tenant.id, pic));
+    assert.deepEqual(await history(s), [], 'nothing recorded yet');
+    // Previewing records nothing.
+    await consolidation(s);
+    assert.deepEqual(await history(s), []);
+    const done = await consolidate(s);
+    assert.equal(done.moved, 3);
+    assert.match(done.history, /^mh_[a-f0-9]{12}$/);
+    let list = await history(s);
+    assert.equal(list.length, 1);
+    const point = list[0];
+    assert.equal(point.op, 'consolidate');
+    assert.equal(point.files, 3);
+    assert.equal(point.restorable, true);
+    assert.equal(point.stats.totals.move, 3, 'the stats the preview showed are kept');
+    assert.equal(point.changed, 3, 'three files are not where the point says any more');
+    assert.equal(point.actor, 'boss@platform.test');
+    for (const id of ids) for (const row of await rowsOfId(s, id)) assert.equal(row.ns, 1);
+    // Restore: the files are back in their old folders, the rows say so, and every picture still loads.
+    const back = await s.api(`/media/history/${point.id}/restore`, { method: 'POST', body: {} });
+    assert.equal(back.status, 200, JSON.stringify(back.body));
+    assert.equal(back.body.restored, 3, JSON.stringify(back.body));
+    assert.equal(back.body.done, true);
+    assert.equal(back.body.left, 0);
+    assert.equal(back.body.failed + back.body.conflicts, 0);
+    for (const [i, id] of ids.entries()) {
+      const tenant = i < 2 ? a.tenant.id : b.tenant.id;
+      assert.equal(s.r2.objects.has(`t/${tenant}/media/${id}.png`), true, 'back in its old folder');
+      assert.equal((await rowsOfId(s, id))[0].ns, 0);
+    }
+    for (const pic of pics) assert.equal((await call(s.backend, `/shop-a${pic}`)).status === 302 || (await call(s.backend, `/shop-b${pic}`)).status === 302, true);
+    assert.equal((await consolidation(s)).rows.missing, 0);
+    list = await history(s);
+    assert.equal(list.find(e => e.id === point.id).restoredAt != null, true);
+    assert.equal(list.length, 2, 'the restore itself saved a point (so it can be undone)');
+    assert.equal(list[0].op, 'restore');
+    assert.ok((await s.api('/audit?limit=20')).body.some(e => e.action === 'media.restore'));
+    // Idempotent, and the move can be done again.
+    assert.equal((await s.api(`/media/history/${point.id}/restore`, { method: 'POST', body: {} })).body.restored, 0);
+    const again = await consolidate(s);
+    assert.equal(again.moved + again.merged, 3);
+    assert.equal((await s.api('/media/history/mh_000000000000/restore', { method: 'POST', body: {} })).status, 404);
+    assert.equal((await s.api('/media/history/nope/restore', { method: 'POST', body: {} })).status, 404);
+    assert.equal((await call(s.backend, '/api/super-admin/media/history')).status, 401);
+  } finally { s.cleanup(); }
+});
+
+test('transfer history: restoring never overwrites a different file, never deletes, and a consolidation with nothing to do saves no point', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const pic = await s.upload(a, 141);
+    const id = await legacyize(s, a.tenant.id, pic);
+    const old = `t/${a.tenant.id}/media/${id}.png`;
+    await consolidate(s);
+    const point = (await history(s))[0];
+    // After the move the old folder is cleaned, then a DIFFERENT file appears at the old place: the restore leaves it alone.
+    await s.api('/media/cleanup', { method: 'POST', body: { now: true } });
+    assert.equal(s.r2.objects.has(old), false);
+    s.r2.objects.set(old, { body: Buffer.alloc(40, 7), mime: 'image/png' });
+    const back = await s.api(`/media/history/${point.id}/restore`, { method: 'POST', body: {} });
+    assert.equal(back.body.conflicts, 1, JSON.stringify(back.body));
+    assert.equal(back.body.restored, 0);
+    assert.deepEqual([...s.r2.objects.get(old).body], [...Buffer.alloc(40, 7)], 'the other file is untouched');
+    assert.equal(s.r2.objects.has(`media/${id}.png`), true, 'and the file in media/ is not deleted');
+    assert.equal((await rowsOfId(s, id))[0].ns, 1);
+    assert.equal((await call(s.backend, `/shop-a${pic}`)).status, 302);
+    // Nothing to move: no restore point.
+    s.r2.objects.delete(old);
+    const before = (await history(s)).length;
+    const none = await consolidate(s);
+    assert.equal(none.history, '');
+    assert.equal((await history(s)).length, before);
+    // A cleanup that removes nothing is not logged; one that removes something is, and is not restorable.
+    const noop = await s.api('/media/cleanup', { method: 'POST', body: { now: true } });
+    assert.equal(noop.body.removed, 0);
+    assert.equal((await history(s)).length, before);
+  } finally { s.cleanup(); }
+});
+
+test('one folder: files whose bytes sit in the database go to media/ too; a restore brings the bytes back; nothing is cleared unless media/ holds the same bytes', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const bodyOfSeed = seed => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, seed)]);
+    const rows = [];
+    for (const seed of [151, 152]) {
+      const body = bodyOfSeed(seed);
+      const id = require('node:crypto').createHash('sha256').update(body.toString('base64')).digest('hex').slice(0, 32);
+      await s.db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at,ns) VALUES($1,$2,'image/png','',$3,$4,'db',1,0)", [a.tenant.id, id, body, body.length]);
+      rows.push({ id, body });
+    }
+    const preview = await consolidation(s);
+    assert.equal(preview.database.files, 2);
+    assert.equal(preview.database.target, 'r2');
+    assert.equal(preview.clean, false, 'bytes kept in the database are "outside media/"');
+    assert.ok(preview.files.some(f => f.storage === 'db' && f.to === `media/${rows[0].id}.png`));
+    assert.equal(r2Keys(s.r2).length, 0, 'previewing writes nothing');
+    const done = await consolidate(s);
+    assert.equal(done.dbMoved, 2, JSON.stringify(done));
+    assert.equal(done.dbFailed, 0);
+    for (const { id, body } of rows) {
+      assert.deepEqual([...bodyOf(s.r2, `media/${id}.png`)], [...body], 'same bytes in media/');
+      const row = (await rowsOfId(s, id))[0];
+      assert.deepEqual([row.storage, row.ns], ['r2', 1]);
+    }
+    assert.equal((await call(s.backend, `/shop-a/api/media/${rows[0].id}.png`)).status, 302);
+    assert.equal((await consolidation(s)).clean, true);
+    const point = (await history(s))[0];
+    assert.equal(point.files, 2);
+    // The bytes still sit in the row: cleanup clears them only when media/ holds exactly them. Corrupt one copy.
+    s.r2.objects.set(`media/${rows[1].id}.png`, { body: Buffer.alloc(rows[1].body.length, 1), mime: 'image/png' });
+    const cleaned = await s.api('/media/cleanup', { method: 'POST', body: { now: true } });
+    assert.equal(cleaned.body.removed, 1, JSON.stringify(cleaned.body));
+    const left = await s.db.query('SELECT id,body FROM media WHERE tenant_id=$1 ORDER BY id', [a.tenant.id]);
+    assert.equal(left.filter(r => r.body && r.body.length).length, 1, 'the unverified one keeps its bytes');
+    assert.equal(left.find(r => r.id === rows[1].id).body.length > 0, true);
+    // Restore: the file goes back to the database (bytes verified), and media/ keeps its copy for the cleanup to decide.
+    const back = await s.api(`/media/history/${point.id}/restore`, { method: 'POST', body: {} });
+    assert.equal(back.body.failed, 0, JSON.stringify(back.body));
+    const restored = (await rowsOfId(s, rows[0].id))[0];
+    assert.deepEqual([restored.storage, restored.ns], ['db', 0]);
+    const served = await call(s.backend, `/shop-a/api/media/${rows[0].id}.png`);
+    assert.equal(served.status, 200);
+  } finally { s.cleanup(); }
+});
+
+test('transfer history: "move all media" saves a restore point first; the restore returns every file to the storage it came from', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const pics = [await s.upload(a, 161), await s.upload(a, 162)];
+    assert.equal((await s.api('/media/storage', { method: 'PUT', body: { storage: 'app', move: true } })).status, 200);
+    const point = (await history(s))[0];
+    assert.equal(point.op, 'move');
+    assert.equal(point.label, 'app');
+    assert.equal(point.files, 2);
+    assert.equal(point.stats.todo.files, 2);
+    for (let i = 0; i < 10; i++) { const r = await s.api('/media/move/step', { method: 'POST' }); if (r.body.status !== 'running') break; }
+    for (const pic of pics) assert.equal((await rowsOfId(s, idOf(pic)))[0].storage, 'fs');
+    // A restore is refused while a move runs; once it is over it brings the files back to R2.
+    const back = await s.api(`/media/history/${point.id}/restore`, { method: 'POST', body: {} });
+    assert.equal(back.status, 200, JSON.stringify(back.body));
+    assert.equal(back.body.restored, 2);
+    for (const pic of pics) {
+      assert.equal((await rowsOfId(s, idOf(pic)))[0].storage, 'r2');
+      assert.equal(s.r2.objects.has(`media/${idOf(pic)}.png`), true);
+    }
+    assert.equal((await call(s.backend, `/shop-a${pics[0]}`)).status, 302);
   } finally { s.cleanup(); }
 });
 
