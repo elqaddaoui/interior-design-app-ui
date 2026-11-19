@@ -99,18 +99,19 @@ node scripts/migrate-media-to-r2.js --videos               # optional: external 
 - URLs that cannot be downloaded are kept unchanged and listed at the end.
 - Exit code `0` = success, `2` = some database rows could not be copied (run it again), `1` = configuration error.
 
-## Checking and fixing the bucket layout
+## One folder: `media/`
 
-Old versions stored each store's files under its own prefix (`t/<store>/media/<name>`, `ns = 0`). Current versions store one object per file at `media/<hash>.<ext>` (`ns = 1`) shared by every store and demo. Seeing both in the bucket is normal after an upgrade: the old keys are leftovers of files uploaded before the shared layout.
+Old versions stored each store's files under its own prefix (`t/<store>/media/<name>`, `ns = 0`). Current versions store one object per file at `media/<hash>.<ext>` (`ns = 1`) shared by every store and demo; every new upload, demo copy and the migration script already write there. Seeing both `media/` and `t/` in the bucket is normal after an upgrade. To end up with `media/` only (nothing else to configure, and no option for future uploads is needed):
 
-Open **Super admin > Media & storage > Storage health**:
+Open **Super admin > Media & storage > One media folder**:
 
-1. **Check storage** only reads (R2 listing + database) and changes nothing.
-2. **Fix now** copies each old-layout file to `media/<hash>.<ext>`, verifies it, flags the row, and keeps the old copy for 24 h (then *Remove old copies*). It also repoints rows that name the wrong storage and corrects sizes proven by the stored bytes.
-3. Files whose object is not at the expected key but exists elsewhere (**Copy found elsewhere**) are copied back after a byte check; nothing is deleted. A file is reported **missing** only when no copy exists anywhere readable, and **Not confirmed** when the other storage could not be read.
-4. Two switches (off by default) additionally delete objects no row owns (older than 1 h, never one a row still needs, and only when an identical copy exists) and remove rows whose file exists nowhere.
+1. **Preview** only reads (R2 listing + database). It lists the old folders and every file outside `media/` with its destination, and checks that every database row has its object. Read it, then continue.
+2. **Move into media/** copies each file, verifies it byte for byte, and only then points its database row at `media/`. Nothing is deleted; pictures keep loading. A different file already under the same name is never overwritten (shown as *Different file, left alone*).
+3. **Remove old copies and folders now** deletes each old copy only after it is proven identical to the one in `media/`. Without clicking, the old copies are removed automatically after 24 h. Run **Preview** again: it should report *Everything is in media/*.
 
-Safety: a listing that fails, or looks empty while the database expects files, is never treated as "files missing". Run it again after a partial result; it resumes. It is refused while a *Move all* is running.
+Safety: a listing that fails, or looks empty while the database expects files, is never treated as "files missing" and nothing is moved or removed for that storage. Run it again after a partial result; it resumes. It is refused while a *Move all* is running.
+
+The **Files** grid below it shows what is really in the storage in use, so you can check the result by eye.
 
 ## Troubleshooting
 

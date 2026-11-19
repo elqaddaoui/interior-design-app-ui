@@ -298,6 +298,14 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
             return json(done.status, done.data, { 'Cache-Control': 'private, no-store' });
           }
           const result = await superAdmin.handle({ req, url, readBody, ip: address(req) });
+          // A picture of the storage for the Files grid (app folder / database have no public address): streamed or sent as is, never JSON.
+          if (result.file) {
+            const f = result.file;
+            if (f.redirect) { res.writeHead(302, { Location: f.redirect, 'Cache-Control': 'private, max-age=300' }); return res.end(); }
+            const headers = { 'Content-Type': f.mime, 'Cache-Control': 'private, max-age=300', 'X-Content-Type-Options': 'nosniff', ...(f.mime === 'image/svg+xml' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) };
+            if (f.path) { res.writeHead(200, { ...headers, 'Content-Length': f.size }); return require('node:stream').pipeline(fsNode.createReadStream(f.path), res, () => {}); }
+            return sendBuffer(req, res, 200, headers, f.body);
+          }
           return json(result.status, result.data, { 'Cache-Control': 'private, no-store', ...(result.headers || {}) });
         }
 

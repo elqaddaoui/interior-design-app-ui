@@ -4,8 +4,8 @@ import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
 import type { MediaMove, MediaOverview, MediaStorageKind } from '@/superadmin/types';
-import { StorageCheck } from '@/superadmin/MediaAudit';
-import { AllFiles } from '@/superadmin/MediaFiles';
+import { MediaFolder } from '@/superadmin/MediaFolder';
+import { MediaGrid } from '@/superadmin/MediaGrid';
 import { Badge, Btn, Card, ErrorLine, Heading, Hint, Loading, Meter, Notice, Row, T, ago, useLoad } from '@/superadmin/ui';
 
 const size = (bytes: number | null | undefined) => {
@@ -157,11 +157,11 @@ export default function MediaStorage() {
             </Card>
           ) : null}
 
-          <Label>{tr('Storage health')}</Label>
-          <StorageCheck onChanged={reload} />
+          <Label>{tr('One media folder')}</Label>
+          <MediaFolder oldCopies={data.oldCopies.files} onChanged={reload} />
 
           <Label>{tr('Files')}</Label>
-          <AllFiles onChanged={reload} />
+          <MediaGrid storage={data.storage.current} onChanged={reload} />
 
           <Label>{tr('Client stores')}</Label>
           <Card style={{ padding: 0 }}>

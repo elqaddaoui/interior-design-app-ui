@@ -876,8 +876,19 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     if (path === '/media/storage' && method === 'PUT') return ok(await setMediaStorage(await readBody(req), actor));
     if (path === '/media/move/step' && method === 'POST') return ok(await ops().move.step());
     if (path === '/media/move/cancel' && method === 'POST') { const status = await ops().move.cancel(); await audit(actor, 'media.move.cancel', null, '', ''); return ok(status); }
-    // Every file of the platform (stores, demos, themes), with who uses it; delete whole files; compare the database with the storages and fix it.
-    if (path === '/media/files' && method === 'GET') return ok(await ops().library(Object.fromEntries(url.searchParams)));
+    // One folder: the preview of what is outside media/, the move into it, and the grid of the pictures that are in the storage.
+    if (path === '/media/consolidation' && method === 'GET') return ok(await ops().consolidation());
+    if (path === '/media/consolidate' && method === 'POST') {
+      const result = await ops().consolidate();
+      await audit(actor, 'media.consolidate', null, '', result);
+      return ok(result);
+    }
+    if (path === '/media/browse' && method === 'GET') return ok(await ops().browse({ after: url.searchParams.get('after') || '', limit: url.searchParams.get('limit') || 48 }));
+    if (path === '/media/object' && method === 'GET') {
+      const file = await ops().object(url.searchParams.get('key'));
+      if (file.redirect) return { status: 302, data: {}, headers: { Location: file.redirect }, file };
+      return { status: 200, data: null, file, headers: { 'Content-Type': file.mime } };
+    }
     if (path === '/media/files/delete' && method === 'POST') {
       const body = await readBody(req);
       if (!body?.allUnused && !(Array.isArray(body?.ids) && body.ids.length)) throw fail(400, 'SELECT_FILES');
@@ -885,16 +896,11 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
       await audit(actor, 'media.files.delete', null, body.allUnused ? 'all unused' : `${result.removed.length} files`, `${result.removed.length} removed, ${result.blocked.length} kept${body.force ? ', forced' : ''}`);
       return ok(result);
     }
-    if (path === '/media/audit' && method === 'POST') return ok(await ops().audit());
-    if (path === '/media/repair' && method === 'POST') {
-      const body = await readBody(req);
-      const result = await ops().repair({ orphans: body?.orphans === true, broken: body?.broken === true });
-      await audit(actor, 'media.repair', null, '', result);
-      return ok(result);
-    }
     if (path === '/media/cleanup' && method === 'POST') {
-      const result = await ops().cleanup();
-      await audit(actor, 'media.cleanup', null, '', result);
+      const body = await readBody(req).catch(() => ({}));
+      // `now` = the owner removes the verified old copies without waiting the 24 h (each one is still checked against the copy in media/ first).
+      const result = await ops().cleanup({ force: body?.now === true, legacyOnly: body?.now === true });
+      await audit(actor, 'media.cleanup', null, body?.now === true ? 'now' : '', result);
       return ok({ ...result, oldCopies: await ops().oldCopies() });
     }
     if (path === '/themes') {
