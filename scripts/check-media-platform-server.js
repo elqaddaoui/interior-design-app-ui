@@ -1,7 +1,7 @@
 /**
- * Platform-wide media (super admin): every file of every store / demo / theme with who uses it, deleting whole files, and the storage audit
- * that compares the database with what R2 / the server folder really hold (and the safe repair). Also proves the shared hash namespace
- * behaves the same for stores and demos. Driven through the real request handler.
+ * Platform-wide media (super admin): ONE `media/` folder. The preview + move of everything stored outside it (old `t/<store>/media/...`) into it,
+ * the Files grid that lists the pictures of the storage in use, deleting whole files, and the shared hash namespace for stores and demos.
+ * Driven through the real request handler.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -51,6 +51,11 @@ function fakeR2() {
     stream: async key => Readable.from([objects.get(key).body]),
     copy: async (from, to) => { if (!objects.has(from)) throw new Error('NoSuchKey'); objects.set(to, { ...objects.get(from) }); },
     list: async prefix => { if (r2Failure.on) throw Object.assign(new Error('boom'), { name: 'AccessDenied' }); return [...objects.entries()].filter(([key]) => key.startsWith(prefix)).map(([key, v]) => ({ key, size: v.body.length, modified: v.modified || 1 })); },
+    listPage: async (prefix, { after = '', limit = 60 } = {}) => {
+      if (r2Failure.on) throw Object.assign(new Error('boom'), { name: 'AccessDenied' });
+      const all = [...objects.entries()].filter(([key]) => key.startsWith(prefix) && key > after && /^(?:media|t\/[a-z0-9][a-z0-9_-]*\/media)\/[a-f0-9]{32}\.(png|jpg|webp|gif|avif|svg)$/.test(key)).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+      return { items: all.slice(0, limit).map(([key, v]) => ({ key, size: v.body.length, modified: v.modified || 1 })), more: all.length > limit };
+    },
     presignPut: async key => `https://r2.example/${key}`,
   };
 }
@@ -101,137 +106,257 @@ const legacyize = async (s, tenantId, url) => { // put a file back where an OLD 
   await s.db.query('UPDATE media SET ns=0 WHERE tenant_id=$1 AND id=$2', [tenantId, id]);
   return id;
 };
-const files = async (s, query = '') => { const r = await s.api(`/media/files${query}`); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
 
-test('platform library: every file of every store, demo and theme once, with who shows it; unused files can be found and deleted, used ones are protected', async () => {
+
+const consolidation = async s => { const r = await s.api('/media/consolidation'); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
+const consolidate = async (s, body = {}) => { const r = await s.api('/media/consolidate', { method: 'POST', body }); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
+const bodyOf = (r2, key) => Buffer.from(r2.objects.get(key).body);
+const strays = r2 => [...r2.objects.keys()].filter(key => key.startsWith('t/'));
+const browse = async (s, query = '') => { const r = await s.api(`/media/browse${query}`); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
+
+test('one folder: the preview lists every file outside media/ with where it goes and changes nothing; a clean platform has nothing to move', async () => {
   const s = await setup();
   try {
     const a = await s.store('shop-a'), b = await s.store('shop-b');
-    const shared = await s.upload(a, 21), same = await s.upload(b, 21), lonely = await s.upload(b, 22), kept = await s.upload(a, 23);
-    assert.equal(shared, same);
-    assert.equal((await call(s.backend, '/shop-a/api/admin/doc/branding', { method: 'PATCH', headers: a.headers, body: { logoUri: kept } })).status, 200);
-    const demoMade = await s.api('/demos', { method: 'POST', body: { name: 'Showroom' } });
+    const one = await s.upload(a, 41), two = await s.upload(b, 42);
+    let preview = await consolidation(s);
+    assert.equal(preview.totals.files, 0);
+    assert.equal(preview.clean, true, JSON.stringify(preview));
+    assert.equal(preview.storages.r2.media.files, 2);
+    assert.equal(preview.rows.missing, 0);
+    const id1 = await legacyize(s, a.tenant.id, one), id2 = await legacyize(s, b.tenant.id, two);
+    const before = new Map(s.r2.objects);
+    preview = await consolidation(s);
+    assert.equal(preview.clean, false);
+    assert.equal(preview.totals.files, 2);
+    assert.equal(preview.totals.move, 2);
+    assert.equal(preview.folders.length, 2, 'grouped by old folder');
+    assert.deepEqual(preview.folders.map(f => f.path).sort(), [`t/${a.tenant.id}/media/`, `t/${b.tenant.id}/media/`].sort());
+    assert.equal(preview.folders.find(f => f.path === `t/${a.tenant.id}/media/`).store, 'Shop shop-a');
+    const line = preview.files.find(f => f.from === `t/${a.tenant.id}/media/${id1}.png`);
+    assert.deepEqual([line.to, line.action, line.storage], [`media/${id1}.png`, 'move', 'r2']);
+    assert.equal(preview.rows.missing, 0, 'rows still point at their old folder, where the objects are');
+    assert.deepEqual([...s.r2.objects.keys()].sort(), [...before.keys()].sort(), 'previewing writes and deletes nothing');
+    void id2;
+    assert.equal((await call(s.backend, '/api/super-admin/media/consolidation')).status, 401);
+    assert.equal((await call(s.backend, '/shop-a/api/super-admin/media/consolidation', { headers: a.headers })).status, 404);
+  } finally { s.cleanup(); }
+});
+
+test('one folder: consolidating copies, verifies, repoints the rows and every picture keeps loading; the old copies wait, then go with their folders', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a'), b = await s.store('shop-b');
+    const pics = [await s.upload(a, 51), await s.upload(a, 52), await s.upload(b, 53)];
+    const same = await s.upload(b, 51); // the same bytes as a's first picture: one object, two rows
+    assert.equal(same, pics[0]);
+    const ids = [];
+    for (const [i, pic] of pics.entries()) ids.push(await legacyize(s, i < 2 ? a.tenant.id : b.tenant.id, pic));
+    // a's first picture is used by b too: b's row must follow (it pointed at the same old object through a)
+    assert.equal(strays(s.r2).length, 3);
+    const done = await consolidate(s);
+    assert.equal(done.moved, 3, JSON.stringify(done));
+    assert.equal(done.failed + done.conflicts + done.remaining, 0);
+    for (const id of ids) {
+      assert.equal(s.r2.objects.has(`media/${id}.png`), true, 'now in media/');
+      for (const row of await rowsOfId(s, id)) assert.equal(row.ns, 1, 'every row points at media/');
+    }
+    for (const pic of pics) {
+      const r = await call(s.backend, `/shop-a${pic}`);
+      const rb = await call(s.backend, `/shop-b${pic}`);
+      assert.equal(r.status === 302 || rb.status === 302, true);
+      if (r.status === 302) assert.ok(r.headers.location.endsWith(`/media/${pic.split('/').pop()}`) && !r.headers.location.includes('/t/'));
+    }
+    // The old objects are still there (24 h safety net): consolidating never deletes anything.
+    assert.equal(strays(s.r2).length, 3, 'nothing deleted yet');
+    const again = await consolidate(s);
+    assert.equal(again.moved, 0, 'idempotent: the second run copies nothing');
+    assert.equal(again.waiting, 3);
+    assert.equal(again.failed, 0);
+    const kept = await consolidation(s);
+    assert.equal(kept.totals.files, 3, 'the preview still shows the old copies until they are removed');
+    assert.equal(kept.totals.merge, 3, 'and says they are already in media/');
+    assert.equal(kept.rows.missing, 0);
+    // "Remove old copies now": each one is verified against media/ first, then removed; the old folders vanish.
+    const cleaned = await s.api('/media/cleanup', { method: 'POST', body: { now: true } });
+    assert.equal(cleaned.body.removed, 3, JSON.stringify(cleaned.body));
+    assert.equal(strays(s.r2).length, 0, 'no t/ object is left: the old directory is gone');
+    assert.deepEqual([...s.r2.objects.keys()].filter(k => !k.startsWith('media/')), []);
+    assert.equal(r2Keys(s.r2).length, 3);
+    const final = await consolidation(s);
+    assert.equal(final.clean, true, JSON.stringify(final));
+    assert.equal((await call(s.backend, `/shop-b${pics[2]}`)).status, 302);
+    assert.ok((await s.api('/audit?limit=20')).body.some(e => e.action === 'media.consolidate'));
+  } finally { s.cleanup(); }
+});
+
+test('one folder: the old copy is never deleted unless media/ holds exactly its bytes; a different file at the target name is a conflict that nothing touches', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const pic = await s.upload(a, 61), other = await s.upload(a, 62);
+    const id = await legacyize(s, a.tenant.id, pic), id2 = await legacyize(s, a.tenant.id, other);
+    const own = `t/${a.tenant.id}/media/${id}.png`;
+    // same size, other bytes already sitting at media/<name>
+    s.r2.objects.set(`media/${id}.png`, { body: Buffer.alloc(bodyOf(s.r2, own).length, 9), mime: 'image/png' });
+    const preview = await consolidation(s);
+    assert.equal(preview.files.find(f => f.from === own).action, 'merge', 'same size looks identical in a listing...');
+    const done = await consolidate(s);
+    assert.equal(done.conflicts, 1, '...but the bytes are compared, and they differ');
+    assert.equal(done.moved, 1, 'the other file is moved normally');
+    assert.equal(s.r2.objects.has(own), true, 'the real file is untouched');
+    assert.deepEqual([...bodyOf(s.r2, `media/${id}.png`)], [...Buffer.alloc(bodyOf(s.r2, own).length, 9)], 'and the impostor was not overwritten');
+    assert.equal((await rowsOfId(s, id))[0].ns, 0, 'the row stays where its file is');
+    assert.equal((await call(s.backend, `/shop-a${pic}`)).status, 302);
+    assert.ok((await call(s.backend, `/shop-a${pic}`)).headers.location.includes(`/t/${a.tenant.id}/media/`), 'it keeps serving the real file');
+    // Cleanup after the other one: only the verified copy goes.
+    const cleaned = await s.api('/media/cleanup', { method: 'POST', body: { now: true } });
+    assert.equal(cleaned.body.removed, 1);
+    assert.equal(s.r2.objects.has(own), true);
+    assert.equal(s.r2.objects.has(`t/${a.tenant.id}/media/${id2}.png`), false);
+    // The copy at media/ gets corrupted after the move: its old copy is not removed.
+    const third = await s.upload(a, 63);
+    const id3 = await legacyize(s, a.tenant.id, third);
+    await consolidate(s);
+    const original = bodyOf(s.r2, `t/${a.tenant.id}/media/${id3}.png`);
+    s.r2.objects.set(`media/${id3}.png`, { body: Buffer.alloc(original.length, 3), mime: 'image/png' });
+    assert.equal((await s.api('/media/cleanup', { method: 'POST', body: { now: true } })).body.removed, 0);
+    assert.equal(s.r2.objects.has(`t/${a.tenant.id}/media/${id3}.png`), true);
+  } finally { s.cleanup(); }
+});
+
+test('one folder: a storage that cannot be read, or looks empty, is never concluded about; the app-folder move works and removes the empty directories', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const pics = [];
+    for (let i = 0; i < 6; i++) pics.push(await s.upload(a, 70 + i));
+    for (const pic of pics) await legacyize(s, a.tenant.id, pic);
+    r2Failure.on = true;
+    const blind = await consolidation(s);
+    assert.equal(blind.storages.r2.checked, false);
+    assert.equal(blind.totals.files, 0, 'unreadable is not "nothing to move" either');
+    assert.equal(blind.clean, false, 'and it is never reported as finished');
+    const none = await consolidate(s);
+    assert.deepEqual(none.unreadable, ['r2']);
+    assert.equal(none.moved, 0);
+    r2Failure.on = false;
+    assert.equal(strays(s.r2).length, 6);
+    // An empty-looking bucket (wrong bucket) is not trusted: the rows would all look "missing".
+    const saved = new Map(s.r2.objects);
+    s.r2.objects.clear();
+    const empty = await consolidation(s);
+    assert.equal(empty.storages.r2.checked, false);
+    assert.equal(empty.storages.r2.error, 'LOOKS_EMPTY');
+    assert.equal(empty.rows.missing, 0, 'no verdict about rows of an unreadable storage');
+    for (const [k, v] of saved) s.r2.objects.set(k, v);
+    // The app folder: the same move, with real directories.
+    const dir = s.dir, one = await s.upload(a, 90);
+    const id = idOf(one);
+    const fsStore = require('../server/media').createFsStorage({ MEDIA_DIR: dir });
+    await fsStore.put(`t/${a.tenant.id}/media/${id}.png`, bodyOf(s.r2, `media/${id}.png`));
+    await s.db.query("UPDATE media SET storage='fs', ns=0 WHERE tenant_id=$1 AND id=$2", [a.tenant.id, id]);
+    s.r2.objects.delete(`media/${id}.png`);
+    const fsPreview = await consolidation(s);
+    assert.equal(fsPreview.storages.fs.outside, 1, JSON.stringify(fsPreview.storages));
+    const moved = await consolidate(s);
+    assert.equal(moved.moved >= 1, true);
+    assert.ok(fs.existsSync(path.join(dir, 'media', `${id}.png`)));
+    assert.equal((await call(s.backend, `/shop-a${one}`)).status, 200, 'served from media/ in the folder');
+    await s.api('/media/cleanup', { method: 'POST', body: { now: true } });
+    assert.equal(fs.existsSync(path.join(dir, 't')), false, 'the old directories are gone with their last file');
+  } finally { s.cleanup(); }
+});
+
+test('one folder: new files, copies for demos and the migration helper all land in media/ and never create another folder', async () => {
+  const s = await setup();
+  try {
+    const demoMade = await s.api('/demos', { method: 'POST', body: { name: 'Fresh demo' } });
     const demo = demoMade.body.demo;
     const demoStore = { slug: demo.slug, tenant: { id: demo.tenantId }, headers: await s.login(demo.slug, demoMade.body.admin.id, demoMade.body.admin.password) };
-    const inDemo = await s.upload(demoStore, 24);
-    assert.equal((await call(s.backend, `/${demo.slug}/api/admin/doc/branding`, { method: 'PATCH', headers: demoStore.headers, body: { logoUri: inDemo } })).status, 200);
-
-    const all = await files(s);
-    assert.equal(all.total, 4, 'the file two stores share is ONE line');
-    const line = id => all.items.find(i => i.id === idOf(id));
-    assert.deepEqual(line(shared).owners.map(o => o.name).sort(), ['Shop shop-a', 'Shop shop-b']);
-    assert.equal(line(shared).used, false, 'nobody shows it');
-    assert.equal(line(kept).used, true);
-    assert.equal(line(kept).usedBy[0].name, 'Shop shop-a');
-    assert.equal(line(inDemo).owners[0].kind, 'demo', 'a demo owns files too');
-    assert.equal(line(inDemo).used, true);
-    assert.equal(all.totals.unused.files, 2, 'the shared one and the lonely one');
-    assert.equal(all.totals.files, 4);
-    assert.equal((await files(s, '?usage=unused')).total, 2);
-    assert.equal((await files(s, '?usage=used')).total, 2);
-    assert.equal((await files(s, `?owner=${demo.tenantId}`)).total, 1);
-    assert.equal((await files(s, '?q=showroom')).total, 1, 'search by owner name');
-    assert.equal((await files(s, '?kind=video')).total, 0);
-    assert.equal((await files(s, '?limit=2')).items.length, 2);
-    assert.equal((await files(s, '?limit=2')).more, true);
-    // Only the console may call it.
-    assert.equal((await call(s.backend, '/api/super-admin/media/files')).status, 401);
-    assert.equal((await call(s.backend, '/shop-a/api/super-admin/media/files', { headers: a.headers })).status, 404);
-
-    // A file that is shown is refused; an unused one is deleted from EVERY store and from storage.
-    const refused = await s.api('/media/files/delete', { method: 'POST', body: { ids: [idOf(kept)] } });
-    assert.equal(refused.status, 200);
-    assert.deepEqual(refused.body.blocked, [{ id: idOf(kept), reason: 'IN_USE' }]);
-    assert.equal(r2Keys(s.r2).length, 4);
-    const del = await s.api('/media/files/delete', { method: 'POST', body: { ids: [idOf(shared)] } });
-    assert.deepEqual(del.body.removed, [idOf(shared)]);
-    assert.equal((await rowsOfId(s, idOf(shared))).length, 0, 'the rows of both stores went');
-    assert.equal(r2Keys(s.r2).length, 3);
-    assert.equal((await call(s.backend, `/shop-a${shared}`)).status, 404);
-    assert.equal((await s.api('/media/files/delete', { method: 'POST', body: { ids: [] } })).status, 400);
-    // "Delete everything unused" spares fresh files and files kept in a store library, takes the old ones.
-    assert.equal((await s.api('/media/files/delete', { method: 'POST', body: { allUnused: true } })).body.removed.length, 0, 'fresh files are never swept');
-    await s.db.query('UPDATE media SET created_at=1 WHERE id=$1', [idOf(lonely)]);
-    assert.equal((await s.api('/media/files/delete', { method: 'POST', body: { allUnused: true } })).body.removed.length, 0, 'a file kept in a store library (uploaded there on purpose) is spared too');
-    await s.db.query('UPDATE media SET lib=0 WHERE id=$1', [idOf(lonely)]);
-    const swept = await s.api('/media/files/delete', { method: 'POST', body: { allUnused: true } });
-    assert.deepEqual(swept.body.removed, [idOf(lonely)]);
-    assert.equal(swept.body.remaining, 0);
-    assert.equal(r2Keys(s.r2).length, 2, 'only the two files that are shown remain');
-    // Forced deletion of a shown file works and is explicit.
-    const forced = await s.api('/media/files/delete', { method: 'POST', body: { ids: [idOf(inDemo)], force: true } });
-    assert.deepEqual(forced.body.removed, [idOf(inDemo)]);
-    assert.ok((await s.api('/audit?limit=20')).body.some(e => e.action === 'media.files.delete'));
-  } finally { s.cleanup(); }
-});
-
-test('platform library: files in render requests / personal spaces count as used by clients, and are protected from "delete unused"', async () => {
-  const s = await setup();
-  try {
+    await s.upload(demoStore, 81);
     const a = await s.store('shop-a');
-    const pic = await s.upload(a, 31);
-    await s.db.query('UPDATE media SET created_at=1 WHERE id=$1', [idOf(pic)]);
-    await s.db.query("INSERT INTO requests(tenant_id,id,user_id,created_at,data) VALUES($1,'req-1','usr-1',1,$2)", [a.tenant.id, JSON.stringify({ aiResult: pic })]);
-    const line = (await files(s)).items[0];
-    assert.equal(line.used, false);
-    assert.equal(line.inClientData, true);
-    assert.equal((await files(s, '?usage=unused')).total, 0, 'a client\'s result is not "unused"');
-    assert.equal((await s.api('/media/files/delete', { method: 'POST', body: { allUnused: true } })).body.removed.length, 0);
-    assert.equal((await s.api('/media/files/delete', { method: 'POST', body: { ids: [idOf(pic)] } })).body.blocked[0].reason, 'IN_USE'.replace('IN_USE', 'IN_CLIENT_DATA'));
-    assert.equal(r2Keys(s.r2).length, 1);
+    await s.upload(a, 82);
+    const clone = await s.api(`/demos/${demo.id}/assign`, { method: 'POST', body: { slug: 'clone-x', owner: { email: 'x@x.test' } } });
+    assert.equal(clone.status, 201, JSON.stringify(clone.body));
+    assert.deepEqual([...s.r2.objects.keys()].filter(k => !k.startsWith('media/')), [], 'nothing outside media/');
+    // A legacy database row moved to R2 by the migration helper goes to media/ too (and joins the shared namespace).
+    const { createMedia } = require('../server/media');
+    const { scopeDb } = require('../server/scope');
+    const body = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 99)]);
+    const id = require('node:crypto').createHash('sha256').update(body.toString('base64')).digest('hex').slice(0, 32);
+    await s.db.query("INSERT INTO media(tenant_id,id,mime,data,body,size,storage,created_at,ns) VALUES($1,$2,'image/png','',$3,$4,'db',1,0)", [a.tenant.id, id, body, body.length]);
+    const m = createMedia(scopeDb(s.db, a.tenant.id), { env: {}, storage: s.r2, download: offline });
+    assert.equal(await m.moveRowToR2({ id, mime: 'image/png', body, data: '' }), true);
+    assert.equal(s.r2.objects.has(`media/${id}.png`), true);
+    assert.equal(strays(s.r2).length, 0);
+    assert.equal((await rowsOfId(s, id))[0].ns, 1);
+    assert.equal((await consolidation(s)).clean, true);
   } finally { s.cleanup(); }
 });
 
-test('storage audit: a healthy platform reports healthy and the repair changes nothing', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    await s.upload(a, 41); await s.upload(a, 42);
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.healthy, true, JSON.stringify(audit));
-    assert.equal(audit.storages.r2.checked, true);
-    assert.equal(audit.storages.r2.objects, 2);
-    assert.equal(audit.orphans.files, 0);
-    const before = new Map(s.r2.objects);
-    const fixed = (await s.api('/media/repair', { method: 'POST', body: { orphans: true, broken: true } })).body;
-    assert.equal(fixed.migrated + fixed.copied + fixed.orphansDeleted + fixed.brokenRemoved + fixed.repointed + fixed.sizes, 0);
-    assert.deepEqual([...s.r2.objects.keys()], [...before.keys()]);
-  } finally { s.cleanup(); }
-});
-
-test('storage audit: legacy t/<store>/media objects join the shared namespace safely (copy -> verify -> flag), the old copy waits 24 h, other stores keep reading it', async () => {
+test('files grid: lists the pictures of the storage in use straight from the storage, with paging, previews and what the database knows', async () => {
   const s = await setup();
   try {
     const a = await s.store('shop-a'), b = await s.store('shop-b');
-    const pic = await s.upload(a, 51);
-    const id = await legacyize(s, a.tenant.id, pic);
-    // Another store got a row for it through an old clone (it also points at a's own prefix, which is how old clones worked).
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.legacy.files, 1, JSON.stringify(audit));
-    assert.equal(audit.healthy, false);
-    assert.equal(audit.orphans.files, 0, 'the legacy object is claimed by its row, not an orphan');
-    assert.equal(audit.missing.files, 0);
-    assert.equal((await s.api('/media/audit', { method: 'POST' })).status, 200);
-    assert.equal(s.r2.objects.has(`media/${id}.png`), false, 'audit is read-only');
+    const urls = [];
+    for (let i = 0; i < 5; i++) urls.push(await s.upload(i % 2 ? b : a, 100 + i));
+    await call(s.backend, '/shop-a/api/admin/media', { method: 'POST', headers: a.headers, body: { data: png(100), title: 'Hero picture' } }); // same bytes as the first: titled
+    const orphan = 'media/' + 'e'.repeat(32) + '.png';
+    s.r2.objects.set(orphan, { body: Buffer.alloc(30, 5), mime: 'image/png', modified: 1 });
+    s.r2.objects.set('media/not-ours.txt', { body: Buffer.alloc(5), mime: 'text/plain' });
+    s.r2.objects.set('other-app/logo.png', { body: Buffer.alloc(5), mime: 'image/png' });
+    s.r2.objects.set('media/' + 'f'.repeat(32) + '.mp4', { body: Buffer.alloc(9), mime: 'video/mp4' });
+    const first = await browse(s, '?limit=4');
+    assert.equal(first.storage, 'r2');
+    assert.equal(first.items.length, 4);
+    assert.equal(first.more, true);
+    const second = await browse(s, `?limit=4&after=${encodeURIComponent(first.cursor)}`);
+    assert.equal(second.items.length, 2);
+    assert.equal(second.more, false);
+    const all = [...first.items, ...second.items];
+    assert.equal(new Set(all.map(i => i.key)).size, 6, 'no repeats, nothing skipped');
+    assert.ok(all.every(i => /^media\/[a-f0-9]{32}\.png$/.test(i.key)), 'only pictures of ours: no video, no other file, nothing outside the folder');
+    assert.ok(all.every(i => i.url.startsWith('https://media.example.com/media/')), 'previews are the public R2 address');
+    const titled = all.find(i => i.id === idOf(urls[0]));
+    assert.equal(titled.title, 'Hero picture');
+    assert.equal(titled.inDatabase, true);
+    assert.equal(all.find(i => i.key === orphan).inDatabase, false, 'a file the database does not know is still shown, and marked');
+    assert.equal(all.find(i => i.key === orphan).stray, false);
+    assert.equal((await s.api('/media/browse?after=../../etc')).status, 400);
+    assert.equal((await call(s.backend, '/api/super-admin/media/browse')).status, 401);
+    // Old folders follow media/ in the same grid, marked.
+    await legacyize(s, a.tenant.id, urls[2]);
+    const withOld = await browse(s, '?limit=50');
+    assert.equal(withOld.items.filter(i => i.stray).length, 1);
+    assert.equal(withOld.items.filter(i => i.stray)[0].folder, `t/${a.tenant.id}/media/`);
+    assert.equal(withOld.items.indexOf(withOld.items.find(i => i.stray)), withOld.items.length - 1, 'after everything in media/');
+    // A storage that cannot be listed is an error, never an empty grid.
+    r2Failure.on = true;
+    assert.equal((await s.api('/media/browse')).status === 200, false);
+    r2Failure.on = false;
+  } finally { s.cleanup(); }
+});
 
-    const fixed = (await s.api('/media/repair', { method: 'POST', body: {} })).body;
-    assert.equal(fixed.migrated, 1, JSON.stringify(fixed));
-    assert.equal(s.r2.objects.has(`media/${id}.png`), true, 'copied to the shared key');
-    assert.equal(s.r2.objects.has(`t/${a.tenant.id}/media/${id}.png`), true, 'the old copy is kept as a safety net');
-    assert.equal((await rowsOfId(s, id))[0].ns, 1);
-    assert.equal((await call(s.backend, `/shop-a${pic}`)).status, 302);
-    assert.ok((await call(s.backend, `/shop-a${pic}`)).headers.location.endsWith(`/media/${id}.png`));
-    // Not yet 24 h: cleanup keeps it. After 24 h and a verified shared copy it removes the old one.
-    assert.equal((await s.api('/media/cleanup', { method: 'POST' })).body.removed, 0);
-    await s.db.query('UPDATE saas_media_old SET moved_at=1');
-    assert.equal((await s.api('/media/cleanup', { method: 'POST' })).body.removed, 1);
-    assert.equal(s.r2.objects.has(`t/${a.tenant.id}/media/${id}.png`), false);
-    assert.equal(s.r2.objects.has(`media/${id}.png`), true);
-    assert.equal((await s.api('/media/audit', { method: 'POST' })).body.healthy, true);
-    // The store that was only the owner deletes it: now it really goes.
-    assert.equal((await call(s.backend, `/shop-a/api/admin/library/${id}`, { method: 'DELETE', headers: a.headers })).status, 200);
-    assert.equal(r2Keys(s.r2).length, 0);
-    void b;
+test('files grid: the app folder is browsed the same way, and its previews are served by the console only', async () => {
+  const s = await setup();
+  try {
+    const a = await s.store('shop-a');
+    const url = await s.upload(a, 111), id = idOf(url);
+    assert.equal((await s.api('/media/storage', { method: 'PUT', body: { storage: 'app' } })).status, 200);
+    const fsStore = require('../server/media').createFsStorage({ MEDIA_DIR: s.dir });
+    await fsStore.put(`media/${id}.png`, bodyOf(s.r2, `media/${id}.png`));
+    await s.db.query("UPDATE media SET storage='fs' WHERE id=$1", [id]);
+    const grid = await browse(s);
+    assert.equal(grid.storage, 'app');
+    assert.equal(grid.items.length, 1);
+    assert.equal(grid.items[0].url, `/api/super-admin/media/object?key=${encodeURIComponent(`media/${id}.png`)}`);
+    const img = await s.api(`/media/object?key=${encodeURIComponent(`media/${id}.png`)}`);
+    assert.equal(img.status, 200);
+    assert.equal(img.headers['content-type'], 'image/png');
+    assert.equal((await call(s.backend, `/api/super-admin/media/object?key=${encodeURIComponent(`media/${id}.png`)}`)).status, 401);
+    assert.equal((await s.api(`/media/object?key=${encodeURIComponent('../../etc/passwd')}`)).status, 404);
+    assert.equal((await s.api(`/media/object?key=${encodeURIComponent(`media/${'a'.repeat(32)}.png`)}`)).status, 404);
   } finally { s.cleanup(); }
 });
 
@@ -264,94 +389,6 @@ test('legacy clone: a demo whose files are still at its own prefix is cloned by 
   } finally { s.cleanup(); }
 });
 
-test('storage audit: missing objects, strays, orphans, wrong sizes; repair is opt-in for what deletes, recent orphans and unreadable storages are never touched', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    const gone = await s.upload(a, 71), sized = await s.upload(a, 72), fine = await s.upload(a, 73), unknown = await s.upload(a, 74);
-    // 1 row whose object vanished
-    s.r2.objects.delete(`media/${idOf(gone)}.png`);
-    // 2 a wrong recorded size (the bytes are intact: their hash is the id)
-    await s.db.query('UPDATE media SET size=999 WHERE id=$1', [idOf(sized)]);
-    // 3 an unknown size
-    await s.db.query('UPDATE media SET size=NULL WHERE id=$1', [idOf(unknown)]);
-    // 4 orphans: an old one and a fresh one, plus a foreign key shape that must never be listed
-    const orphan = 'media/' + 'a'.repeat(32) + '.png', fresh = 'media/' + 'b'.repeat(32) + '.png';
-    s.r2.objects.set(orphan, { body: Buffer.alloc(30, 1), mime: 'image/png', modified: 1 });
-    s.r2.objects.set(fresh, { body: Buffer.alloc(30, 2), mime: 'image/png', modified: Date.now() });
-    s.r2.objects.set('media/not-ours.txt', { body: Buffer.alloc(5), mime: 'text/plain', modified: 1 });
-    s.r2.objects.set('other-app/data.bin', { body: Buffer.alloc(5), mime: 'x', modified: 1 });
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.missing.files, 1);
-    assert.equal(audit.sizeMismatch.files, 1);
-    assert.equal(audit.sizeUnknown.files, 1);
-    assert.equal(audit.orphans.files, 2);
-    assert.equal(audit.orphans.deletable, 1, 'the fresh upload is given an hour');
-    assert.equal(audit.orphans.recent, 1);
-    assert.ok(!JSON.stringify(audit).includes('not-ours'), 'keys of another shape are never listed');
-
-    // Default repair: only the non-destructive steps.
-    const safe = (await s.api('/media/repair', { method: 'POST', body: {} })).body;
-    assert.equal(safe.sizes, 2);
-    assert.equal(safe.orphansDeleted, 0);
-    assert.equal(safe.brokenRemoved, 0);
-    assert.equal((await s.db.query('SELECT size FROM media WHERE id=$1', [idOf(sized)]))[0].size, 40 + 8);
-    assert.equal(s.r2.objects.has(orphan), true);
-    assert.equal((await rowsOfId(s, idOf(gone))).length, 1, 'a broken row is kept until the owner agrees');
-
-    // A storage that cannot be listed is reported as unchecked: nothing is concluded about it.
-    r2Failure.on = true;
-    const blind = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(blind.storages.r2.checked, false);
-    assert.equal(blind.missing.files, 0, 'not "all missing": it simply was not checked');
-    assert.equal(blind.orphans.files, 0);
-    const blindRepair = (await s.api('/media/repair', { method: 'POST', body: { orphans: true, broken: true } })).body;
-    assert.equal(blindRepair.orphansDeleted + blindRepair.brokenRemoved, 0);
-    assert.equal((await rowsOfId(s, idOf(gone))).length, 1);
-    r2Failure.on = false;
-
-    const full = (await s.api('/media/repair', { method: 'POST', body: { orphans: true, broken: true } })).body;
-    assert.equal(full.orphansDeleted, 1);
-    assert.equal(full.brokenRemoved, 1);
-    assert.equal(s.r2.objects.has(orphan), false);
-    assert.equal(s.r2.objects.has(fresh), true, 'a fresh object is never removed');
-    assert.equal((await rowsOfId(s, idOf(gone))).length, 0);
-    assert.equal((await rowsOfId(s, idOf(fine))).length, 1);
-    assert.equal(s.r2.objects.has(`media/${idOf(fine)}.png`), true);
-    assert.equal(s.r2.objects.has('other-app/data.bin'), true, 'the bucket\'s other contents are untouched');
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: { orphans: true } })).status, 200);
-  } finally { s.cleanup(); }
-});
-
-test('storage audit: a row pointing at the wrong storage is repointed; an app-folder listing works; an empty-looking bucket is not trusted', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    const pics = [];
-    for (let i = 0; i < 8; i++) pics.push(await s.upload(a, 80 + i));
-    // The object is in the app folder while the row says r2.
-    const one = idOf(pics[0]);
-    const fsStore = require('../server/media').createFsStorage({ MEDIA_DIR: s.dir });
-    await fsStore.put(`media/${one}.png`, s.r2.objects.get(`media/${one}.png`).body);
-    s.r2.objects.delete(`media/${one}.png`);
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.wrongStorage.files, 1, JSON.stringify(audit));
-    assert.equal(audit.storages.fs.checked, true);
-    assert.equal(audit.storages.fs.objects, 1);
-    assert.equal(audit.missing.files, 0);
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: {} })).body.repointed, 1);
-    assert.equal((await rowsOfId(s, one))[0].storage, 'fs');
-    assert.equal((await call(s.backend, `/shop-a${pics[0]}`)).status, 200, 'served from the folder now');
-    // A bucket that lists as EMPTY while the database expects its files = the wrong bucket, not "everything is gone".
-    s.r2.objects.clear();
-    const blind = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(blind.storages.r2.checked, false);
-    assert.equal(blind.storages.r2.error, 'LOOKS_EMPTY');
-    assert.equal(blind.missing.files, 0);
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: { broken: true } })).body.brokenRemoved, 0);
-    assert.equal((await s.db.query("SELECT COUNT(*) AS n FROM media WHERE storage='r2'"))[0].n > 0, true, 'no row was deleted');
-  } finally { s.cleanup(); }
-});
 
 test('delete race: a store that re-adds a picture while another store deletes the last other copy never ends with a row and no object', async () => {
   const s = await setup();
@@ -369,152 +406,7 @@ test('delete race: a store that re-adds a picture while another store deletes th
     assert.ok(rows.some(r => r.tenant_id === b.tenant.id), 'b has its row');
     assert.equal(s.r2.objects.has(`media/${id}.png`), true, 'and the object it points at exists');
     assert.equal((await call(s.backend, `/shop-b${pic}`)).status, 302);
-    assert.equal((await s.api('/media/audit', { method: 'POST' })).body.missing.files, 0);
+    assert.equal((await consolidation(s)).rows.missing, 0);
   } finally { s.cleanup(); }
 });
 
-// ---------- Repair safety: the last copy of a file is never deleted (regression tests for the "broken rows + orphans" data-loss case) ----------
-const bodyOf = (r2, key) => Buffer.from(r2.objects.get(key).body);
-
-test('repair: the only surviving copy sits under ANOTHER store\'s old prefix -> it is recovered to the shared key, nothing is deleted, even with both delete switches on', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a'), b = await s.store('shop-b');
-    const pic = await s.upload(a, 91);
-    const id = idOf(pic);
-    const strayKey = `t/${b.tenant.id}/media/${id}.png`;
-    s.r2.objects.set(strayKey, s.r2.objects.get(`media/${id}.png`));
-    s.r2.objects.delete(`media/${id}.png`);
-
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.missing.files, 0, 'a copy exists elsewhere: the row is NOT missing');
-    assert.equal(audit.recoverable.files, 1, JSON.stringify(audit));
-    assert.equal(audit.orphans.deletable, 0, 'the stray object is the only copy of a file a row needs: never deletable');
-    assert.equal(audit.orphans.kept, 1);
-    assert.equal(audit.healthy, false);
-
-    const fixed = (await s.api('/media/repair', { method: 'POST', body: { orphans: true, broken: true } })).body;
-    assert.equal(fixed.recovered, 1, JSON.stringify(fixed));
-    assert.equal(fixed.brokenRemoved, 0);
-    assert.equal(fixed.orphansDeleted, 0);
-    assert.equal((await rowsOfId(s, id)).length, 1, 'the row is still there');
-    assert.equal(s.r2.objects.has(`media/${id}.png`), true, 'the file is back at the key the row expects');
-    assert.equal(s.r2.objects.has(strayKey), true, 'the other copy is kept (nothing was deleted)');
-    assert.equal((await call(s.backend, `/shop-a${pic}`)).status, 302);
-    assert.equal((await s.api('/media/audit', { method: 'POST' })).body.missing.files, 0);
-  } finally { s.cleanup(); }
-});
-
-test('repair: a surviving copy whose bytes are NOT the file (same name, other content) is never used, never trusted, and never deleted', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a'), b = await s.store('shop-b');
-    const pic = await s.upload(a, 92);
-    const id = idOf(pic);
-    const strayKey = `t/${b.tenant.id}/media/${id}.png`;
-    const impostor = Buffer.alloc(s.r2.objects.get(`media/${id}.png`).body.length, 7); // same size, other bytes
-    s.r2.objects.set(strayKey, { body: impostor, mime: 'image/png' });
-    s.r2.objects.delete(`media/${id}.png`);
-    const fixed = (await s.api('/media/repair', { method: 'POST', body: { orphans: true, broken: true } })).body;
-    assert.equal(fixed.recovered, 0, 'bytes that do not hash to the id are not the file');
-    assert.equal(s.r2.objects.has(`media/${id}.png`), false, 'nothing was written under the shared key');
-    assert.equal(s.r2.objects.has(strayKey), true, 'and nothing was deleted');
-    assert.equal(fixed.orphansDeleted, 0);
-    assert.equal(fixed.brokenRemoved, 0, 'the row is kept: a copy exists, a human decides');
-    assert.equal((await rowsOfId(s, id)).length, 1);
-  } finally { s.cleanup(); }
-});
-
-test('repair: when the other storage cannot be read, a row that looks missing is "unverified", never deleted', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    const pic = await s.upload(a, 93);
-    const id = idOf(pic);
-    s.r2.objects.delete(`media/${id}.png`);
-    fs.rmSync(s.dir, { recursive: true, force: true }); // the app folder cannot be listed any more (unmounted disk)
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.storages.fs.checked, false);
-    assert.equal(audit.missing.files, 0, 'the file may be in the app folder: not "missing"');
-    assert.equal(audit.unverified.files, 1, JSON.stringify(audit));
-    assert.equal(audit.healthy, false);
-    const fixed = (await s.api('/media/repair', { method: 'POST', body: { orphans: true, broken: true } })).body;
-    assert.equal(fixed.brokenRemoved, 0);
-    assert.equal((await rowsOfId(s, id)).length, 1);
-  } finally { s.cleanup(); }
-});
-
-test('repair: a file that exists NOWHERE is still reported missing, and its row is removed only with the explicit switch', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    const gone = idOf(await s.upload(a, 94));
-    s.r2.objects.delete(`media/${gone}.png`);
-    const audit = (await s.api('/media/audit', { method: 'POST' })).body;
-    assert.equal(audit.missing.files, 1);
-    assert.equal(audit.recoverable.files, 0);
-    assert.equal(audit.unverified.files, 0);
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: {} })).body.brokenRemoved, 0);
-    assert.equal((await rowsOfId(s, gone)).length, 1);
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: { broken: true } })).body.brokenRemoved, 1);
-    assert.equal((await rowsOfId(s, gone)).length, 0);
-  } finally { s.cleanup(); }
-});
-
-test('repair: an orphan object is deleted only when a copy at a row\'s own key holds EXACTLY the same bytes (same size is not enough)', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a'), b = await s.store('shop-b');
-    const pic = await s.upload(a, 95);
-    const id = idOf(pic);
-    const real = bodyOf(s.r2, `media/${id}.png`);
-    const impostorKey = `t/${b.tenant.id}/media/${id}.png`;
-    s.r2.objects.set(impostorKey, { body: Buffer.alloc(real.length, 9), mime: 'image/png' }); // same size, different bytes
-    const refused = (await s.api('/media/repair', { method: 'POST', body: { orphans: true } })).body;
-    assert.equal(refused.orphansDeleted, 0, JSON.stringify(refused));
-    assert.equal(s.r2.objects.has(impostorKey), true);
-    // A true duplicate (same bytes) of a healthy file is safe to remove.
-    s.r2.objects.set(impostorKey, { body: real, mime: 'image/png' });
-    const done = (await s.api('/media/repair', { method: 'POST', body: { orphans: true } })).body;
-    assert.equal(done.orphansDeleted, 1, JSON.stringify(done));
-    assert.equal(s.r2.objects.has(impostorKey), false);
-    assert.equal(s.r2.objects.has(`media/${id}.png`), true, 'the real file is untouched');
-  } finally { s.cleanup(); }
-});
-
-test('repair: migrating an old-layout file refuses to join the shared key when an object with the same size but other bytes already sits there', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    const pic = await s.upload(a, 96);
-    const id = await legacyize(s, a.tenant.id, pic);
-    const own = `t/${a.tenant.id}/media/${id}.png`;
-    s.r2.objects.set(`media/${id}.png`, { body: Buffer.alloc(s.r2.objects.get(own).body.length, 5), mime: 'image/png' });
-    const fixed = (await s.api('/media/repair', { method: 'POST', body: {} })).body;
-    assert.equal(fixed.migrated, 0, JSON.stringify(fixed));
-    assert.equal((await rowsOfId(s, id))[0].ns, 0, 'the row stays in the old layout');
-    assert.equal(s.r2.objects.has(own), true, 'the real file is untouched');
-    // Same bytes at the shared key: it joins, as before.
-    s.r2.objects.set(`media/${id}.png`, { body: bodyOf(s.r2, own), mime: 'image/png' });
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: {} })).body.migrated, 1);
-  } finally { s.cleanup(); }
-});
-
-test('cleanup: an old own-prefix copy is removed only when the shared object holds exactly its bytes', async () => {
-  const s = await setup();
-  try {
-    const a = await s.store('shop-a');
-    const pic = await s.upload(a, 97);
-    const id = await legacyize(s, a.tenant.id, pic);
-    const own = `t/${a.tenant.id}/media/${id}.png`;
-    assert.equal((await s.api('/media/repair', { method: 'POST', body: {} })).body.migrated, 1);
-    await s.db.query('UPDATE saas_media_old SET moved_at=1');
-    const original = bodyOf(s.r2, own);
-    s.r2.objects.set(`media/${id}.png`, { body: Buffer.alloc(original.length, 3), mime: 'image/png' }); // shared object got corrupted (same size)
-    assert.equal((await s.api('/media/cleanup', { method: 'POST' })).body.removed, 0, 'not proven identical: the old copy stays');
-    assert.equal(s.r2.objects.has(own), true);
-    s.r2.objects.set(`media/${id}.png`, { body: original, mime: 'image/png' });
-    assert.equal((await s.api('/media/cleanup', { method: 'POST' })).body.removed, 1);
-    assert.equal(s.r2.objects.has(own), false);
-  } finally { s.cleanup(); }
-});

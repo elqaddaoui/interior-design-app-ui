@@ -40,6 +40,8 @@ const R2_VARS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R
 const fail = (status, message) => Object.assign(new Error(message), { status });
 /** The only object keys this app ever writes. Listings (storage audit) return nothing else, so a bucket shared with other things stays untouched. */
 const KEY_SHAPE = /^(?:media|t\/[a-z0-9][a-z0-9_-]{0,62}\/media)\/[a-f0-9]{32}\.[a-z0-9]+$/;
+/** What the Files grid shows. */
+const IMAGE_KEY = /\.(png|jpg|webp|gif|avif|svg)$/;
 const mb = (value, fallback) => Math.max(1, Math.min(5000, Number(value) || fallback)) * 1024 * 1024;
 const limitsOf = env => ({ image: mb(env.MEDIA_MAX_IMAGE_MB, 10), video: mb(env.MEDIA_MAX_VIDEO_MB, 100), audio: mb(env.MEDIA_MAX_AUDIO_MB, 8) });
 const kindOf = mime => (VIDEO_TYPES.includes(mime) ? 'video' : IMAGE_TYPES.includes(mime) ? 'image' : AUDIO_TYPES.includes(audioType(mime)) ? 'audio' : '');
@@ -129,6 +131,21 @@ function createR2Storage(env = process.env, { client, presign } = {}) {
       } while (token && out.length < 2000000);
       return out;
     },
+    /** One page of the pictures in `prefix` (sorted by key): { items: [{ key, size, modified }], more }. `after` = the last key of the previous page. */
+    async listPage(prefix, { after = '', limit = 60 } = {}) {
+      const items = [];
+      let token;
+      do {
+        const page = await connection().send(new (s3().ListObjectsV2Command)({ Bucket: bucket, Prefix: prefix, StartAfter: token ? undefined : after || undefined, ContinuationToken: token, MaxKeys: Math.min(1000, Math.max(100, limit * 2)) }));
+        for (const item of page.Contents || []) {
+          if (!KEY_SHAPE.test(item.Key) || !IMAGE_KEY.test(item.Key)) continue;
+          items.push({ key: item.Key, size: Number(item.Size), modified: item.LastModified ? new Date(item.LastModified).getTime() : 0 });
+          if (items.length > limit) return { items: items.slice(0, limit), more: true };
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return { items, more: false };
+    },
     /** Server-side copy inside the bucket (nothing travels through this server: a clone of a store with large videos costs no bandwidth). */
     async copy(from, to) {
       await connection().send(new (s3().CopyObjectCommand)({ Bucket: bucket, Key: to, CopySource: `${bucket}/${from.split('/').map(encodeURIComponent).join('/')}`, CacheControl: CACHE }));
@@ -150,6 +167,16 @@ function createFsStorage(env = process.env) {
   const root = nodePath.resolve(String(env.MEDIA_DIR || '').trim() || nodePath.join(__dirname, 'data', 'media'));
   const SAFE_KEY = /^(?:media|t\/[a-z0-9][a-z0-9_-]{0,62}\/media)\/[a-f0-9]{32}\.[a-z0-9]+$/;
   const file = key => { if (!SAFE_KEY.test(String(key))) throw fail(400, 'INVALID_MEDIA_KEY'); return nodePath.join(root, ...key.split('/')); };
+  /** The old per-store folders (`t/<store>/media`) disappear with their last file: no empty directories are left behind. */
+  const pruneEmpty = async key => {
+    if (!String(key).startsWith('t/')) return;
+    const stop = nodePath.join(root, 't');
+    let dir = nodePath.dirname(file(key));
+    while (dir === stop || dir.startsWith(stop + nodePath.sep)) {
+      try { await fs.promises.rmdir(dir); } catch { return; } // not empty (or already gone)
+      dir = nodePath.dirname(dir);
+    }
+  };
   return {
     kind: 'fs', root, publicUrl: null, file,
     async put(key, body) {
@@ -179,7 +206,7 @@ function createFsStorage(env = process.env) {
     get: key => fs.promises.readFile(file(key)),
     async getRange(key, length) { const handle = await fs.promises.open(file(key), 'r'); try { const buffer = Buffer.alloc(length); const { bytesRead } = await handle.read(buffer, 0, length, 0); return buffer.subarray(0, bytesRead); } finally { await handle.close(); } },
     stream: async key => fs.createReadStream(file(key)),
-    remove: async key => { await fs.promises.rm(file(key), { force: true }); },
+    remove: async key => { await fs.promises.rm(file(key), { force: true }); await pruneEmpty(key); },
     /** Every file of ours under `prefix` ('media/' or 't/'): [{ key, size, modified }]. Anything that is not one of our keys is ignored. */
     async list(prefix) {
       const out = [];
@@ -196,6 +223,35 @@ function createFsStorage(env = process.env) {
       };
       await walk(prefix === 't/' ? nodePath.join(root, 't') : nodePath.join(root, 'media'), prefix === 't/' ? 't' : 'media');
       return out;
+    },
+    /** Removes every empty directory left under `t/` (the old per-store folders). Returns how many were removed. */
+    async prune() {
+      let removed = 0;
+      const walk = async dir => {
+        let entries;
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) if (entry.isDirectory()) await walk(nodePath.join(dir, entry.name));
+        if (dir === nodePath.join(root, 't')) { try { await fs.promises.rmdir(dir); removed++; } catch { /* not empty */ } return; }
+        try { await fs.promises.rmdir(dir); removed++; } catch { /* not empty */ }
+      };
+      await walk(nodePath.join(root, 't'));
+      return removed;
+    },
+    /** One page of the pictures in `prefix` ('media/'), sorted by name: { items: [{ key, size, modified }], more }. */
+    async listPage(prefix, { after = '', limit = 60 } = {}) {
+      if (prefix === 't/') { // the old per-store folders: t/<store>/media/<name>
+        const all = (await this.list('t/')).filter(o => IMAGE_KEY.test(o.key) && o.key > after).sort((a, b) => (a.key < b.key ? -1 : 1));
+        return { items: all.slice(0, limit), more: all.length > limit };
+      }
+      const dir = nodePath.join(root, ...prefix.split('/').filter(Boolean));
+      let names;
+      try { names = (await fs.promises.readdir(dir)).sort(); } catch (error) { if (error.code === 'ENOENT') return { items: [], more: false }; throw error; }
+      const wanted = names.filter(name => `${prefix}${name}` > after && SAFE_KEY.test(`${prefix}${name}`) && IMAGE_KEY.test(name));
+      const items = [];
+      for (const name of wanted.slice(0, limit)) {
+        try { const st = await fs.promises.stat(nodePath.join(dir, name)); items.push({ key: `${prefix}${name}`, size: st.size, modified: Math.round(st.mtimeMs) }); } catch { /* vanished */ }
+      }
+      return { items, more: wanted.length > limit };
     },
     /** Writable? (the backup screen reports it before offering this target) */
     async writable() { try { await fs.promises.mkdir(root, { recursive: true, mode: 0o750 }); await fs.promises.access(root, fs.constants.W_OK); return true; } catch { return false; } },
@@ -498,10 +554,11 @@ function createMedia(db, { env = process.env, storage = createR2Storage(env) || 
     if (!body.length || !EXT[row.mime]) return false;
     const name = `${row.id}.${EXT[row.mime]}`;
     if (dryRun) return true;
-    const key = keyOfRow(tenantId, row, name);
+    // Always the shared `media/<hash>.<ext>` key (and `ns = 1`): nothing this app writes ever lands outside `media/`.
+    const key = sharedKey(name);
     const object = await storage.head(key);
     if (!object || object.size !== body.length) await storage.put(key, body, row.mime);
-    await db.query("UPDATE media SET storage='r2', size=$2 WHERE tenant_id=:tenant AND id=$1", [row.id, body.length]);
+    await db.query("UPDATE media SET storage='r2', size=$2, ns=1 WHERE tenant_id=:tenant AND id=$1", [row.id, body.length]);
     meta.delete(row.id);
     return true;
   }

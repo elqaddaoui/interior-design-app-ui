@@ -172,7 +172,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
   const oldAdd = (tenantId, id, storage, mime, size) => db.query('INSERT INTO saas_media_old(tenant_id,id,storage,mime,size,moved_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,id,storage) DO UPDATE SET moved_at=EXCLUDED.moved_at', [tenantId, id, storage, mime, size ?? null, clock()]);
   const oldList = (tenantId, ids) => db.query('SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE tenant_id=$1 AND id=ANY($2)', [tenantId, ids]);
   const oldDel = (tenantId, id, storage) => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1 AND id=$2 AND storage=$3', [tenantId, id, storage]);
-  const oldDue = (before, limit) => db.query('SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE moved_at<=$1 ORDER BY moved_at LIMIT $2', [before, limit]);
+  const oldDue = (before, limit, legacyOnly = false) => db.query(`SELECT tenant_id,id,storage,mime,size,moved_at FROM saas_media_old WHERE moved_at<=$1${legacyOnly ? " AND storage LIKE 'legacy-%'" : ''} ORDER BY moved_at LIMIT $2`, [before, limit]);
   const oldSummary = async () => (await db.query('SELECT COUNT(*)::int AS files, COALESCE(SUM(size),0)::bigint AS bytes, MIN(moved_at) AS first FROM saas_media_old'))[0];
   const oldDropTenant = tenantId => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1', [tenantId]);
   const oldDropFile = (tenantId, id) => db.query('DELETE FROM saas_media_old WHERE tenant_id=$1 AND id=$2', [tenantId, id]);
