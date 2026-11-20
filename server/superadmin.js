@@ -18,6 +18,7 @@ const { passwordMatches, hashPassword, passwordProblem, permissionsOf, mergePerm
 const { slugProblem } = require('../src/lib/reservedSlugs');
 const { TENANT_TABLES } = require('./db');
 const { createMediaOps } = require('./media-ops');
+const { createLimits } = require('./limits');
 const { TENANT_ID } = require('./scope');
 const THEME_ID = /^th_[a-f0-9]{12}$/;
 
@@ -62,6 +63,11 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
   // Media operations across stores (copy / move / make independent / cleanup). Built on first use: the reset script has no bundles.
   let opsInstance;
   const ops = () => (opsInstance ||= createMediaOps({ db, hub: bundles.hub, platform: platform.media, env }));
+  // Free-tier watch (Neon + Cloudflare R2): measures, warns early, reminds, and remembers the last backup the owner saved.
+  const limits = createLimits({
+    db, env, notify: message => platform.usage.notify(message), transport: () => platform.usage.transport(), recipient: () => platform.usage.recipient(),
+    mediaTotals: async () => { try { return await ops().totals(); } catch { return null; } },
+  });
   const attempts = new Map(); // address -> { count, until }: 5 failed sign-ins lock that address for 15 minutes
   const cookieFlags = `HttpOnly; SameSite=Strict; Path=/api${env.COOKIE_SECURE === 'false' ? '' : '; Secure'}`;
   /** The console is always available: the account lives in the database (saas_super), it is never "not configured". */
@@ -752,6 +758,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
       alerts: await platform.usage.openCount(),
       calls24h: (await platform.usage.today()).calls,
       demosAiOn: await count("SELECT COUNT(*) AS n FROM saas_tenants WHERE kind='demo' AND ai_until>$1", [Date.now()]),
+      limits: await limits.summary().catch(() => null),
       platformManaged: await count("SELECT COUNT(*) AS n FROM saas_tenants WHERE kind IN ('default','instance') AND api_mode='platform'"),
     };
   }
@@ -855,6 +862,16 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
       if (method === 'PATCH') { const settings = await platform.usage.setSettings(await readBody(req)); await audit(actor, 'alert.settings', null, 'abuse', ''); return ok({ settings, recipient: await platform.usage.recipient(), transport: platform.usage.transport(), defaults: platform.usage.DEFAULTS }); }
     }
     if (path === '/alert-settings/test' && method === 'POST') return ok(await platform.usage.testEmail());
+    // Free-tier limits of Neon and Cloudflare R2: current usage, early warnings, the settings of those warnings.
+    if (path === '/limits/summary' && method === 'GET') return ok({ summary: await limits.summary() });
+    if (path === '/limits' && method === 'GET') return ok(await limits.status({ refresh: url.searchParams.get('refresh') === '1' }));
+    if (path === '/limits/settings' && method === 'PATCH') {
+      await limits.setSettings(await readBody(req));
+      await audit(actor, 'limits.settings', null, 'limits', '');
+      await limits.check({ force: true, settingsChanged: true }).catch(() => {});
+      return ok(await limits.status());
+    }
+    if (path === '/limits/test' && method === 'POST') return ok(await limits.testAlert());
     // A demo's "use API" switch (auto-closes after a quiet period) and the pause switch of any store.
     if ((m = /^\/demos\/([a-z0-9_-]+)\/ai$/.exec(path)) && method === 'POST') {
       const row = await getDemoRow(m[1]);
@@ -932,7 +949,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     throw fail(404, 'API route not found');
   }
 
-  return { handle, authenticate, configured, account, resetToDefault, redeemHandoff, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit, platformInfo: tenantId => platform.infoOf(tenantId) };
+  return { handle, limits, authenticate, configured, account, resetToDefault, redeemHandoff, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit, platformInfo: tenantId => platform.infoOf(tenantId) };
 }
 
 module.exports = { createSuperAdmin, COPIED_SETTINGS };

@@ -32,7 +32,7 @@ const TEXTUAL = /\.(js|mjs|cjs|json|html|css|map|txt|md|sql|ndjson|xml|webmanife
 const stamp = (at = Date.now()) => new Date(at).toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const errorOf = error => ({ code: error.status ? error.message : 'INTERNAL', ...Object.fromEntries(['entry', 'table', 'destination', 'upstream', 'detected', 'tenant'].filter(k => error[k] !== undefined).map(k => [k, error[k]])) });
 
-function createBackupService({ db, bundles, env = process.env, appRoot, tenantIds = async () => ['default'], onRestored, fetch: doFetch, now = Date.now } = {}) {
+function createBackupService({ db, bundles, env = process.env, appRoot, tenantIds = async () => ['default'], onRestored, onBackupFinished, fetch: doFetch, now = Date.now } = {}) {
   const dir = path.resolve(env.BACKUP_DIR || path.join(appRoot, 'server', 'data', 'backups'));
   const FILES = path.join(dir, 'files'), WORK = path.join(dir, 'work'), UPLOADS = path.join(dir, 'uploads'), JOBS = path.join(dir, 'jobs');
   const keepMs = Math.max(1, Number(env.BACKUP_KEEP_HOURS) || 24) * 3600000;
@@ -94,6 +94,8 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       job.finishedAt = now(); job.partial = undefined;
       await fs.promises.rm(path.join(WORK, job.id), { recursive: true, force: true }).catch(() => {});
       save(job);
+      // A finished backup is reported to the owner of the service (the free-tier monitor remembers the last good one). Never breaks the job.
+      if (job.kind === 'backup' && job.status === 'done') { try { await onBackupFinished?.({ scope, job: view(job) }); } catch { /* informational */ } }
     }
   }
   const start = (job, scope, body) => { launch(job, scope, body).catch(() => {}); return view(job); };

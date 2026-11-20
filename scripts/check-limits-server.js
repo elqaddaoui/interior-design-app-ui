@@ -1,0 +1,327 @@
+/**
+ * Free-tier monitor (server/limits.js): the rules (levels, forecast, backup reserve, who gets told and when), the Neon and Cloudflare readers
+ * against fake providers, delivery failures, and the super admin routes through the real request handler.
+ *   node --test scripts/check-limits-server.js
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const { Readable, Writable } = require('node:stream');
+const { createBackend } = require('../server');
+const { hashPassword } = require('../server/admins');
+const { createLimits, cleanSettings, evaluate, decide, projectExhaustion, classifyR2Action, monthWindow, compose, DEFAULTS, PLAN_LIMITS } = require('../server/limits');
+const { freshDb, closeShared } = require('./test-db');
+
+const DAY = 86400000, HOUR = 3600000, GB = 1e9;
+const SUPER = { email: 'boss@platform.test', password: 'Platform-Secret-123' };
+const ENV = { CHAT_RATE_LIMIT: '2000', PGLITE_DIR: ':memory:', COOKIE_SECURE: 'false', STATIC_DIR: path.join(__dirname, 'no-such-dist'), SUPERADMIN_EMAIL: SUPER.email, SUPERADMIN_PASSWORD_HASH: hashPassword(SUPER.password) };
+test.after(closeShared);
+
+const settings = (extra = {}) => cleanSettings(extra);
+const metric = (id, used, extra = {}) => ({ id, service: id.startsWith('neon') ? 'neon' : 'cloudflare', unit: 'bytes', effect: 'writes', blocksBackup: false, used, limit: PLAN_LIMITS[id], limitSource: 'plan', status: 'ok', error: '', needs: [], source: 'measured', resetsAt: null, periodStart: null, backupCost: null, ...extra });
+const NOW = Date.UTC(2026, 10, 20, 12);
+
+// ---------------------------------------------------------------- rules
+
+test('settings: thresholds stay in order, bad values are refused, overrides can be cleared', () => {
+  assert.equal(settings().warnAt, 70);
+  assert.throws(() => settings({ warnAt: 90, urgentAt: 85 }), /INVALID_LIMIT/);
+  assert.throws(() => settings({ warnAt: 5 }), /INVALID_LIMIT/);
+  assert.throws(() => settings({ email: 'nope' }), /INVALID_EMAIL/);
+  assert.throws(() => settings({ limits: { 'neon.storage': -1 } }), /INVALID_LIMIT/);
+  const withLimit = settings({ limits: { 'neon.storage': 5 * GB, 'unknown.metric': 3 } });
+  assert.equal(withLimit.limits['neon.storage'], 5 * GB);
+  assert.equal(withLimit.limits['unknown.metric'], undefined);
+  assert.equal(cleanSettings({ limits: { 'neon.storage': null } }, withLimit).limits['neon.storage'], undefined);
+});
+
+test('levels follow the thresholds, and a full limit is critical', () => {
+  const at = pct => evaluate(metric('neon.storage', GB * pct / 100), { settings: settings(), now: NOW });
+  assert.equal(at(50).level, 'ok');
+  assert.equal(at(70).level, 'warn');
+  assert.equal(at(86).level, 'urgent');
+  assert.equal(at(96).level, 'critical');
+  const full = at(100);
+  assert.equal(full.level, 'critical');
+  assert.equal(full.exceeded, true);
+  assert.equal(evaluate(metric('neon.storage', null, { status: 'needs_setup' }), { settings: settings(), now: NOW }).level, 'ok');
+});
+
+test('R2 operations are classified like the price list', () => {
+  for (const a of ['PutObject', 'CopyObject', 'ListObjects', 'ListObjectsV2', 'CreateMultipartUpload', 'UploadPart', 'CompleteMultipartUpload']) assert.equal(classifyR2Action(a), 'A', a);
+  for (const a of ['GetObject', 'HeadObject', 'HeadBucket', 'UsageSummary']) assert.equal(classifyR2Action(a), 'B', a);
+  for (const a of ['DeleteObject', 'AbortMultipartUpload']) assert.equal(classifyR2Action(a), 'free', a);
+  assert.equal(classifyR2Action('SomethingNew'), null);
+});
+
+test('forecast: a monthly allowance warns when the pace would exhaust it before the reset, and stays quiet when the reset comes first', () => {
+  const month = monthWindow(NOW); // Nov 2026, day 20: 19.5 days in
+  const fast = projectExhaustion({ used: 80, limit: 100, now: NOW, periodStart: month.start, resetsAt: month.end });
+  assert.ok(fast && fast.days > 3 && fast.days < 6, JSON.stringify(fast)); // 80 in 19.5 days -> 20 more in ~4.9 days
+  assert.equal(projectExhaustion({ used: 30, limit: 100, now: NOW, periodStart: month.start, resetsAt: month.end }), null); // would run out in ~45 days: after the reset
+  assert.equal(projectExhaustion({ used: 5, limit: 100, now: month.start + HOUR, periodStart: month.start, resetsAt: month.end }), null); // too early to tell
+  const calm = settings({ warnAt: 90, urgentAt: 95, criticalAt: 98 }); // thresholds far away: only the pace can raise the level
+  const e = evaluate(metric('neon.compute', 75, { limit: 100, unit: 'hours', periodStart: month.start, resetsAt: month.end }), { settings: calm, now: NOW });
+  assert.equal(e.pct, 75);
+  assert.equal(e.level, 'warn'); // under the thresholds but on track to hit the limit within 7 days (about 6.5)
+  assert.deepEqual(e.reasons, ['forecast']);
+  assert.equal(evaluate(metric('neon.compute', 75, { limit: 100, periodStart: month.start, resetsAt: month.end }), { settings: { ...calm, forecastDays: 0 }, now: NOW }).level, 'ok');
+});
+
+test('forecast: continuous storage uses the growth seen in the recorded samples', () => {
+  const series = [{ t: NOW - 10 * DAY, v: 0.2 * GB }, { t: NOW - 5 * DAY, v: 0.5 * GB }];
+  const p = projectExhaustion({ used: 0.8 * GB, limit: GB, now: NOW, series });
+  assert.ok(p && Math.abs(p.days - 3.3) < 0.2, JSON.stringify(p)); // 0.06 GB per day, 0.2 GB left
+  assert.equal(projectExhaustion({ used: 0.8 * GB, limit: GB, now: NOW, series: [{ t: NOW - 1 * HOUR, v: 0.7 * GB }] }), null); // sample too recent to extrapolate
+  assert.equal(projectExhaustion({ used: 0.8 * GB, limit: GB, now: NOW, series: [{ t: NOW - 5 * DAY, v: 0.8 * GB }] }), null); // not growing
+});
+
+test('backup reserve: when what is left of the transfer would not fit a full backup, the level is urgent even at a low percentage', () => {
+  const e = evaluate(metric('neon.egress', 4.5 * GB, { effect: 'suspend', blocksBackup: true, backupCost: 0.5 * GB }), { settings: settings(), now: NOW });
+  assert.equal(e.pct, 90);
+  assert.ok(e.reserve, 'reserve reported');
+  assert.equal(e.level, 'urgent');
+  const roomy = evaluate(metric('neon.egress', 3.9 * GB, { effect: 'suspend', blocksBackup: true, backupCost: 0.2 * GB }), { settings: settings(), now: NOW });
+  assert.equal(roomy.reserve, null);
+  assert.equal(roomy.level, 'warn');
+  // A database so big that even a fresh month could not hold a backup shows the reserve problem as soon as it is within 1.5x.
+  const tight = evaluate(metric('neon.egress', 2 * GB, { effect: 'suspend', blocksBackup: true, backupCost: 2.1 * GB }), { settings: settings(), now: NOW });
+  assert.equal(tight.level, 'urgent');
+});
+
+test('announcements: a rise is told once, reminders only from "urgent", calming down re-arms, a failed delivery is retried', () => {
+  const s = settings();
+  const warn = [{ id: 'neon.storage', level: 'warn' }];
+  const urgent = [{ id: 'neon.storage', level: 'urgent' }];
+  let r = decide({}, warn, NOW, s);
+  assert.deepEqual(r.send.map(x => `${x.id}:${x.level}:${x.why}`), ['neon.storage:warn:rise']);
+  assert.equal(decide(r.next, warn, NOW + 3 * DAY, s).send.length, 0); // a plain warning is not repeated
+  const up = decide(r.next, urgent, NOW + HOUR, s);
+  assert.equal(up.send[0].why, 'rise');
+  assert.equal(decide(up.next, urgent, NOW + 5 * HOUR, s).send.length, 0); // before the reminder interval
+  assert.equal(decide(up.next, urgent, NOW + 26 * HOUR, s).send[0].why, 'reminder');
+  const calm = decide(up.next, warn, NOW + 2 * HOUR, s); // fell back to warn: remembered, nothing sent
+  assert.equal(calm.send.length, 0);
+  assert.equal(decide(calm.next, urgent, NOW + 3 * HOUR, s).send[0].why, 'rise'); // and a new rise is told again
+  assert.equal(decide(up.next, [], NOW + 2 * HOUR, s).next['neon.storage'], undefined); // back to normal: forgotten
+  // if the message was not delivered the caller keeps the OLD state, so the same decision repeats
+  assert.equal(decide({}, warn, NOW + HOUR, s).send.length, 1);
+});
+
+test('the message says what happens, how long is left, and where to back up; it never contains a key', () => {
+  const e = evaluate(metric('neon.egress', 4.6 * GB, { effect: 'suspend', blocksBackup: true, backupCost: 0.9 * GB, resetsAt: NOW + 10 * DAY }), { settings: settings(), now: NOW });
+  const message = compose([e], { base: 'https://app.test/', lastBackupAt: NOW - 9 * DAY, now: NOW });
+  assert.match(message.subject, /Back up now.*Neon network transfer at 92 %/);
+  assert.match(message.text, /SUSPENDED/);
+  assert.match(message.text, /full backup needs about 900\.0 MB/);
+  assert.match(message.text, /last backup you saved was on 2026-11-11 \(9 days ago\)/);
+  assert.match(message.text, /https:\/\/app\.test\/super-admin\/limits/);
+  assert.match(compose([e], { now: NOW }).text, /No backup has been saved yet/);
+});
+
+// ---------------------------------------------------------------- the service with fake providers
+
+const neonBody = (extra = {}) => ({ project: { compute_time_seconds: 3600 * 40, data_transfer_bytes: 1 * GB, consumption_period_start: new Date(NOW - 10 * DAY).toISOString(), consumption_period_end: new Date(NOW + 20 * DAY).toISOString(), branch_logical_size_limit_bytes: GB, ...extra } });
+const cfBody = (ops, storage) => ({ data: { viewer: { accounts: [{ ops, store: storage }] } } });
+const ok = body => ({ ok: true, status: 200, json: async () => body });
+const bad = status => ({ ok: false, status, json: async () => ({}) });
+
+async function service({ env = {}, neon = () => ok(neonBody()), cf = () => ok(cfBody([], [])), clock = () => NOW, mail = { ok: true }, totals } = {}) {
+  const db = await freshDb();
+  const calls = [], sent = [];
+  const fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), auth: (init.headers || {}).Authorization, body: init.body });
+    return String(url).includes('neon') ? neon(url, init) : cf(url, init);
+  };
+  const limits = createLimits({
+    db, env: { NEON_API_KEY: 'neon-key-123456', NEON_PROJECT_ID: 'proj-1', DATABASE_URL: 'postgres://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/db', CLOUDFLARE_API_TOKEN: 'cf-token-123456', R2_ACCOUNT_ID: 'acc1', R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_BUCKET: 'bk', R2_PUBLIC_BASE_URL: 'https://m.test', ...env },
+    clock: () => clock(), fetch, transport: () => true, recipient: async () => 'boss@platform.test',
+    notify: async message => { sent.push(message); return typeof mail === 'function' ? mail(message) : mail; },
+    mediaTotals: async () => totals ?? { r2: { files: 120, bytes: 3 * GB } },
+  });
+  return { db, limits, calls, sent };
+}
+
+test('reads Neon and Cloudflare, applies the plan limits, and shows each number with its source', async () => {
+  const ops = [{ dimensions: { actionType: 'PutObject' }, sum: { requests: 400000 } }, { dimensions: { actionType: 'GetObject' }, sum: { requests: 2000000 } }, { dimensions: { actionType: 'DeleteObject' }, sum: { requests: 9000000 } }];
+  const storage = [{ dimensions: { bucketName: 'bk', datetime: 'now' }, max: { payloadSize: 4 * GB, metadataSize: 0, objectCount: 900 } }, { dimensions: { bucketName: 'bk', datetime: 'older' }, max: { payloadSize: 1 * GB, metadataSize: 0, objectCount: 10 } }];
+  const s = await service({ cf: () => ok(cfBody(ops, storage)) });
+  const snap = await s.limits.check({ force: true });
+  const by = Object.fromEntries(snap.metrics.map(m => [m.id, m]));
+  assert.equal(by['neon.compute'].used, 40); // 144000 CPU-seconds / 3600
+  assert.equal(by['neon.compute'].source, 'neon');
+  assert.equal(by['neon.egress'].used, 1 * GB);
+  assert.equal(by['neon.storage'].limit, GB);
+  assert.equal(by['neon.storage'].limitSource, 'api'); // the storage cap comes from the project itself
+  assert.ok(by['neon.storage'].used > 0);
+  assert.equal(by['r2.storage'].used, 4 * GB, 'newest row of the bucket, not the sum of its history');
+  assert.equal(by['r2.classA'].used, 400000);
+  assert.equal(by['r2.classB'].used, 2000000);
+  assert.equal(by['r2.classB'].pct, 20);
+  assert.equal(snap.services.neon.state, 'on');
+  assert.equal(snap.level, 'ok');
+  assert.equal(s.calls.find(c => c.url.includes('neon')).auth, 'Bearer neon-key-123456');
+  assert.match(s.calls.find(c => c.url.includes('neon')).url, /\/projects\/proj-1$/);
+  assert.equal(JSON.parse(s.calls.find(c => !c.url.includes('neon')).body).variables.accountTag, 'acc1');
+  assert.equal(s.sent.length, 0, 'nothing to say while everything is low');
+  assert.doesNotMatch(JSON.stringify(snap), /neon-key-123456|cf-token-123456|postgres:\/\//, 'no secret in the snapshot');
+});
+
+test('without keys the monitor says what to add instead of inventing numbers; R2 storage falls back to the app\'s own file inventory', async () => {
+  const s = await service({ env: { NEON_API_KEY: '', NEON_PROJECT_ID: '', CLOUDFLARE_API_TOKEN: '', DB_PROVIDER: 'neon' } });
+  const snap = await s.limits.check({ force: true });
+  const by = Object.fromEntries(snap.metrics.map(m => [m.id, m]));
+  assert.equal(by['neon.compute'].status, 'needs_setup');
+  assert.deepEqual(by['neon.compute'].needs, ['NEON_API_KEY', 'NEON_PROJECT_ID']);
+  assert.equal(by['neon.compute'].used, null);
+  assert.equal(by['r2.classA'].status, 'needs_setup');
+  assert.equal(by['r2.storage'].source, 'estimate');
+  assert.equal(by['r2.storage'].used, 3 * GB);
+  assert.ok(by['neon.storage'].used > 0, 'database size needs no key');
+  assert.equal(s.calls.length, 0);
+});
+
+test('a service that is switched off or not used is not measured', async () => {
+  const off = await service({ env: { NEON_API_KEY: '', NEON_PROJECT_ID: '', CLOUDFLARE_API_TOKEN: '', R2_ACCOUNT_ID: '', R2_BUCKET: '', R2_ACCESS_KEY_ID: '', R2_SECRET_ACCESS_KEY: '', R2_PUBLIC_BASE_URL: '' }, mail: { ok: true } });
+  const snap = await off.limits.check({ force: true });
+  assert.equal(snap.services.cloudflare.state, 'not_used');
+  assert.equal(snap.services.neon.state, 'not_used'); // a local PGlite database is not Neon
+  assert.equal(snap.metrics.length, 0);
+  const s = await service();
+  await s.limits.setSettings({ services: { cloudflare: false } });
+  const snap2 = await s.limits.check({ force: true, settingsChanged: true });
+  assert.equal(snap2.services.cloudflare.state, 'off');
+  assert.ok(!snap2.metrics.some(m => m.id.startsWith('r2.')));
+});
+
+test('provider errors are reported per service without failing the others, and a wrong key is called AUTH', async () => {
+  const s = await service({ neon: () => bad(401), cf: () => ok(cfBody([], [])) });
+  const snap = await s.limits.check({ force: true });
+  assert.equal(snap.services.neon.error, 'AUTH');
+  assert.equal(snap.metrics.find(m => m.id === 'neon.compute').status, 'error');
+  assert.equal(snap.metrics.find(m => m.id === 'neon.storage').status, 'ok', 'the database size is still measured');
+  assert.equal(snap.metrics.find(m => m.id === 'r2.classA').status, 'ok');
+  const net = await service({ neon: () => { throw new Error('boom'); } });
+  assert.equal((await net.limits.check({ force: true })).services.neon.error, 'NETWORK');
+  const gql = await service({ cf: () => ok({ errors: [{ message: 'not authorized to access this resource' }] }) });
+  assert.equal((await gql.limits.check({ force: true })).services.cloudflare.error, 'AUTH');
+});
+
+test('a limit that moves up is mailed once; staying there does not repeat; urgent repeats after the reminder interval; a failed mail is retried', async () => {
+  let now = NOW, level = 75;
+  let mailOk = true;
+  const s = await service({ clock: () => now, neon: () => ok(neonBody({ data_transfer_bytes: 5 * GB * level / 100 })), mail: () => (mailOk ? { ok: true } : { ok: false, error: 'HTTP_500' }) });
+  await s.limits.setSettings({ forecastDays: 0 }); // the fixed 10-day period would otherwise turn 75 % into an urgent pace warning
+  const run = async (step = 0) => { now += step; return s.limits.check({ force: true }); };
+  await run();
+  assert.equal(s.sent.length, 1);
+  assert.match(s.sent[0].subject, /Heads-up: Neon network transfer at 75 %/);
+  await run(HOUR); assert.equal(s.sent.length, 1, 'same level, no repeat');
+  level = 88; await run(HOUR);
+  assert.equal(s.sent.length, 2);
+  assert.match(s.sent[1].subject, /Back up now: Neon network transfer at 88 %/);
+  await run(5 * HOUR); assert.equal(s.sent.length, 2, 'reminder not due yet');
+  await run(25 * HOUR); assert.equal(s.sent.length, 3, 'reminder after 24 h');
+  level = 97; mailOk = false;
+  await run(HOUR); assert.equal(s.sent.length, 4, 'critical is attempted');
+  assert.equal((await s.limits.status()).mail.ok, false);
+  mailOk = true;
+  await run(HOUR); assert.equal(s.sent.length, 5, 'the failed message is sent again at the next check');
+  assert.equal((await s.limits.status()).mail.ok, true);
+  await run(HOUR); assert.equal(s.sent.length, 5, 'and then it is quiet');
+});
+
+test('the monitor announces its own blindness after 12 hours, once per reminder interval', async () => {
+  let now = NOW;
+  const s = await service({ clock: () => now, neon: () => bad(500) });
+  await s.limits.check({ force: true });
+  assert.equal(s.sent.length, 0, 'a short outage is not worth a message');
+  now += 13 * HOUR;
+  await s.limits.check({ force: true });
+  assert.equal(s.sent.length, 1);
+  assert.match(s.sent[0].text, /Neon limits could not be read for more than 12 hours/);
+  now += 2 * HOUR;
+  await s.limits.check({ force: true });
+  assert.equal(s.sent.length, 1);
+});
+
+test('the last backup is the newest downloaded platform archive or the newest remote copy; a store backup does not count', async () => {
+  const s = await service();
+  assert.equal(await s.limits.lastBackupAt(), null);
+  await s.db.query("INSERT INTO saas_audit(id,at,actor,action,tenant_id,target,detail) VALUES('a1',$1,'x','backup.download','shop-1','backup','dwira-shop-1-db-20261119.zip'),('a2',$2,'x','backup.download',NULL,'backup','dwira-platform-both-20261110.zip')", [NOW - 1 * DAY, NOW - 10 * DAY]);
+  assert.equal(await s.limits.lastBackupAt(), NOW - 10 * DAY);
+  await s.limits.noteBackup(NOW - 2 * DAY);
+  assert.equal(await s.limits.lastBackupAt(), NOW - 2 * DAY);
+});
+
+test('only one instance measures at a time (database lease)', async () => {
+  const s = await service();
+  const a = s.limits.check({ force: true });
+  const b = s.limits.check({ force: true });
+  await Promise.all([a, b]);
+  assert.equal(s.calls.filter(c => c.url.includes('neon')).length, 1);
+});
+
+test('turning the monitor off keeps it silent', async () => {
+  const s = await service({ neon: () => ok(neonBody({ data_transfer_bytes: 4.9 * GB })) });
+  await s.limits.setSettings({ enabled: false });
+  const snap = await s.limits.check({ force: true, settingsChanged: true });
+  assert.equal(snap.disabled, true);
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.calls.length, 0);
+});
+
+// ---------------------------------------------------------------- through the real handler
+
+function call(backend, url, { method = 'GET', body, headers = {} } = {}) {
+  return new Promise(resolve => {
+    const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
+    Object.assign(req, { url, method, headers: { 'content-type': 'application/json', host: 'app.test', ...headers }, socket: { remoteAddress: 'limits-test' } });
+    const out = { headers: {} };
+    const chunks = [];
+    const res = new Writable({ write(chunk, encoding, done) { chunks.push(Buffer.from(chunk)); done(); } });
+    res.headersSent = false;
+    res.setHeader = (k, v) => { out.headers[k.toLowerCase()] = v; };
+    res.writeHead = (status, extra) => { out.status = status; Object.assign(out.headers, Object.fromEntries(Object.entries(extra || {}).map(([k, v]) => [k.toLowerCase(), v]))); res.headersSent = true; };
+    res.on('finish', () => { const text = Buffer.concat(chunks).toString(); try { out.body = text ? JSON.parse(text) : undefined; } catch { out.text = text; } resolve(out); });
+    backend.handle(req, res);
+  });
+}
+
+test('super admin routes: need a session, return the snapshot, save settings, refuse bad input, and never leak a key', async () => {
+  const db = await freshDb();
+  const mails = [];
+  const backend = createBackend({ env: { ...ENV, NEON_API_KEY: 'neon-key-123456', NEON_PROJECT_ID: 'p1', ALERT_WEBHOOK_URL: 'https://hooks.test/x' }, db, media: { storage: null, download: async () => { throw new Error('offline'); } }, mailer: async m => { mails.push(m); return { ok: true }; } });
+  await backend.db.query('select 1');
+  await db.query("INSERT INTO saas_tenants(id,slug,name,kind,status,created_at,updated_at) VALUES('default','default','Default','default','active',0,0) ON CONFLICT (id) DO NOTHING");
+  backend.tenants.invalidate();
+  assert.equal((await call(backend, '/api/super-admin/limits')).status, 401);
+  const signin = await call(backend, '/api/super-admin/login', { method: 'POST', headers: { 'x-dwira-native': '1' }, body: SUPER });
+  const S = { 'x-super-token': signin.body.token };
+  const api = (url, opts = {}) => call(backend, `/api/super-admin${url}`, { ...opts, headers: { ...S, ...(opts.headers || {}) } });
+
+  const first = await api('/limits');
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.ok(Array.isArray(first.body.metrics));
+  assert.equal(first.body.settings.warnAt, 70);
+  assert.equal(first.body.planLimits['neon.storage'], GB);
+  assert.equal(first.body.keys.neonApi, true);
+  assert.equal(first.body.delivery.transport, true);
+  assert.equal(first.body.backupHost, true);
+  assert.doesNotMatch(JSON.stringify(first.body), /neon-key-123456|hooks\.test/);
+  assert.equal((await api('/limits/summary')).body.summary.level, first.body.level);
+  assert.ok('limits' in (await api('/stats')).body);
+
+  assert.equal((await api('/limits/settings', { method: 'PATCH', body: { warnAt: 95 } })).status, 400);
+  assert.equal((await api('/limits/settings', { method: 'PATCH', body: { email: 'bad' } })).status, 400);
+  const saved = await api('/limits/settings', { method: 'PATCH', body: { warnAt: 60, urgentAt: 80, email: 'me@owner.test', limits: { 'r2.storage': 5 * GB } } });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.settings.warnAt, 60);
+  assert.equal(saved.body.settings.limits['r2.storage'], 5 * GB);
+  assert.ok((await api('/audit?limit=20')).body.some(r => r.action === 'limits.settings'));
+
+  const test1 = await api('/limits/test', { method: 'POST', body: {} });
+  assert.equal(test1.status, 200, JSON.stringify(test1.body));
+  assert.equal(test1.body.to, 'me@owner.test');
+  assert.match(mails.at(-1).subject, /Test: free-tier limit warning/);
+});

@@ -7,6 +7,8 @@ import { tr } from '@/superadmin/i18n';
 import type { Stats } from '@/superadmin/types';
 import { Btn, ErrorLine, Heading, Loading, Row, Stat, useLoad } from '@/superadmin/ui';
 
+const LIMIT_WORD = { ok: 'Normal', warn: 'Warning', urgent: 'Back up now', critical: 'Critical' } as const;
+
 /** Home: five numbers and the three things you do most. */
 export default function Overview() {
   const router = useRouter();
@@ -25,6 +27,7 @@ export default function Overview() {
             <Stat label={tr('Credits used')} value={data?.creditsUsed ?? 0} hint={tr('{n} clients in all stores', { n: data?.clients ?? 0 })} testID="kpi-credits" />
             <Stat label={tr('API calls (24 h)')} value={data?.calls24h ?? 0} hint={tr('{n} demos with the API on', { n: data?.demosAiOn ?? 0 })} testID="kpi-calls" onPress={go('/super-admin/apis?tab=usage')} />
             <Stat label={tr('API warnings')} value={data?.alerts ?? 0} hint={tr(data?.alerts ? 'unusual use to review' : 'nothing unusual')} testID="kpi-alerts" onPress={go('/super-admin/apis?tab=alerts')} />
+            <Stat label={tr('Service limits')} value={data?.limits ? tr(LIMIT_WORD[data.limits.level]) : tr('Not checked yet')} hint={data?.limits?.worst ? tr('{pct} % of the most used free limit', { pct: data.limits.worst.pct }) : tr('Neon and Cloudflare free plans')} testID="kpi-limits" onPress={go('/super-admin/limits')} />
             <Stat label={tr('API connections')} value={data?.apis ?? 0} hint={tr(data?.platformManaged === 1 ? '{n} store uses them' : '{n} stores use them', { n: data?.platformManaged ?? 0 })} testID="kpi-apis" onPress={go('/super-admin/apis')} />
           </View>
         </View>

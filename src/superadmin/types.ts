@@ -15,7 +15,7 @@ export type Demo = { id: string; name: string; description: string; status: 'dra
 export type Assignment = { id: string; tenantId: string; slug: string | null; name: string | null; status: string | null; ownerEmail: string; demoVersion: number; createdAt: number; path: string; adminPath: string };
 export type Domain = { domain: string; verified: boolean; txtName: string; txtValue: string };
 export type AuditRow = { id: string; at: number; actor: string; action: string; tenantId: string | null; target: string; detail: string };
-export type Stats = { tenants: number; active: number; suspended: number; demos: number; assignments: number; themes: number; clients: number; apis: number; creditsUsed: number; platformManaged: number; alerts: number; calls24h: number; demosAiOn: number };
+export type Stats = { tenants: number; active: number; suspended: number; demos: number; assignments: number; themes: number; clients: number; apis: number; creditsUsed: number; platformManaged: number; alerts: number; calls24h: number; demosAiOn: number; limits?: LimitsSummary | null };
 export type ApiKind = 'image' | 'text' | 'other';
 export type ApiConn = { id: string; kind: ApiKind; provider: string; label: string; baseUrl: string; model: string; enabled: boolean; isDefault: boolean; hasKey: boolean; keyHint: string; stores: number };
 export type ApiCatalog = Record<ApiKind, { id: string; label: string; needsUrl: boolean; needsModel: boolean }[]>;
@@ -99,3 +99,30 @@ export type Consolidation = {
   rows: { checked: number; missing: number; samples: { id: string; store: string; storage: string; key: string }[] };
 };
 export type ConsolidateResult = { moved: number; merged: number; waiting: number; bytes: number; conflicts: number; failed: number; rowsFixed: number; dbMoved: number; dbFailed: number; unreadable: string[]; remaining: number; partial: boolean; history: string };
+
+export type LimitLevel = 'ok' | 'warn' | 'urgent' | 'critical';
+export type LimitsSummary = { at: number; level: LimitLevel; worst: { id: string; pct: number; level: LimitLevel } | null };
+export type LimitMetric = {
+  id: string; service: 'neon' | 'cloudflare'; unit: 'bytes' | 'hours' | 'count'; effect: string; blocksBackup: boolean;
+  used: number | null; limit: number; limitSource: 'plan' | 'api' | 'custom'; status: 'ok' | 'needs_setup' | 'error'; error: string; needs: string[];
+  source: 'measured' | 'neon' | 'cloudflare' | 'estimate'; resetsAt: number | null; periodStart: number | null; backupCost: number | null;
+  pct: number | null; level: LimitLevel; reasons: string[]; exceeded: boolean;
+  projection: { at: number; days: number } | null; reserve: { need: number; left: number } | null;
+};
+export type LimitServiceState = { state: 'on' | 'off' | 'not_used'; error?: string; provider?: string; api?: boolean; r2?: boolean; dbBytes?: number | null };
+export type LimitSettings = {
+  enabled: boolean; email: string; warnAt: number; urgentAt: number; criticalAt: number; forecastDays: number; reminderHours: number;
+  services: { neon: boolean; cloudflare: boolean }; limits: Record<string, number>;
+};
+export type LimitsStatus = {
+  at: number; level: LimitLevel; metrics: LimitMetric[]; services: { neon?: LimitServiceState; cloudflare?: LimitServiceState };
+  mail?: { at: number; ok: boolean; error: string; count: number } | null;
+  settings: LimitSettings; defaults: LimitSettings; planLimits: Record<string, number>;
+  delivery: { transport: boolean; recipient: string }; keys: { neonApi: boolean; cloudflareApi: boolean };
+  lastBackupAt: number | null; backupHost: boolean;
+};
+export type BackupJob = {
+  id: string; kind: string; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled'; progress: number; errors: string[]; warnings: string[];
+  canDownload: boolean; result: { name?: string; size?: number } | null; options: { destination: string };
+};
+export type BackupCaps = { available: boolean; reason: string; destinations: Record<string, boolean | { serverConfigured: boolean }>; running: string | null };

@@ -137,6 +137,10 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
     db: rawDb, bundles, env, appRoot: env.BACKUP_APP_ROOT || path.join(__dirname, '..'),
     tenantIds: async () => (await rawDb.query('SELECT id FROM saas_tenants ORDER BY id')).map(row => row.id),
     // The database changed under the running process: forget every in-memory copy and make open apps refetch.
+    // A platform backup that holds the database and reached Google Drive / Dropbox counts as "saved" for the free-tier monitor.
+    async onBackupFinished({ scope, job }) {
+      if (scope.kind === 'platform' && job.options?.destination && job.options.destination !== 'local' && job.options.type !== 'app') await superAdmin.limits.noteBackup();
+    },
     async onRestored(scope) {
       const ids = scope.kind === 'platform' ? (await rawDb.query('SELECT id FROM saas_tenants')).map(row => row.id) : [scope.tenantId];
       if (scope.kind === 'platform') await rawDb.query("INSERT INTO saas_tenants(id,slug,name,kind,status,created_at,updated_at) VALUES('default','default','Default','default','active',0,0) ON CONFLICT (id) DO NOTHING");
@@ -844,6 +848,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
             const result = await withTimeout(target.campaigns.tick({ force: true, budgetMs: 20000 }), 25000);
             if (id === bundle.tenantId || !ran) ran = result;
           }
+          // The daily platform cron also measures the free-tier limits (serverless hosts have no timer of their own).
+          if (cron) await withTimeout(superAdmin.limits.check({ force: true }), 20000).catch(() => {});
           return json(200, { ok: true, campaigns: ran && !ran.skipped ? !!ran.ok : null });
         }
 
@@ -967,8 +973,14 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
       }
     })().catch(() => {});
   }, Math.min(activeEvery, 15000));
+  // Free-tier monitor: its own slow schedule (every 30 minutes while the app is used, twice a day otherwise), decided inside `tick`.
+  const limitsTimer = setInterval(() => {
+    if (!db.configured() || !isReady() || closed) return;
+    void superAdmin.limits.tick({ active: Date.now() - lastApiAt < 300000 }).catch(() => {});
+  }, 60000);
+  limitsTimer.unref();
   timer.unref();
-  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(sweeper); void db.close(); });
+  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(limitsTimer); clearInterval(sweeper); void db.close(); });
   return { server, handle, backup, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
 }
 module.exports = { createBackend, passwordMatches };

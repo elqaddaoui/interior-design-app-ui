@@ -47,6 +47,8 @@ const MESSAGES: Record<string, string> = {
   INVALID_STORAGE: 'Choose Cloudflare R2 or the app folder.', R2_NOT_CONFIGURED: 'Cloudflare R2 is not configured on this server.',
   APP_STORAGE_UNAVAILABLE: 'The app folder is not usable on this host (read-only or not persistent).',
   SOURCE_MISSING: 'A file of the source could not be found.', VERIFY_FAILED: 'The copy could not be verified. Nothing was changed.',
+  BACKUP_UNSUPPORTED_HOST: 'This host cannot make backups (no disk). Use the Neon and Cloudflare dashboards, or run the server on a host with a disk.',
+  BACKUP_BUSY: 'A backup is already running. Wait for it to finish.', BACKUP_SERVER_BUSY: 'The server is busy with other backups. Try again in a few minutes.', JOB_NOT_FOUND: 'That backup is no longer there.', FILE_NOT_FOUND: 'The backup file is no longer there. Start a new backup.',
   AI_DISABLED_DEMO: 'The API is off for this demo. Turn it on from Demos.', AI_PAUSED: 'The API of this store is paused.',
 };
 export const saMessage = (error: unknown) => (error instanceof SaError ? tr(MESSAGES[error.code] || error.code) : tr('Something went wrong.'));

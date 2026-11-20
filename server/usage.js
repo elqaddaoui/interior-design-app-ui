@@ -292,7 +292,20 @@ function createUsage(db, { env = process.env, clock = Date.now, mailer } = {}) {
     return { calls: Number(row.calls), errors: Number(row.errors) };
   }
 
-  return { record, scan, getSettings, setSettings, alerts, resolve, resolveAll, openCount, report, today, testEmail, transport, recipient: async () => recipient(await getSettings()), DEFAULTS };
+  /**
+   * A message of the platform owner's own (free-tier limit warnings): same transport and same default recipient as the API warnings.
+   * `to` overrides the recipient. Never throws: { ok, error?, to }.
+   */
+  async function notify({ subject, text, to }) {
+    try {
+      const target = to || await recipient(await getSettings());
+      if (!target && !env.ALERT_WEBHOOK_URL) return { ok: false, error: 'NO_RECIPIENT' };
+      const result = await send({ to: target, subject, text });
+      return { ...result, to: target };
+    } catch { return { ok: false, error: 'FAILED' }; }
+  }
+
+  return { record, scan, getSettings, setSettings, alerts, resolve, resolveAll, openCount, report, today, testEmail, notify, transport, recipient: async () => recipient(await getSettings()), DEFAULTS };
 }
 
 module.exports = { createUsage, cleanSettings, defaultMailer, DEFAULTS, KINDS };

@@ -92,6 +92,8 @@ Without it the server does not start. The runtime log then shows:
 `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (otherwise generated and stored in the database) · `FCM_SERVICE_ACCOUNT_JSON` ·
 `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` · `APP_ORIGINS` (only for a frontend hosted on another domain) · `CONTENT_S_MAXAGE`, `API_RATE_LIMIT`, `CHAT_RATE_LIMIT`, `PUSH_WAIT_MS`.
 
+`NEON_API_KEY`, `NEON_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (read-only keys for **Super admin > Service limits**, which warns before the Neon or R2 free tier is used up; without them the page shows what to add), `RESEND_API_KEY` + `ALERT_FROM` or `ALERT_WEBHOOK_URL`, `ALERT_EMAIL` (where the warnings go).
+
 ### Media in the app directory (self-hosted)
 
 To keep files on the Hostinger disk instead of R2, set `MEDIA_DIR` to a folder **outside** the deploy folder (for example `/home/<user>/media`): Hostinger replaces the whole build folder on every deploy, so anything inside it would disappear. Then choose *App directory* in **Super admin > Media & storage** (or **Move all** to migrate from R2 / the database). Back this folder up with the database.
@@ -116,6 +118,7 @@ To keep files on the Hostinger disk instead of R2, set `MEDIA_DIR` to a folder *
 | `BACKGROUND_INTERVAL_MS` | `30000` | Notification retries and campaign scheduler while the app is in use |
 | `BACKGROUND_IDLE_MS` | `300000` | The same when nobody used the app for 5 minutes |
 | `DB_RETRY_MS` | `1000` | First delay between database connection retries at startup (doubles up to 15 s) |
+| `LIMITS_*` | n/a | None needed: thresholds, the forecast window, the reminder interval and the recipient are edited on the Service limits page. The check runs about every 30 minutes while the app is in use (every 12 hours when idle) |
 | `TRUST_PROXY` | `true` on Hostinger | Reads the visitor address forwarded by Hostinger's local proxy (per-visitor rate limits) |
 
 ## Home shows "no tools" / "Impossible de charger le contenu"
