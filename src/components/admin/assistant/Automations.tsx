@@ -33,6 +33,7 @@ export function useAutomations() {
     if (!backendEnabled) return;
     try { const r = await api<AutomationsInfo>('/admin/assistant/automations'); setInfo(r); setSaved(r.items); setList(clone(r.items)); setFailed(false); } catch { setFailed(true); }
   }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the server copy on mount
   useEffect(() => { load(); }, [load]);
   const dirty = listDirty(list, saved);
   const save = async () => {
@@ -108,14 +109,15 @@ function Editor({ value, onChange, reveal }: { value: Automation; onChange: (v: 
   const { t } = useT();
   const errs = automationErrors(value);
   const [kw, setKw] = useState(value.trigger.keywords.join(', '));
-  const [show, setShow] = useState(false);
+  const [show, setShow] = useState(reveal);
   const tr = value.trigger, rp = value.reply, sc = tr.schedule;
   const setTr = (p: Partial<Automation['trigger']>) => onChange({ ...value, trigger: { ...tr, ...p } });
   const setRp = (p: Partial<Automation['reply']>) => onChange({ ...value, reply: { ...rp, ...p } });
   const bad = rp.type === 'template' ? unknownVars(rp.text) : [];
   const err = (code: string) => (show && errs.includes(code) ? <Txt testID={`asx-err-${code}`} className="text-danger text-[12px] mt-1">{t(`asx.a.err.${code}`)}</Txt> : null);
   // Errors stay hidden while the owner is still typing; pressing Save (reveal) or leaving the name field shows them.
-  useEffect(() => { if (reveal) setShow(true); }, [reveal]);
+  const [seenReveal, setSeenReveal] = useState(reveal);
+  if (seenReveal !== reveal) { setSeenReveal(reveal); if (reveal) setShow(true); }
   const toggleDay = (d: number) => setTr({ schedule: { ...sc, days: sc.days.includes(d) ? sc.days.filter((x) => x !== d) : [...sc.days, d].sort() } });
   const days = t('asx.a.day', { returnObjects: true }) as unknown as string[];
   return (

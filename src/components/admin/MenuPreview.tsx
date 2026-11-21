@@ -18,8 +18,9 @@ export function MenuPreview({ design, animated }: { design: AdminMenuDesign; ani
   const { rtl } = useT();
   const [step, setStep] = useState(0);
   const cur = useSharedValue(y(STEPS[0])), beam = useSharedValue(y(STEPS[0])), halo = useSharedValue(y(STEPS[2])), haloOn = useSharedValue(0);
+  if (!animated && step !== 0) setStep(0); // one still frame (derived while rendering)
   useEffect(() => {
-    if (!animated) { setStep(0); return; }
+    if (!animated) return;
     const id = setInterval(() => setStep((s) => (s + 1) % STEPS.length), 1300);
     return () => clearInterval(id);
   }, [animated]);

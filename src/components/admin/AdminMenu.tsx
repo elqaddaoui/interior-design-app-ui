@@ -134,7 +134,7 @@ function Row({ n, on, design, motion, p, pending, label, onGo, onHover, menu }: 
       <RightClick items={() => menu(n)}>
         <Animated.View style={box}>
           <Pressable testID={`nav-${n.key}`} accessibilityRole="link" accessibilityLabel={label} accessibilityState={{ selected: on }} onPress={() => onGo(n)} {...hover}
-            onPressIn={() => { if (motion) scale.value = withTiming(0.97, { duration: 90 }); }} onPressOut={() => { scale.value = motion ? withSpring(1, { damping: 14, stiffness: 300 }) : 1; }}
+            onPressIn={() => { if (motion) scale.set(withTiming(0.97, { duration: 90 })); }} onPressOut={() => { scale.set(motion ? withSpring(1, { damping: 14, stiffness: 300 }) : 1); }}
             className={`flex-row items-center rounded-2xl overflow-hidden ${!on && design !== 'spotlight' ? 'hover:bg-surface2' : ''}`} style={{ height: ROW, paddingStart: 8, paddingEnd: 10, gap: 12 }}>
             <View className={`w-7 h-7 rounded-[10px] items-center justify-center ${tile ? 'bg-primary' : ''}`}>
               <Icon name={n.icon} size={19} tone={tile ? 'onprimary' : on ? 'fg' : 'muted'} />

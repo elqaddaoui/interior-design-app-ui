@@ -155,6 +155,7 @@ export function DragRow({ id, reorder, layout = 'list', handleStyle, handleTone 
 
   const place = useCallback(() => { ty.set(last.y + latest.reorder.scrollDelta()); }, [latest, last, ty]);
   const reset = useCallback(() => { tx.set(0); ty.set(0); lift.set(withTiming(0, { duration: 120 })); }, [tx, ty, lift]);
+  // eslint-disable-next-line react-hooks/immutability -- `latest` is a mutable holder read by the gesture callbacks, refreshed after every render
   useEffect(() => { latest.reorder = reorder; });
 
   // BUG FIX (tiles left displaced / lifted after a drop): the animated style used to be detached the moment the drag ended. On the web

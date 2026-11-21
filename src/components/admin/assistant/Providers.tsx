@@ -30,6 +30,7 @@ export function useProviders(enabled = true) {
       if (!keepDraft) setCfg(clone(next));
     } catch { setFailed(true); }
   }, [enabled]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the provider status on mount
   useEffect(() => { load(); }, [load]);
   const dirty = !!cfg && !!saved && configDirty(cfg, saved);
   const invalid = !!cfg && cfg.paid.some((p) => paidErrors(p).length > 0);

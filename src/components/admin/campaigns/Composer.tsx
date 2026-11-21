@@ -31,7 +31,8 @@ const len = (v: string) => Array.from(v).length;
 
 function NumberInput({ label, value, onChange, testID, suffix }: { label: string; value: number; onChange: (n: number) => void; testID: string; suffix?: string }) {
   const [text, setText] = React.useState(String(value));
-  React.useEffect(() => { setText(String(value)); }, [value]);
+  const [seen, setSeen] = React.useState(value);
+  if (seen !== value) { setSeen(value); setText(String(value)); } // follow the prop (derived while rendering)
   return (
     <View className="flex-1" style={{ minWidth: 140 }}>
       <Txt className="text-[12px] font-semibold text-muted mb-1" numberOfLines={2}>{label}</Txt>
@@ -88,6 +89,7 @@ export function Composer({ visible, onClose, mode, campaign }: { visible: boolea
   React.useEffect(() => {
     if (!visible) return;
     const c = campaign;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the form is reloaded every time the popup opens
     setName(c?.name ?? ''); setTitle(c?.title ?? EMPTY); setBody(c?.body ?? EMPTY); setUrl(c?.url ?? '/');
     setSegments(c?.audience?.segments ?? []); setClientIds(c?.audience?.clientIds ?? []); setNewDays(c?.audience?.newDays ?? 7); setInactiveDays(c?.audience?.inactiveDays ?? 14);
     const s = c?.schedule;
@@ -119,7 +121,7 @@ export function Composer({ visible, onClose, mode, campaign }: { visible: boolea
   // Exact reach of the current selection.
   React.useEffect(() => {
     if (!visible || auto) return;
-    if (!segments.length && !clientIds.length) { setReach(null); return; }
+    if (!segments.length && !clientIds.length) { const clear = setTimeout(() => setReach(null), 0); return () => clearTimeout(clear); }
     const timer = setTimeout(() => { api<{ reachable: number; reachableTotal: number }>('/admin/campaigns/preview', { method: 'POST', body: { segments, clientIds, newDays: newDays || 7, inactiveDays: inactiveDays || 14 } }).then(setReach).catch(() => setReach(null)); }, 300);
     return () => clearTimeout(timer);
   }, [visible, auto, segments, clientIds, newDays, inactiveDays]);

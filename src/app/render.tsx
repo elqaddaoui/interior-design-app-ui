@@ -91,6 +91,7 @@ export default function RenderPage() {
     run();
     return () => { signal.current.cancelled = true; };
   // One generation per mount; retries explicitly call run with the same claim ID.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // A failed attempt (e.g. no credits yet, network) recovers by itself: the balance is re-read while the error is shown, and

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -18,13 +18,15 @@ export function BackupForm({ caps, busy, error, onStart }: { caps: Capabilities;
   // A detected provider (Neon or Supabase) is selected for the person and cannot be changed; only an undetected one (generic Postgres, development) may be chosen.
   const locked = caps.provider.locked ?? (caps.provider.detected === 'neon' || caps.provider.detected === 'supabase');
   const [provider, setProvider] = useState<Provider>(caps.provider.detected === 'supabase' ? 'supabase' : 'neon');
-  useEffect(() => { if (caps.provider.detected === 'supabase' || caps.provider.detected === 'neon') setProvider(caps.provider.detected); }, [caps.provider.detected]);
+  const [seenProvider, setSeenProvider] = useState(caps.provider.detected);
+  if (seenProvider !== caps.provider.detected) { setSeenProvider(caps.provider.detected); if (caps.provider.detected === 'supabase' || caps.provider.detected === 'neon') setProvider(caps.provider.detected); }
   const [data, setData] = useState<'content' | 'empty'>('content');
   const [media, setMedia] = useState(false);
   const [destination, setDestination] = useState<Destination>('local');
   const [token, setToken] = useState('');
   const [folder, setFolder] = useState('');
-  useEffect(() => { if (!types.includes(type)) setType(types[0] ?? 'db'); }, [types, type]);
+  const fallbackType: BackupType = types[0] ?? 'db';
+  if (!types.includes(type) && type !== fallbackType) setType(fallbackType); // the chosen type is no longer offered
   // A store has no server files: its "app" choice is its design and settings, which live in the database too (always with content).
   const hasDb = type !== 'app' || !!caps.storeSplit;
   const showData = type !== 'app';

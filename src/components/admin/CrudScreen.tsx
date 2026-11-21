@@ -16,7 +16,7 @@ import { AdminLoading } from './AdminLoading';
 import { RightClick, sep, type MenuItem } from './ContextMenu';
 import { ENTITIES } from '@/admin/entities';
 import { nextOrder, sorted, uid, useStore } from '@/store/useStore';
-import { useL, useT } from '@/i18n';
+import { LANGS, useL, useT } from '@/i18n';
 import { useLocalSearchParams } from 'expo-router';
 import type { CollName } from '@/data/types';
 import { useCollectionDraft } from '@/hooks/useDraftDoc';
@@ -24,7 +24,6 @@ import { useViewState } from '@/hooks/useViewState';
 import { toast } from '@/store/useToast';
 import { PartialSaveError, revealAdded } from '@/hooks/useReveal';
 import { mergeStates, LANG_ORDER } from '@/lib/langStatus';
-import { LANGS } from '@/i18n';
 
 /** The one generic CRUD screen: every admin entity is described by a config in `admin/entities.tsx`. */
 export function CrudScreen({ entity }: { entity: string }) {

@@ -81,9 +81,11 @@ export function ImageViewer({ items, index, onIndexChange, onClose }: { items: V
   }, [items.length, offsetOf, onIndexChange]);
 
   // Opening (or switching the tapped picture): jump to it without animation.
+  const jumpKey = `${index ?? ''}|${width}|${rtl}`;
+  const [seenJump, setSeenJump] = React.useState(jumpKey);
+  if (seenJump !== jumpKey) { setSeenJump(jumpKey); if (index != null) { setCurrent(index); setActual(false); } }
   React.useEffect(() => {
     if (index == null) return;
-    setCurrent(index); setActual(false);
     const timer = setTimeout(() => scroller.current?.scrollTo({ x: offsetOf(index), animated: false }), 0);
     return () => clearTimeout(timer);
   }, [index, offsetOf, width]);

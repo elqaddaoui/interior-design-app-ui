@@ -13,13 +13,14 @@ import { PageHeader } from '@/components/ui/StepHeader';
 import { Screen } from '@/components/ui/Screen';
 import { Txt } from '@/components/ui/Txt';
 import { MediaView } from '@/components/ui/MediaView';
-// Own chunk (with the gesture library): the slider code is only downloaded when a result is opened.
-const BeforeAfter = React.lazy(() => import('@/components/GestureKit').then((m) => ({ default: m.BeforeAfter })));
 import { saveImage, shareImage } from '@/lib/share';
 import { toast } from '@/store/useToast';
 import { freshUser } from '@/lib/credits';
 import { useBp } from '@/hooks/useBp';
 import { NO_CONTEXT_MENU, NO_SELECT } from '@/lib/noSelect';
+
+// Own chunk (with the gesture library): the slider code is only downloaded when a result is opened.
+const BeforeAfter = React.lazy(() => import('@/components/GestureKit').then((m) => ({ default: m.BeforeAfter })));
 
 export default function Result() {
   const { id, fresh } = useLocalSearchParams<{ id: string; fresh?: string }>();

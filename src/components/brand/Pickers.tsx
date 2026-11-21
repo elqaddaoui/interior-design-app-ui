@@ -57,7 +57,9 @@ export function FontPicker({ visible, onClose, value, text, onPick, title }: { v
   const [cat, setCat] = useState<FontCat | 'all'>('all');
   const [shown, setShown] = useState(PAGE);
   const list = useMemo(() => searchFonts(q, cat, text), [q, cat, text]);
-  useEffect(() => setShown(PAGE), [q, cat, visible]);
+  const pageKey = `${q}|${cat}|${visible}`;
+  const [seenKey, setSeenKey] = useState(pageKey);
+  if (seenKey !== pageKey) { setSeenKey(pageKey); setShown(PAGE); } // back to the first page when the search or the sheet changes
   return (
     <Sheet visible={visible} onClose={onClose} title={title}>
       {visible ? (

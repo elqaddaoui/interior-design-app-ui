@@ -64,7 +64,8 @@ export function ContextMenuHost() {
   const { rtl } = useT();
   const { width, height } = useWindowDimensions();
   const [active, setActive] = useState(-1);
-  useEffect(() => { setActive(-1); }, [menu]);
+  const [seenMenu, setSeenMenu] = useState(menu);
+  if (seenMenu !== menu) { setSeenMenu(menu); setActive(-1); } // a new menu starts with nothing highlighted
 
   useEffect(() => {
     if (Platform.OS !== 'web' || !menu) return;

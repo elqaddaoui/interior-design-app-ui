@@ -1,5 +1,5 @@
  
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Platform, Pressable, TextInput, View } from 'react-native';
 import { Icon } from '@/components/ui/Icon';
 import { Txt } from '@/components/ui/Txt';
@@ -20,7 +20,8 @@ export const Dot = ({ c, size = 26, on, onPress, label, testID }: { c: string; s
 function HexInput({ value, onChange, testID }: { value: string; onChange: (v: string) => void; testID?: string }) {
   const { colors } = useTheme();
   const [text, setText] = useState(value);
-  useEffect(() => setText(value), [value]);
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) { setSeen(value); setText(value); } // follow the prop (derived while rendering, not from an effect)
   const bad = text !== '' && !isHex(normHex(text, ''));
   return (
     <TextInput testID={testID} value={text} maxLength={7} autoCapitalize="characters" autoCorrect={false} placeholder="#RRGGBB" placeholderTextColor={colors.muted} accessibilityLabel="HEX"

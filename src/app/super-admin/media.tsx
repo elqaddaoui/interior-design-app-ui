@@ -49,7 +49,8 @@ function useMover(initial: MediaMove | undefined, onChange: () => void) {
   const alive = useRef(true);
   const looping = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  useEffect(() => { setMove(initial); }, [initial]);
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (seenInitial !== initial) { setSeenInitial(initial); setMove(initial); } // follow what the server reports
   useEffect(() => {
     if (move?.status !== 'running' || looping.current) return;
     looping.current = true;

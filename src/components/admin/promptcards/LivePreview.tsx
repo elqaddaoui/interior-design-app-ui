@@ -95,6 +95,7 @@ export function LivePreview({ rules, scope, tc, onCase, highlight, onPickStep, a
   const rooms = s.roomTypes.filter((r) => !group || r.group === group);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the busy flag follows the debounced server preview request below
     if (!eff.toolId) { setBusy(false); return; }
     const mine = ++seq.current;
     setBusy(true);

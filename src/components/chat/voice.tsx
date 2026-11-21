@@ -99,7 +99,8 @@ export function useVoicePlayback() {
   const [id, setId] = React.useState<string | null>(null);
   const loaded = React.useRef<string | null>(null);
 
-  React.useEffect(() => { if (status.didJustFinish) setId(null); }, [status.didJustFinish]);
+  const [wasDone, setWasDone] = React.useState(status.didJustFinish);
+  if (wasDone !== status.didJustFinish) { setWasDone(status.didJustFinish); if (status.didJustFinish) setId(null); } // a note that just ended stops being "playing"
 
   const toggle = React.useCallback(async (messageId: string, uri: string) => {
     if (id === messageId && status.playing) { player.pause(); return; }

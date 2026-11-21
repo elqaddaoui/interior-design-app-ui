@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View } from 'react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -21,12 +21,16 @@ export function RestorePanel({ b, caps }: { b: Backup; caps: Capabilities }) {
   const [target, setTarget] = useState<MediaTarget>('app');
   const [safety, setSafety] = useState(true);
   const [ask, setAsk] = useState(false);
-  useEffect(() => {
-    if (!plan) return;
-    setParts({ app: plan.restorable.app, db: plan.restorable.db, media: plan.restorable.media });
-    setTarget(plan.mediaTargets[plan.defaultMediaTarget] ? plan.defaultMediaTarget : plan.mediaTargets.app ? 'app' : 'r2');
-    setSafety(true);
-  }, [plan]);
+  // A new plan (a freshly validated file) resets the choices: derived while rendering.
+  const [seenPlan, setSeenPlan] = useState<typeof plan>(null);
+  if (plan !== seenPlan) {
+    setSeenPlan(plan);
+    if (plan) {
+      setParts({ app: plan.restorable.app, db: plan.restorable.db, media: plan.restorable.media });
+      setTarget(plan.mediaTargets[plan.defaultMediaTarget] ? plan.defaultMediaTarget : plan.mediaTargets.app ? 'app' : 'r2');
+      setSafety(true);
+    }
+  }
   const busy = b.phase === 'uploading' || b.phase === 'validating' || b.phase === 'restoring';
   const pick = async () => { const file = await chooseZip(); if (file) b.pickFile(file); };
   const chosen = [parts.db ? t('bk.part.db') : '', parts.media ? t('bk.part.media') : '', parts.app ? t('bk.part.app') : ''].filter(Boolean).join(' + ');

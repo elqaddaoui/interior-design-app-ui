@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/immutability -- the gesture callbacks run outside render and deliberately write to the mutable holders `last` and `latest` (see DragRow). */
 import React, { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';

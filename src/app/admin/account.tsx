@@ -74,12 +74,14 @@ function ProfileSection() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
+  // The form is filled once per administrator (when the profile arrives or the account changes), not on every profile update.
   const seeded = profile?.id;
-  useEffect(() => {
-    if (!profile) return;
+  const [seenId, setSeenId] = useState<string | undefined>();
+  if (profile && seenId !== seeded) {
+    setSeenId(seeded);
     setForm({ name: profile.name, title: profile.title, phone: profile.phone, email: profile.email });
     setCredits({ unlimited: profile.credits == null, amount: String(profile.credits ?? 0) });
-  }, [seeded]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
   const dirty = !!profile && (form.name !== profile.name || form.title !== profile.title || form.phone !== profile.phone || form.email !== profile.email
     || (credits.unlimited ? profile.credits != null : String(profile.credits) !== credits.amount.trim()));
   const readOnly = !backendEnabled || offline || !profile;
@@ -229,13 +231,17 @@ function DevicesSection() {
   const [rows, setRows] = useState<AdminDevice[] | null>(null);
   const when = useWhen();
   const load = useCallback(async () => { try { setRows(await listAdminDevices()); } catch { setRows([]); } }, []);
-  useEffect(() => { if (backendEnabled && !offline) void load(); else setRows([]); }, [load, offline]);
-  const others = useMemo(() => (rows ?? []).filter((r) => !r.current), [rows]);
+  const live = backendEnabled && !offline;
+  // Loads the device list from the server; the state is only set once the request answers.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { if (live) void load(); }, [load, live]);
+  const list = useMemo(() => (live ? rows : []), [live, rows]);
+  const others = useMemo(() => (list ?? []).filter((r) => !r.current), [list]);
   const revoke = async (id: string) => { try { await revokeAdminDevice(id); toast(t('ac.deviceRevoked')); } catch { toast(t('ac.saveFailed')); } void load(); };
   const revokeAll = async () => { try { await revokeOtherAdminDevices(); toast(t('ac.deviceRevoked')); } catch { toast(t('ac.saveFailed')); } void load(); };
   return (
     <Section icon="devices" title={t('ac.devices')} testID="account-devices">
-      {(rows ?? []).map((r) => (
+      {(list ?? []).map((r) => (
         <View key={r.id} testID={`device-${r.current ? 'current' : r.id}`} className="flex-row items-center py-2.5 border-b border-line" style={{ gap: 12 }}>
           <View className="w-9 h-9 rounded-xl bg-surface2 items-center justify-center"><Icon name={/Android|iOS|App/.test(deviceName(r.ua)) ? 'cellphone' : 'laptop'} size={19} /></View>
           <View className="flex-1" style={{ minWidth: 0 }}>
@@ -245,7 +251,7 @@ function DevicesSection() {
           {!r.current ? <Button testID={`device-revoke-${r.id}`} title={t('ac.signOutDevice')} variant="soft" size="sm" onPress={() => revoke(r.id)} /> : null}
         </View>
       ))}
-      {rows && !others.length ? <Txt className="text-muted text-[13px] pt-3">{t('ac.noOthers')}</Txt> : null}
+      {list && !others.length ? <Txt className="text-muted text-[13px] pt-3">{t('ac.noOthers')}</Txt> : null}
       {others.length ? <Button testID="device-revoke-others" title={t('ac.signOutOthers')} icon="logout-variant" variant="outline" className="mt-3" onPress={revokeAll} /> : null}
     </Section>
   );

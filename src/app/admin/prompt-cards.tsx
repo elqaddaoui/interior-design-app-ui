@@ -60,7 +60,7 @@ export default function PromptCards() {
   }, []);
   useEffect(() => { if (backendEnabled) load(); }, [load]);
   // A tool deleted elsewhere must not leave the screen on a card that no longer exists.
-  useEffect(() => { if (isTool(scope) && s.tools.length && !s.tools.some((x) => x.id === scope)) setScope('all'); }, [s.tools, scope]);
+  if (isTool(scope) && s.tools.length && !s.tools.some((x) => x.id === scope)) setScope('all');
 
   const dirty = !!draft && !!saved && !!info && isDirty(draft, saved, info.catalog);
   const save = async () => {

@@ -42,6 +42,7 @@ export function useBackup(transport: Transport | null, scopeKey: string) {
 
   // Reset everything when the target (store / platform) changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- switching the target (store / platform) must clear the previous target's state before loading the new one
     setCaps(null); setJobs([]); setJob(null); setError(null); setPhase('idle'); setPlan(null); setUploadId(null); setCheckJob(null); setRestoreJob(null); setFileName(''); setUploadPct(0);
     loadCaps(); loadJobs();
   }, [loadCaps, loadJobs, scopeKey]);

@@ -22,6 +22,7 @@ export function ApiHealth({ testID = 'api-health' }: { testID?: string }) {
     try { const r = await api<{ status: string }>('/admin/api-health'); setState(r.status === 'working' ? 'working' : 'not_working'); }
     catch { setState('unknown'); }
   }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the health word from the server on mount
   useEffect(() => { load(); }, [load]);
   const ok = state === 'working';
   const label = state === 'working' ? t('bk.health.working') : state === 'not_working' ? t('bk.health.notWorking') : state === 'loading' ? t('bk.health.checking') : t('bk.health.unknown');
