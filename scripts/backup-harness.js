@@ -70,7 +70,7 @@ function makeAppRoot() {
 }
 const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
-async function setup({ r2 = false, env = {}, fetch, media = true } = {}) {
+async function setup({ r2 = false, env = {}, fetch, media = true, vault } = {}) {
   const appRoot = makeAppRoot();
   const backupDir = tmp('bk-dir-');
   const mediaDir = tmp('bk-media-');
@@ -78,6 +78,7 @@ async function setup({ r2 = false, env = {}, fetch, media = true } = {}) {
   const full = { PGLITE_DIR: ':memory:', COOKIE_SECURE: 'false', PUSH_WAIT_MS: '50', NODE_ENV: 'test', BACKUP_DIR: backupDir, BACKUP_APP_ROOT: appRoot, MEDIA_DIR: mediaDir, ...env };
   const db = await freshDb();
   const mediaOptions = r2 ? { storage, download: async () => { throw new Error('offline'); } } : { storage: media === 'fs' ? undefined : null, download: async () => { throw new Error('offline'); } };
+  if (vault !== undefined) mediaOptions.vault = vault;
   const backend = createBackend({ env: full, db, media: mediaOptions, ...(fetch ? {} : {}) });
   await backend.db.query('select 1');
   await db.query("INSERT INTO saas_tenants(id,slug,name,kind,status,created_at,updated_at) VALUES('default','default','Default','default','active',0,0) ON CONFLICT (id) DO NOTHING");
@@ -144,4 +145,18 @@ function readZip(buffer) {
   });
 }
 const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
-module.exports = { call, native, bearer, fakeR2, pngBytes, pngData, makeAppRoot, setup, wait, finish, startBackup, download, upload, restore, readZip, sha, tmp };
+/** In-memory vault driver (same interface as the R2 / disk drivers). `corrupt` flips a byte of every stored archive (to test the read-back check). */
+function memoryDriver({ corrupt = false } = {}) {
+  const objects = new Map();
+  return {
+    kind: 'r2', objects,
+    list: async prefix => [...objects].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.body.length, modified: o.at })),
+    putBuffer: async (key, body) => { objects.set(key, { body: Buffer.from(body), at: Date.now() }); },
+    putFile: async (key, file, { onBytes } = {}) => { const body = Buffer.from(fs.readFileSync(file)); if (corrupt && key.includes('.zip')) body[Math.floor(body.length / 2)] ^= 0xff; objects.set(key, { body, at: Date.now() }); onBytes?.(body.length); },
+    getBuffer: async key => { if (!objects.has(key)) throw new Error('NoSuchKey'); return Buffer.from(objects.get(key).body); },
+    stream: async key => { if (!objects.has(key)) throw new Error('NoSuchKey'); return Readable.from([Buffer.from(objects.get(key).body)]); },
+    head: async key => (objects.has(key) ? { size: objects.get(key).body.length } : null),
+    remove: async key => { objects.delete(key); },
+  };
+}
+module.exports = { memoryDriver, call, native, bearer, fakeR2, pngBytes, pngData, makeAppRoot, setup, wait, finish, startBackup, download, upload, restore, readZip, sha, tmp };

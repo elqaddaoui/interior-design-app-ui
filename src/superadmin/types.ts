@@ -121,8 +121,27 @@ export type LimitsStatus = {
   delivery: { transport: boolean; recipient: string }; keys: { neonApi: boolean; cloudflareApi: boolean };
   lastBackupAt: number | null; backupHost: boolean;
 };
+export type BackupLogLine = { n: number; at: number; level: 'info' | 'warn' | 'error'; code: string; step?: string; [key: string]: unknown };
+export type BackupStep = { key: string; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; detail?: Record<string, unknown> };
 export type BackupJob = {
-  id: string; kind: string; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled'; progress: number; errors: string[]; warnings: string[];
-  canDownload: boolean; result: { name?: string; size?: number } | null; options: { destination: string };
+  id: string; kind: string; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled'; progress: number; errors: { code?: string; message?: string }[]; warnings: ({ code: string } & Record<string, unknown>)[];
+  canDownload: boolean; result: { name?: string; size?: number; uploadId?: string; plan?: RestorePlan; restartRequired?: boolean } | null; options: { destination: string; upload?: string; kind?: string; version?: string; name?: string };
+  steps: BackupStep[]; log: BackupLogLine[]; startedAt: number | null; finishedAt: number | null; cancelling: boolean;
+};
+export type VaultKind = 'all' | 'db' | 'code' | 'media';
+export type VaultItem = {
+  id: string; kind: VaultKind; version: string; name: string; createdAt: number; createdBy: 'manual' | 'schedule' | 'pre-restore'; size: number; plainSize?: number;
+  sha256: string; encrypted: boolean; includes: { app?: boolean; db?: boolean; media?: boolean }; rows: number | null; tables: number | null; mediaFiles: number; appFiles: number;
+  schemaVersion: string; preview: { type: string; source: string } | null;
+};
+export type BackupSettings = { enabled: boolean; kinds: VaultKind[]; hour: 'auto' | number; retentionDays: number };
+export type BackupSchedule = {
+  settings: BackupSettings; hour: number; auto: boolean; learned: number; profile: (number | null)[]; next: number; last: { at: number; ok?: boolean; kinds?: string[]; error?: string } | null; busy: boolean; available: boolean;
+};
+export type VaultInfo = { kind: 'r2' | 'disk'; encrypted: boolean; version: string; items: VaultItem[]; schedule: BackupSchedule };
+export type RestorePlan = {
+  manifest: { createdAt: number; appVersion?: string; kind?: string; includes: { app?: boolean; db?: boolean; media?: boolean } };
+  restorable: { app: boolean; db: boolean; media: boolean }; mediaTargets: { r2?: boolean; app?: boolean }; defaultMediaTarget: 'r2' | 'app';
+  willReplace: Record<string, number>; warnings: ({ code: string } & Record<string, unknown>)[];
 };
 export type BackupCaps = { available: boolean; reason: string; destinations: Record<string, boolean | { serverConfigured: boolean }>; running: string | null };

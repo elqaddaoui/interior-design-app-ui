@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
+import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
-import type { BackupCaps, BackupJob, LimitLevel, LimitMetric, LimitSettings, LimitsStatus } from '@/superadmin/types';
-import { Badge, Btn, Card, ErrorLine, Field, Heading, Hint, Loading, Notice, Row, Segmented, T, ago, openUrl, useLoad } from '@/superadmin/ui';
+import type { LimitLevel, LimitMetric, LimitSettings, LimitsStatus } from '@/superadmin/types';
+import { Badge, Btn, Card, ErrorLine, Field, Heading, Hint, Loading, Notice, Row, Segmented, T, ago, useLoad } from '@/superadmin/ui';
 
 const GB = 1e9;
 const TITLE: Record<string, string> = {
@@ -65,43 +66,18 @@ function MetricCard({ m }: { m: LimitMetric }) {
   );
 }
 
-/** Starts a full backup (database + files) and follows it until it can be downloaded. */
+/** Backups live on their own page now; here only the reminder and the way there. */
 function BackupCard({ status }: { status: LimitsStatus }) {
-  const [job, setJob] = useState<BackupJob | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
-  const live = useRef(true);
-  useEffect(() => () => { live.current = false; }, []);
-  const running = !!job && (job.status === 'queued' || job.status === 'running');
-  useEffect(() => {
-    if (!job || !running) return undefined;
-    const timer = setInterval(() => { sa<{ job: BackupJob }>(`/backup/jobs/${job.id}`).then(r => { if (live.current) setJob(r.job); }, () => { /* next round */ }); }, 2500);
-    return () => clearInterval(timer);
-  }, [job?.id, running]); // eslint-disable-line react-hooks/exhaustive-deps
-  const start = async () => {
-    setBusy(true); setError(null);
-    try { const caps = await sa<BackupCaps>('/backup/capabilities'); void caps; const r = await sa<{ job: BackupJob }>('/backup/jobs', { method: 'POST', body: { type: 'both', data: 'content', media: true, destination: 'local' } }); setJob(r.job); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
-  };
+  const router = useRouter();
   const last = status.lastBackupAt;
   const age = last ? daysSince(last) : null;
   return (
     <Card>
-      <T weight="bold" size="lg">{tr('Back up all data')}</T>
-      <Hint>{tr('One archive with the database and every uploaded file. Download it and keep it somewhere safe: that is the copy that counts.')}</Hint>
+      <T weight="bold" size="lg">{tr('Backup & restore')}</T>
+      <Hint>{tr('Full, database, code or media backups, daily backups, history by version and restore now have their own page.')}</Hint>
       <Notice tone={last == null || (age ?? 0) > 14 ? 'warn' : 'ok'} testID="sa-limits-lastbackup">{last == null ? tr('No backup has been saved yet.') : tr('Last backup you saved: {when}.', { when: ago(last) })}</Notice>
-      {!status.backupHost ? <Notice tone="warn">{tr('This host cannot make backups (no disk). Use the Neon and Cloudflare dashboards, or run the server on a host with a disk.')}</Notice> : null}
-      <ErrorLine error={error} />
-      {job ? (
-        <View style={{ marginBottom: SA.space.md }}>
-          <T size="sm" weight="bold">{running ? tr('Backup in progress: {n} %', { n: job.progress }) : job.status === 'done' ? tr('Backup ready.') : job.status === 'cancelled' ? tr('Backup cancelled.') : tr('The backup failed.')}</T>
-          {running ? <Bar pct={job.progress} level="ok" /> : null}
-          {job.status === 'error' && job.errors[0] ? <T size="sm" color={SA.color.danger}>{job.errors[0]}</T> : null}
-          {job.warnings.length ? <Hint>{job.warnings.join(' · ')}</Hint> : null}
-        </View>
-      ) : null}
       <Row>
-        {job?.canDownload && !running ? <Btn testID="sa-limits-download" label={tr('Download the backup')} icon="openInNew" onPress={() => openUrl(`/api/super-admin/backup/jobs/${job.id}/download`)} /> : null}
-        <Btn testID="sa-limits-backup" kind={job?.canDownload ? 'ghost' : 'solid'} label={tr('Back up all data now')} onPress={start} busy={busy || running} disabled={!status.backupHost} />
+        <Btn testID="sa-limits-backup" icon="shieldCheckOutline" label={tr('Open the backup page')} onPress={() => router.push('/super-admin/backup')} />
       </Row>
     </Card>
   );
