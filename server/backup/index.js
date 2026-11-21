@@ -13,15 +13,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
 const { createArchive, openArchive, openEntry, readEntry, hashEntry, hashing } = require('./zip');
-const { exportDatabase, importDatabase, detectProvider, checkProvider, checkTables, collectSecrets, specsFor } = require('./dump');
+const { exportDatabase, importDatabase, detectProvider, checkProvider, tolerate, collectSecrets, specsFor } = require('./dump');
+const { buildPreview, imageType } = require('./preview');
+const { createSchedule } = require('./schedule');
 const appFiles = require('./app-files');
 const { createDestinations } = require('./destinations');
 const { SCHEMA_VERSION } = require('../db');
 
 const FORMAT = 'dwira-backup';
 const FORMAT_VERSION = 1;
+/** What the super admin picks: the whole app, the database, the code, or the files. Everything maps onto the archive parts below. */
+const KIND_OPTIONS = { all: { type: 'both', media: true }, db: { type: 'db', media: false }, code: { type: 'app', media: false }, media: { type: 'media', media: true } };
+const KIND_OF = (type, media) => (type === 'both' ? (media ? 'all' : 'db+code') : type === 'app' ? 'code' : type === 'media' ? 'media' : 'db');
 const fail = (status, message, extra) => Object.assign(new Error(message), { status }, extra);
-const TYPES = { app: { app: true, db: false }, db: { app: false, db: true }, both: { app: true, db: true } };
+const TYPES = { app: { app: true, db: false }, db: { app: false, db: true }, both: { app: true, db: true }, media: { app: false, db: false } };
 /**
  * A store that is not the owner's has no server files of its own (the code is shared by every store and stays with the platform owner), so its
  * three choices split ITS OWN tables instead: "app" = how the store looks and what it offers (content, settings, theme, menus, preferences),
@@ -32,7 +37,7 @@ const TEXTUAL = /\.(js|mjs|cjs|json|html|css|map|txt|md|sql|ndjson|xml|webmanife
 const stamp = (at = Date.now()) => new Date(at).toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const errorOf = error => ({ code: error.status ? error.message : 'INTERNAL', ...Object.fromEntries(['entry', 'table', 'destination', 'upstream', 'detected', 'tenant'].filter(k => error[k] !== undefined).map(k => [k, error[k]])) });
 
-function createBackupService({ db, bundles, env = process.env, appRoot, tenantIds = async () => ['default'], onRestored, onBackupFinished, fetch: doFetch, now = Date.now } = {}) {
+function createBackupService({ db, bundles, env = process.env, appRoot, tenantIds = async () => ['default'], onRestored, onBackupFinished, fetch: doFetch, now = Date.now, vault = null } = {}) {
   const dir = path.resolve(env.BACKUP_DIR || path.join(appRoot, 'server', 'data', 'backups'));
   const FILES = path.join(dir, 'files'), WORK = path.join(dir, 'work'), UPLOADS = path.join(dir, 'uploads'), JOBS = path.join(dir, 'jobs');
   const keepMs = Math.max(1, Number(env.BACKUP_KEEP_HOURS) || 24) * 3600000;
@@ -41,7 +46,9 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
   const destinations = createDestinations({ env, ...(doFetch ? { fetch: doFetch } : {}) });
   const jobs = new Map();
   const uploads = new Map();
-  const appVersion = (() => { try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version || ''; } catch { return ''; } })();
+  const appVersion = String(env.APP_VERSION || '').replace(/^v/i, '') || (() => { try { return JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version || ''; } catch { return ''; } })() || '0.0.0';
+  const previews = new Map(); // id -> { buffer, type, at, scopeKey }: screenshots taken by the browser just before a backup
+  const vaultOn = scope => !!vault && scope.kind === 'platform';
   const supported = () => !env.VERCEL || env.BACKUP_FORCE === '1';
   const scopeKey = scope => (scope.kind === 'platform' ? 'platform' : `tenant:${scope.tenantId}`);
   const handleOf = scope => (scope.kind === 'platform' ? db : bundles.get(scope.tenantId).db);
@@ -52,10 +59,10 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
   const ensureDirs = async () => { for (const d of [FILES, WORK, UPLOADS, JOBS]) await fs.promises.mkdir(d, { recursive: true, mode: 0o700 }); };
 
   // ---------------------------------------------------------------- jobs
-  const log = (job, level, code, extra = {}) => { job.log.push({ at: now(), level, code, ...extra }); if (job.log.length > 400) job.log.shift(); };
+  const log = (job, level, code, extra = {}) => { job.seq = (job.seq || 0) + 1; job.log.push({ n: job.seq, at: now(), level, code, ...extra }); if (job.log.length > 600) job.log.shift(); };
   const view = job => ({
     id: job.id, kind: job.kind, status: job.status, progress: Math.round(job.progress), steps: job.steps.map(({ key, status, detail }) => ({ key, status, ...(detail ? { detail } : {}) })),
-    log: job.log.slice(-120), errors: job.errors, warnings: job.warnings, options: job.options, createdAt: job.createdAt, startedAt: job.startedAt || null, finishedAt: job.finishedAt || null,
+    log: job.log.slice(-300), errors: job.errors, warnings: job.warnings, options: job.options, createdAt: job.createdAt, startedAt: job.startedAt || null, finishedAt: job.finishedAt || null,
     result: job.result ? { ...job.result, file: undefined, path: undefined } : null, canDownload: !!(job.result?.file && job.status !== 'running' && fs.existsSync(job.result.file)),
     cancelling: !!job.cancel && job.status === 'running',
   });
@@ -64,9 +71,9 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     const total = job.steps.reduce((sum, s) => sum + s.weight, 0) || 1;
     const recompute = () => { job.progress = Math.min(99.9, job.steps.reduce((sum, s) => sum + s.weight * (s.status === 'done' ? 1 : s.status === 'running' ? s.fraction || 0 : 0), 0) / total * 100); };
     return {
-      start(key, detail) { const s = job.steps.find(x => x.key === key); if (!s) return; s.status = 'running'; s.fraction = 0; if (detail) s.detail = detail; recompute(); },
+      start(key, detail) { const s = job.steps.find(x => x.key === key); if (!s) return; s.status = 'running'; s.fraction = 0; if (detail) s.detail = detail; log(job, 'info', 'step.start', { step: key }); recompute(); },
       fraction(key, value) { const s = job.steps.find(x => x.key === key); if (!s) return; s.fraction = Math.max(0, Math.min(1, value)); recompute(); },
-      done(key, detail) { const s = job.steps.find(x => x.key === key); if (!s) return; s.status = 'done'; s.fraction = 1; if (detail) s.detail = detail; recompute(); },
+      done(key, detail) { const s = job.steps.find(x => x.key === key); if (!s) return; s.status = 'done'; s.fraction = 1; if (detail) s.detail = detail; log(job, 'info', 'step.done', { step: key, ...(detail || {}) }); recompute(); },
       skip(key) { const s = job.steps.find(x => x.key === key); if (s) { s.status = 'skipped'; s.weight = 0; } },
       failed(key) { const s = job.steps.find(x => x.key === key); if (s && s.status === 'running') s.status = 'error'; },
     };
@@ -108,8 +115,12 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
 
   // ---------------------------------------------------------------- options
   function backupOptions(scope, input = {}) {
+    // `kind` (all | db | code | media) is the super admin's vocabulary; `type` (app | db | both | media) the archive's. One of them is enough.
+    const kinded = input.kind !== undefined ? (KIND_OPTIONS[input.kind] || (() => { throw fail(400, 'INVALID_TYPE'); })()) : null;
+    if (kinded) input = { ...input, type: kinded.type, media: kinded.media };
     const type = TYPES[input.type] ? input.type : (() => { throw fail(400, 'INVALID_TYPE'); })();
     const store = scope.kind === 'tenant' && !scope.canApp;
+    if (store && type === 'media') throw fail(400, 'INVALID_TYPE');
     let parts = { ...TYPES[type] };
     let tables = null; // null = every table of the scope
     if (store) {
@@ -118,11 +129,11 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       else if (type === 'db') tables = specsFor(true).map(spec => spec.table).filter(table => !STORE_APP_TABLES.includes(table));
     } else if (parts.app && !scope.canApp) throw fail(403, 'APP_SCOPE_FORBIDDEN');
     const data = input.data === 'empty' ? 'empty' : input.data === 'content' || input.data === undefined ? 'content' : (() => { throw fail(400, 'INVALID_DATA_MODE'); })();
-    const destination = ['local', 'gdrive', 'dropbox'].includes(input.destination || 'local') ? input.destination || 'local' : (() => { throw fail(400, 'INVALID_DESTINATION'); })();
-    const auth = destination === 'local' ? {} : { accessToken: typeof input.auth?.accessToken === 'string' ? input.auth.accessToken.trim().slice(0, 4096) : '', folderId: String(input.auth?.folderId || '').slice(0, 200), folder: String(input.auth?.folder || '').slice(0, 200) };
-    return { type, parts, tables, storeParts: store ? type : null, data: store && type === 'app' ? 'content' : data, media: input.media === true, destination, provider: input.provider || 'auto', auth };
+    const destination = ['local', 'gdrive', 'dropbox', ...(vaultOn(scope) ? ['vault'] : [])].includes(input.destination || 'local') ? input.destination || 'local' : (() => { throw fail(400, 'INVALID_DESTINATION'); })();
+    const auth = destination === 'local' || destination === 'vault' ? {} : { accessToken: typeof input.auth?.accessToken === 'string' ? input.auth.accessToken.trim().slice(0, 4096) : '', folderId: String(input.auth?.folderId || '').slice(0, 200), folder: String(input.auth?.folder || '').slice(0, 200) };
+    return { type, kind: store ? null : KIND_OF(type, input.media === true), parts, tables, storeParts: store ? type : null, data: store && type === 'app' ? 'content' : data, media: type === 'media' ? true : input.media === true, destination, provider: input.provider || 'auto', auth, createdBy: input.createdBy === 'schedule' || input.createdBy === 'pre-restore' ? input.createdBy : 'manual', previewId: typeof input.previewId === 'string' ? input.previewId.slice(0, 40) : '' };
   }
-  const publicOptions = o => ({ type: o.type, data: o.data, media: o.media, destination: o.destination, provider: o.provider });
+  const publicOptions = o => ({ type: o.type, kind: o.kind, data: o.data, media: o.media, destination: o.destination, provider: o.provider, createdBy: o.createdBy });
 
   // ---------------------------------------------------------------- backup
   async function startBackup(scope, input) {
@@ -130,8 +141,9 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     const engine = await handleOf(scope).info();
     const detected = detectProvider(env, engine);
     const provider = o.parts.db ? checkProvider(o.provider, detected) : null;
+    if (o.destination === 'vault' && !vaultOn(scope)) throw fail(400, 'VAULT_NOT_CONFIGURED');
     await guardStart(scope);
-    const keys = [['prepare', 3], ...(o.parts.db ? [['database', 20]] : []), ...(o.parts.app ? [['app', 15]] : []), ...(o.media ? [['media', 50]] : []), ['package', 5], ...(o.destination !== 'local' ? [['upload', 25]] : [])];
+    const keys = [['prepare', 3], ...(o.parts.db ? [['database', 20]] : []), ...(o.parts.app ? [['app', 15]] : []), ...(o.media ? [['media', 50]] : []), ['package', 5], ...(o.destination === 'vault' ? [['vault', 25]] : o.destination !== 'local' ? [['upload', 25]] : [])];
     const job = newJob('backup', scope, publicOptions({ ...o, provider: provider || 'auto' }), keys);
     return start(job, scope, steps => runBackup(job, scope, o, { provider, engine, detected }, steps));
   }
@@ -140,7 +152,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     const cancelled = () => job.cancel;
     const work = path.join(WORK, job.id);
     const partFile = path.join(FILES, `${job.id}.part`);
-    const name = `dwira-${scope.kind === 'platform' ? 'platform' : scope.tenantId}-${o.type}${o.parts.db && o.data === 'empty' ? '-schema' : ''}${o.media ? '-media' : ''}-${stamp(now())}.zip`;
+    const name = `dwira-${scope.kind === 'platform' ? 'platform' : scope.tenantId}-${o.type}${o.parts.db && o.data === 'empty' ? '-schema' : ''}${o.media && o.type !== 'media' ? '-media' : ''}-${stamp(now())}.zip`;
     const finalFile = path.join(FILES, `${job.id}-${name}`);
     steps.start('prepare');
     await fs.promises.mkdir(work, { recursive: true, mode: 0o700 });
@@ -162,7 +174,15 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       const free = (await fs.promises.statfs(FILES)); const available = Number(free.bavail) * Number(free.bsize);
       if (available < (mediaBytes + appBytes) * 1.05 + 64 * 1024 * 1024) throw fail(507, 'NOT_ENOUGH_DISK');
     } catch (error) { if (error.status) throw error; }
-    log(job, 'info', 'prepare.ok', { media: media.length, app: app.length });
+    // The picture of how the app looks right now (what a restore of this backup will bring back): the one the browser took, else a snapshot built from the data.
+    let preview = null;
+    if (o.destination === 'vault') {
+      const given = o.previewId && previews.get(o.previewId);
+      if (given && given.scopeKey === scopeKey(scope)) { preview = { buffer: given.buffer, type: given.type, source: 'screenshot' }; previews.delete(o.previewId); }
+      else { try { preview = await buildPreview({ db: handle, version: appVersion, at: now(), kind: o.kind }); } catch { preview = null; } }
+      if (preview) log(job, 'info', 'preview.ok', { source: preview.source, bytes: preview.buffer.length });
+    }
+    log(job, 'info', 'prepare.ok', { media: media.length, app: app.length, version: appVersion });
     steps.done('prepare');
 
     let mediaDone = 0;
@@ -211,7 +231,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       steps.start('package');
       try {
         result = await archive.finish(entries => ({
-          format: FORMAT, version: FORMAT_VERSION, createdAt: now(), createdBy: 'dwira', appVersion,
+          format: FORMAT, version: FORMAT_VERSION, createdAt: now(), createdBy: 'dwira', appVersion, kind: o.kind || undefined,
           scope: scope.kind, tenantId: tenant ? scope.tenantId : null, type: o.type, storePart: o.storeParts || undefined,
           includes: { app: o.parts.app, db: o.parts.db, media: o.media },
           db: o.parts.db ? { provider, engine, dataMode: o.data, schemaOnly: o.data === 'empty', schemaVersion: SCHEMA_VERSION, tables: Object.fromEntries(Object.entries(dumped.tables).map(([t, v]) => [t, { rows: v.rows }])) } : null,
@@ -228,7 +248,28 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       steps.done('package');
       const summary = { file: finalFile, name, size: result.size, sha256: result.sha256, entries: result.entries.length, includes: { app: o.parts.app, db: o.parts.db, media: o.media }, rows: dumped ? Object.fromEntries(Object.entries(dumped.tables).map(([t, v]) => [t, v.rows])) : null, mediaFiles: o.media ? media.length - missing.length : 0 };
       job.partial = summary;
-      if (o.destination !== 'local') {
+      if (o.destination === 'vault') {
+        steps.start('vault');
+        try {
+          const item = await vault.store({
+            file: finalFile, work, preview,
+            progress: (stage, f) => steps.fraction('vault', stage === 'upload' ? f * 0.6 : 0.6 + f * 0.4),
+            meta: {
+              kind: o.kind, version: appVersion, createdBy: o.createdBy, plainSize: result.size, sha256: result.sha256, includes: summary.includes, rows: summary.rows, tables: summary.rows ? Object.keys(summary.rows).length : null,
+              mediaFiles: summary.mediaFiles, appFiles: o.parts.app ? app.length : 0, schemaVersion: SCHEMA_VERSION, formatVersion: FORMAT_VERSION,
+            },
+          });
+          steps.done('vault');
+          log(job, 'info', 'vault.ok', { name: item.name, size: item.size, encrypted: item.encrypted, where: vault.kind });
+          summary.destination = { destination: 'vault', id: item.id, name: item.name, kind: item.kind, version: item.version };
+          summary.vaultId = item.id;
+          // The copy in the vault is the backup now: the working copy on the server's disk is removed (BACKUP_KEEP_LOCAL=1 keeps it).
+          if (env.BACKUP_KEEP_LOCAL !== '1') { await fs.promises.rm(finalFile, { force: true }).catch(() => {}); summary.file = null; }
+        } catch (error) {
+          job.errors.push(errorOf(error)); log(job, 'error', error.status ? error.message : 'VAULT_FAILED', errorOf(error));
+          return { ...summary, failed: true };
+        }
+      } else if (o.destination !== 'local') {
         steps.start('upload');
         let sent = 0;
         try {
@@ -286,10 +327,21 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     const upload = uploadOf(scope, id);
     if (upload.plan || upload.busy) throw fail(409, 'UPLOAD_CLOSED');
     if (upload.size !== upload.expected) throw fail(409, 'UPLOAD_INCOMPLETE', { expected: upload.expected });
-    const handle = await fs.promises.open(upload.file, 'r');
-    const head = Buffer.alloc(4);
-    try { await handle.read(head, 0, 4, 0); } finally { await handle.close(); }
-    if (head.toString('latin1') !== 'PK\u0003\u0004') { uploads.delete(id); await fs.promises.rm(upload.file, { force: true }); throw fail(400, 'NOT_A_ZIP'); }
+    const readHead = async () => {
+      const handle = await fs.promises.open(upload.file, 'r');
+      const buf = Buffer.alloc(5);
+      try { await handle.read(buf, 0, 5, 0); } finally { await handle.close(); }
+      return buf;
+    };
+    let head = await readHead();
+    if (head.toString('latin1') === 'DWBK1') { // a copy of an encrypted archive of the vault
+      if (!vault) { uploads.delete(id); await fs.promises.rm(upload.file, { force: true }); throw fail(400, 'BACKUP_KEY_MISSING'); }
+      upload.busy = true;
+      try { await vault.decryptFile(upload.file); const st = await fs.promises.stat(upload.file); upload.size = upload.expected = st.size; head = await readHead(); }
+      catch (error) { uploads.delete(id); await fs.promises.rm(upload.file, { force: true }); throw error; }
+      finally { upload.busy = false; }
+    }
+    if (head.subarray(0, 4).toString('latin1') !== 'PK\u0003\u0004') { uploads.delete(id); await fs.promises.rm(upload.file, { force: true }); throw fail(400, 'NOT_A_ZIP'); }
     upload.busy = true;
     try { return { uploadId: id, job: await startValidate(scope, upload) }; } finally { upload.busy = false; }
   }
@@ -340,8 +392,10 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       steps.done('verify');
       let tablesMeta = null;
       if (manifest.includes?.db) {
-        tablesMeta = JSON.parse((await readEntry(archive, 'db/tables.json')).toString('utf8'));
-        checkTables(tablesMeta, scope.kind === 'tenant');
+        const raw = JSON.parse((await readEntry(archive, 'db/tables.json')).toString('utf8'));
+        const reduced = tolerate(raw, scope.kind === 'tenant');
+        tablesMeta = reduced.meta;
+        if (reduced.skipped.length) job.warnings.push({ code: 'TABLES_SKIPPED', count: reduced.skipped.length, tables: reduced.skipped.slice(0, 6).join(', ') });
       }
       const plan = await buildPlan(scope, manifest, tablesMeta);
       for (const w of plan.warnings) job.warnings.push(w);
@@ -372,14 +426,42 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     }
     if (manifest.includes?.app && !scope.canApp) warnings.push({ code: 'APP_NOT_RESTORED_HERE' });
     if (manifest.includes?.app && scope.canApp) warnings.push({ code: 'APP_RESTART_REQUIRED' });
+    if (manifest.appVersion && appVersion && manifest.appVersion !== appVersion) warnings.push({ code: 'VERSION_DIFFERS', from: manifest.appVersion, to: appVersion });
     if (tenant && manifest.tenantId && manifest.tenantId !== scope.tenantId) warnings.push({ code: 'OTHER_STORE', tenant: manifest.tenantId });
     if (manifest.media?.missing) warnings.push({ code: 'MEDIA_MISSING', count: manifest.media.missing });
     return {
-      manifest: { createdAt: manifest.createdAt, appVersion: manifest.appVersion, scope: manifest.scope, tenantId: manifest.tenantId, type: manifest.type, storePart: manifest.storePart, includes: manifest.includes, db: manifest.db ? { provider: manifest.db.provider, dataMode: manifest.db.dataMode, schemaOnly: manifest.db.schemaOnly, tables: manifest.db.tables } : null, app: manifest.app, media: manifest.media },
+      manifest: { createdAt: manifest.createdAt, appVersion: manifest.appVersion, kind: manifest.kind, scope: manifest.scope, tenantId: manifest.tenantId, type: manifest.type, storePart: manifest.storePart, includes: manifest.includes, db: manifest.db ? { provider: manifest.db.provider, dataMode: manifest.db.dataMode, schemaOnly: manifest.db.schemaOnly, tables: manifest.db.tables } : null, app: manifest.app, media: manifest.media },
       restorable: { app: !!manifest.includes?.app && !!scope.canApp, db: !!manifest.includes?.db, media: !!manifest.includes?.media },
       mediaTargets, defaultMediaTarget: sample.adapters.r2 && bundles.get(scope.kind === 'tenant' ? scope.tenantId : 'default').media.mode === 'r2' ? 'r2' : 'app',
       willReplace: current, currentProvider: detected, warnings,
     };
+  }
+
+  /** Restore from the history: download the archive from the vault (decrypting it), then the same validation as an uploaded file. */
+  async function prepareFromVault(scope, id) {
+    if (!vaultOn(scope)) throw fail(400, 'VAULT_NOT_CONFIGURED');
+    const item = await vault.find(id);
+    await guardStart(scope);
+    for (const [uid, u] of uploads) if (u.scopeKey === scopeKey(scope) && !u.plan && !u.busy) { uploads.delete(uid); await fs.promises.rm(u.file, { force: true }); }
+    const uid = crypto.randomBytes(12).toString('hex');
+    const file = path.join(UPLOADS, `${uid}.zip`);
+    const upload = { id: uid, scopeKey: scopeKey(scope), file, expected: item.plainSize || item.size || 0, size: 0, createdAt: now(), plan: null, busy: true, vaultId: item.id };
+    uploads.set(uid, upload);
+    const job = newJob('validate', scope, { upload: uid, vault: item.id, version: item.version, kind: item.kind, name: item.name }, [['download', 40], ['inspect', 5], ['verify', 55]]);
+    return start(job, scope, async steps => {
+      try {
+        steps.start('download');
+        let got = 0;
+        const total = Math.max(1, item.plainSize || item.size || 1);
+        const stored = await vault.fetchTo(item, file, { onBytes: n => { got += n; steps.fraction('download', Math.min(1, got / total)); } });
+        upload.size = upload.expected = stored.size;
+        log(job, 'info', 'download.ok', { size: stored.size, encrypted: item.encrypted });
+        steps.done('download');
+        const planned = await runValidate(job, scope, upload, steps);
+        return { ...planned, uploadId: uid };
+      } catch (error) { uploads.delete(uid); await fs.promises.rm(file, { force: true }).catch(() => {}); throw error; }
+      finally { upload.busy = false; }
+    });
   }
 
   // ---------------------------------------------------------------- restore
@@ -413,13 +495,14 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       steps.done('verify');
       if (safety) {
         steps.start('safety');
-        const pre = newJob('backup', scope, { type: 'db', data: 'content', media: false, destination: 'local', provider: 'auto', safetyFor: job.id }, [['prepare', 1], ['database', 1], ['package', 1]]);
+        const toVault = vaultOn(scope);
+        const pre = newJob('backup', scope, { type: 'db', data: 'content', media: false, destination: toVault ? 'vault' : 'local', provider: 'auto', safetyFor: job.id }, [['prepare', 1], ['database', 1], ['package', 1], ...(toVault ? [['vault', 1]] : [])]);
         pre.status = 'running'; pre.startedAt = now();
         const preSteps = stepper(pre);
-        try { pre.result = await runBackup(pre, scope, { ...backupOptions({ ...scope, canApp: false }, { type: tenant ? 'both' : 'db', data: 'content' }) }, { provider: null, engine: await handleOf(scope).info() }, preSteps); pre.status = 'done'; pre.progress = 100; }
+        try { pre.result = await runBackup(pre, scope, { ...backupOptions({ ...scope, canApp: false }, { type: tenant ? 'both' : 'db', data: 'content', destination: toVault ? 'vault' : 'local', createdBy: 'pre-restore' }) }, { provider: null, engine: await handleOf(scope).info() }, preSteps); if (pre.result?.failed) throw fail(500, 'SAFETY_BACKUP_FAILED'); pre.status = 'done'; pre.progress = 100; }
         catch (error) { pre.status = 'error'; pre.errors.push(errorOf(error)); pre.finishedAt = now(); save(pre); throw fail(500, 'SAFETY_BACKUP_FAILED'); }
         pre.finishedAt = now(); save(pre);
-        result.safetyBackup = { id: pre.id, name: pre.result.name, size: pre.result.size };
+        result.safetyBackup = { id: pre.id, name: pre.result.name, size: pre.result.size, ...(pre.result.vaultId ? { vaultId: pre.result.vaultId } : {}) };
         log(job, 'info', 'safety.ok', { name: pre.result.name });
         steps.done('safety');
       }
@@ -469,7 +552,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
           await appFiles.writeInto(stage, rel, await openEntry(archive, entry));
           rels.push(rel); i++; steps.fraction('app', (i / Math.max(1, files.length)) * 0.8);
         }
-        result.restored.app = await appFiles.applyStage(stage, appRoot, rels);
+        result.restored.app = await appFiles.applyStage(stage, appRoot, rels, path.join(WORK, job.id, 'undo'));
         result.restartRequired = result.restored.app > 0;
         steps.done('app', { files: result.restored.app });
       }
@@ -490,17 +573,54 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     for (const id of await idsOf(scope)) for (const row of await bundles.get(id).media.backup.list()) { count++; bytes += row.size || 0; }
     return {
       available: supported(), reason: supported() ? '' : 'BACKUP_UNSUPPORTED_HOST', scope: scope.kind,
-      types: ['app', 'db', 'both'], canApp: !!scope.canApp, storeSplit: scope.kind === 'tenant' && !scope.canApp,
+      types: ['app', 'db', 'both', ...(scope.kind === 'platform' ? ['media'] : [])], canApp: !!scope.canApp, storeSplit: scope.kind === 'tenant' && !scope.canApp,
       provider: { detected, engine, options: ['neon', 'supabase'], locked: detected === 'neon' || detected === 'supabase' },
       media: { mode: sample.mode, count, bytes, targets: { r2: !!sample.backup.adapters.r2, app: !!(sample.backup.adapters.fs && await sample.backup.adapters.fs.writable()) } },
       destinations: { local: true, ...Object.fromEntries(Object.entries(destinations.configured()).map(([k, v]) => [k, { serverConfigured: v }])) },
       limits: { maxUploadBytes: maxUpload, keepHours: keepMs / 3600000 },
+      vault: vaultOn(scope) ? { kind: vault.kind, encrypted: vault.encrypted } : null, version: appVersion,
       running: running(scope)?.id || null,
     };
   }
   const jobOf = (scope, id) => { const job = jobs.get(String(id)); if (!job || job.scopeKey !== scopeKey(scope)) throw fail(404, 'JOB_NOT_FOUND'); return job; };
   const sanitizeCaps = c => ({ ...c, provider: { detected: c.provider.detected, engine: c.provider.engine, options: c.provider.options, locked: !!c.provider.locked } });
+  const platform = () => ({ kind: 'platform', canApp: true, actor: 'schedule' });
+  const schedule = vault ? createSchedule({
+    db, now, vault, supported,
+    startBackup: input => startBackup(platform(), input),
+    jobStatus: id => jobs.get(id) && { status: jobs.get(id).status, errors: jobs.get(id).errors, result: jobs.get(id).result },
+    running: () => running(platform()),
+    prune: opts => vault.prune(opts),
+  }) : null;
+  const need = scope => { if (!vaultOn(scope)) throw fail(400, 'VAULT_NOT_CONFIGURED'); };
   const api = {
+    vault: {
+      available: vaultOn,
+      async info(scope) { need(scope); return { kind: vault.kind, encrypted: vault.encrypted, version: appVersion, items: (await vault.items({ fresh: true })).map(vault.publicItem), schedule: await schedule.status() }; },
+      async prepare(scope, id) { return { job: await prepareFromVault(scope, id) }; },
+      async remove(scope, id) { need(scope); const item = await vault.find(id); await vault.remove(item); return { ok: true, name: item.name }; },
+      async preview(scope, id) { need(scope); return vault.previewOf(await vault.find(id)); },
+      async open(scope, id) { need(scope); const item = await vault.find(id); return { name: `${item.name}.zip`, stream: await vault.openPlain(item) }; },
+      async settings(scope, input) { need(scope); return input === undefined ? schedule.getSettings() : schedule.setSettings(input); },
+      async prune(scope, body) { need(scope); const keep = (await schedule.getSettings()).retentionDays; return vault.prune({ keepDays: Number(body?.keepDays) || keep, dryRun: body?.dryRun === true }); },
+      /** The browser's screenshot of the app, kept for 10 minutes until the backup that uses it starts. */
+      async addPreview(scope, data) {
+        need(scope);
+        const m = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(String(data || ''));
+        if (!m) throw fail(400, 'INVALID_PREVIEW');
+        const buffer = Buffer.from(m[2], 'base64');
+        if (buffer.length > 3 * 1024 * 1024 || !imageType(buffer)) throw fail(400, 'INVALID_PREVIEW');
+        for (const [pid, p] of previews) if (p.at < now() - 600000) previews.delete(pid);
+        if (previews.size >= 10) throw fail(429, 'TOO_MANY_UPLOADS');
+        const pid = crypto.randomBytes(10).toString('hex');
+        previews.set(pid, { buffer, type: imageType(buffer), at: now(), scopeKey: scopeKey(scope) });
+        return { previewId: pid };
+      },
+    },
+    /** Called by the server for every API request and every few minutes. */
+    noteActivity: () => schedule?.noteActivity(),
+    tick: () => (schedule ? schedule.tick() : Promise.resolve({ skipped: 'no vault' })),
+    schedule,
     capabilities: async scope => { await ensureLoaded(); return sanitizeCaps(await capabilities(scope)); },
     startBackup, createUpload, appendChunk, completeUpload, startRestore,
     list: async scope => { await ensureLoaded(); return [...jobs.values()].filter(j => j.scopeKey === scopeKey(scope) && j.kind !== 'validate').sort((a, b) => b.createdAt - a.createdAt).slice(0, 20).map(view); },

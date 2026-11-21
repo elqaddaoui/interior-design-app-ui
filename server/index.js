@@ -17,6 +17,7 @@ const { normalizeColors } = require('./imagegen/prompt');
 const { createStatic } = require('./static');
 const { createBackupService } = require('./backup');
 const { route: backupRoute } = require('./backup/routes');
+const { createVault, createR2Driver, createDiskDriver } = require('./backup/vault');
 const fsNode = require('node:fs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const DEFAULT_RESOLVED = pathname => ({ tenant: { id: 'default', slug: 'default', name: 'Default', kind: 'default', status: 'active' }, via: 'default', base: '', pathname, platform: true });
@@ -133,13 +134,20 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
   // Platform back office: the only code that touches the saas_* tables with the raw database (server/superadmin.js).
   const superAdmin = createSuperAdmin({ db: rawDb, env, bundles, tenants });
   // Backup & restore (server/backup): one service for the store admin and the super admin. Not available on serverless hosts (no disk).
+  // The vault: finished backups live in the R2 bucket under `backup/<version>/<all|db|code|media>/`. Without R2 a server folder is used (self-hosted only).
+  const backupVault = (() => {
+    if (mediaOptions.vault !== undefined) return mediaOptions.vault;
+    if (r2Status(env) === 'r2') return createVault({ storage: createR2Driver({ env }), env });
+    if (!env.VERCEL && env.BACKUP_VAULT_DIR) return createVault({ storage: createDiskDriver({ dir: env.BACKUP_VAULT_DIR }), env });
+    return null;
+  })();
   const backup = createBackupService({
-    db: rawDb, bundles, env, appRoot: env.BACKUP_APP_ROOT || path.join(__dirname, '..'),
+    db: rawDb, bundles, env, appRoot: env.BACKUP_APP_ROOT || path.join(__dirname, '..'), vault: backupVault,
     tenantIds: async () => (await rawDb.query('SELECT id FROM saas_tenants ORDER BY id')).map(row => row.id),
     // The database changed under the running process: forget every in-memory copy and make open apps refetch.
     // A platform backup that holds the database and reached Google Drive / Dropbox counts as "saved" for the free-tier monitor.
     async onBackupFinished({ scope, job }) {
-      if (scope.kind === 'platform' && job.options?.destination && job.options.destination !== 'local' && job.options.type !== 'app') await superAdmin.limits.noteBackup();
+      if (scope.kind === 'platform' && job.options?.destination && job.options.destination !== 'local' && job.options.type !== 'app' && job.options.type !== 'media') await superAdmin.limits.noteBackup();
     },
     async onRestored(scope) {
       const ids = scope.kind === 'platform' ? (await rawDb.query('SELECT id FROM saas_tenants')).map(row => row.id) : [scope.tenantId];
@@ -202,6 +210,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
       const db = bundle.db; // tenant-bound: shadows the raw database for everything below
       if (url.pathname.startsWith('/api/')) {
         lastApiAt = Date.now();
+        if (!/\/(?:admin|super-admin)\/backup\//.test(url.pathname) && !/\/super-admin\/(?:backup|tenants)/.test(url.pathname)) backup.noteActivity(); // feeds the quiet-hour profile of the daily backup
         // Same-origin needs no configuration; other origins need an explicit allowlist.
         const sameOrigin = origin && /^https?:\/\//.test(origin) && new URL(origin).host === req.headers.host;
         if (origin && !sameOrigin && !allowedOrigins.includes(origin)) throw fail(403, 'Origin not allowed');
@@ -299,6 +308,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
             const done = await backupRoute({ backup, scope, req, url, readBody, path: sb[2], audit: (action, detail) => superAdmin.audit(me.email, action, sb[1] || null, 'backup', detail) });
             if (!done) throw fail(404, 'API route not found');
             if (done.download) return sendDownload(req, res, done.download);
+            if (done.image) { res.writeHead(200, { 'Content-Type': done.image.type, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'Content-Length': done.image.body.length }); return res.end(done.image.body); }
+            if (done.pipe) { res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${String(done.pipe.name).replace(/[^A-Za-z0-9._-]/g, '_')}"`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }); return require('node:stream').pipeline(done.pipe.stream, res, () => {}); }
             return json(done.status, done.data, { 'Cache-Control': 'private, no-store' });
           }
           const result = await superAdmin.handle({ req, url, readBody, ip: address(req) });
@@ -979,8 +990,14 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
     void superAdmin.limits.tick({ active: Date.now() - lastApiAt < 300000 }).catch(() => {});
   }, 60000);
   limitsTimer.unref();
+  // Daily backup + retention: decided every 5 minutes (cheap: reads two small rows), started only when the app is quiet (server/backup/schedule.js).
+  const backupTimer = setInterval(() => {
+    if (!db.configured() || !isReady() || closed) return;
+    void backup.tick().catch(() => {});
+  }, Math.max(1000, Number(env.BACKUP_TICK_MS) || 300000));
+  backupTimer.unref();
   timer.unref();
-  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(limitsTimer); clearInterval(sweeper); void db.close(); });
+  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(limitsTimer); clearInterval(backupTimer); clearInterval(sweeper); void db.close(); });
   return { server, handle, backup, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
 }
 module.exports = { createBackend, passwordMatches };

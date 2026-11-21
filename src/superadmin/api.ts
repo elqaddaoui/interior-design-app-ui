@@ -49,6 +49,16 @@ const MESSAGES: Record<string, string> = {
   SOURCE_MISSING: 'A file of the source could not be found.', VERIFY_FAILED: 'The copy could not be verified. Nothing was changed.',
   BACKUP_UNSUPPORTED_HOST: 'This host cannot make backups (no disk). Use the Neon and Cloudflare dashboards, or run the server on a host with a disk.',
   BACKUP_BUSY: 'A backup is already running. Wait for it to finish.', BACKUP_SERVER_BUSY: 'The server is busy with other backups. Try again in a few minutes.', JOB_NOT_FOUND: 'That backup is no longer there.', FILE_NOT_FOUND: 'The backup file is no longer there. Start a new backup.',
+  VAULT_NOT_CONFIGURED: 'The backup vault is not configured on this server.', BACKUP_NOT_FOUND: 'That backup is no longer in the vault.',
+  VAULT_VERIFY_FAILED: 'The saved copy did not match what was sent, so it was discarded. Nothing half-written is kept. Try again.',
+  BACKUP_KEY_MISSING: 'This backup is encrypted and the server has no valid encryption key.', BACKUP_DECRYPT_FAILED: 'The backup could not be decrypted: wrong key or damaged file.',
+  BACKUP_NOT_ENCRYPTED: 'This file is not an encrypted backup.', BACKUP_HASH_MISMATCH: 'The backup is damaged: its checksum does not match.',
+  INVALID_PREVIEW: 'The screenshot is not a valid picture.', INVALID_HOUR: 'Choose an hour from 0 to 23, or automatic.', INVALID_RETENTION: 'Keep backups for 1 to 365 days.',
+  VAULT_DOWNLOAD_FAILED: 'The backup could not be downloaded from the bucket.', SAFETY_BACKUP_FAILED: 'The safety copy could not be made, so nothing was restored.',
+  NOT_VALIDATED: 'The backup was not checked yet.', UPLOAD_CHANGED: 'The file changed after it was checked. Start again.', NOTHING_TO_RESTORE: 'Choose at least one part to restore.',
+  CONFIRMATION_REQUIRED: 'Confirm the restore first.', NOT_A_ZIP: 'This file is not a backup archive.', ARCHIVE_INVALID_DB: 'The database part of this backup is damaged.',
+  ARCHIVE_NOT_A_BACKUP: 'This archive is not a backup of this app.', TOO_MANY_UPLOADS: 'Too many pending files. Try again in a minute.', NOT_ENOUGH_DISK: 'Not enough free disk space on the server for this backup.',
+  INTERNAL: 'Something went wrong.',
   AI_DISABLED_DEMO: 'The API is off for this demo. Turn it on from Demos.', AI_PAUSED: 'The API of this store is paused.',
 };
 export const saMessage = (error: unknown) => (error instanceof SaError ? tr(MESSAGES[error.code] || error.code) : tr('Something went wrong.'));

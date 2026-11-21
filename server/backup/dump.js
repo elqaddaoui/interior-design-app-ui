@@ -53,6 +53,18 @@ function checkProvider(requested, detected) {
 async function columnsOf(q, table) {
   return (await q("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position", [table])).map(row => row.column_name);
 }
+/** Columns of a table with what an INSERT needs to know: { name, nullable, hasDefault, type }. */
+async function columnInfo(q, table) {
+  return (await q("SELECT column_name, is_nullable, column_default, data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position", [table]))
+    .map(row => ({ name: row.column_name, nullable: row.is_nullable === 'YES', hasDefault: row.column_default != null, type: String(row.data_type || '') }));
+}
+/** A neutral value for a required column that an older backup does not know (the column was added to the schema after the backup). */
+function fillValue(type) {
+  if (/int|numeric|decimal|real|double|serial/i.test(type)) return 0;
+  if (/bool/i.test(type)) return false;
+  if (/json/i.test(type)) return '{}';
+  return '';
+}
 const jsonLine = row => JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? Number(v) : v)) + '\n';
 
 /** Row as exported: the API key of a "models" content row is blanked. */
@@ -124,11 +136,25 @@ function checkTables(meta, tenant) {
   if (!meta || typeof meta !== 'object' || typeof meta.tables !== 'object' || !meta.tables) throw fail(400, 'ARCHIVE_INVALID_DB');
   const allowed = new Map(specsFor(tenant).map(spec => [spec.table, spec]));
   for (const [table, info] of Object.entries(meta.tables)) {
-    if (!allowed.has(table)) throw fail(400, 'ARCHIVE_UNKNOWN_TABLE', { table: table.slice(0, 40) });
+    // A table this version no longer has (an older backup) is not an error: it is skipped (see `tolerate`). The NAME is still checked, it is only ever
+    // compared with the allow-list and never put into SQL unless it is on it.
+    if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw fail(400, 'ARCHIVE_INVALID_DB');
+    if (!allowed.has(table)) continue;
     if (!Array.isArray(info?.columns) || info.columns.some(c => typeof c !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(c))) throw fail(400, 'ARCHIVE_INVALID_DB');
     if (!Number.isInteger(info.rows) || info.rows < 0) throw fail(400, 'ARCHIVE_INVALID_DB');
   }
   return allowed;
+}
+
+/**
+ * The tables.json of an archive reduced to the tables this version knows. `skipped` lists the others: a backup made by an older (or newer)
+ * version of the app restores what still exists instead of failing as a whole.
+ */
+function tolerate(meta, tenant) {
+  const allowed = checkTables(meta, tenant);
+  const tables = {}, skipped = [];
+  for (const [table, info] of Object.entries(meta.tables)) { if (allowed.has(table)) tables[table] = info; else skipped.push(table); }
+  return { meta: { ...meta, tables }, skipped };
 }
 
 /**
@@ -145,10 +171,12 @@ async function importDatabase({ db, tenant, meta, open, protect = {}, onTable, c
   const order = specsFor(tenant).filter(spec => allowed.has(spec.table) && meta.tables[spec.table] && !spec.preserve);
   await db.tx(async q => {
     const current = {};
+    const infos = {};
     const keepers = {};
     // 1. read what must survive, 2. empty the tables (children first)
     for (const spec of [...order].reverse()) {
-      current[spec.table] = await columnsOf(q, spec.table);
+      infos[spec.table] = await columnInfo(q, spec.table);
+      current[spec.table] = infos[spec.table].map(c => c.name);
       if (!current[spec.table].length) throw fail(400, 'SCHEMA_MISMATCH', { table: spec.table });
       const tenantFilter = tenant && isTenantTable(spec.table) ? 'tenant_id=:tenant' : '';
       const keyCols = !tenant && isTenantTable(spec.table) ? ['tenant_id', ...spec.pk] : spec.pk;
@@ -181,7 +209,11 @@ async function importDatabase({ db, tenant, meta, open, protect = {}, onTable, c
       if (stream) {
         const columns = info.columns.filter(c => current[spec.table].includes(c) && !(spec.keep || []).includes(c) && !(spec.omit || []).includes(c));
         const withTenant = tenant && isTenantTable(spec.table);
-        const names = (withTenant ? ['tenant_id', ...columns.filter(c => c !== 'tenant_id')] : columns);
+        // Columns the schema gained after this backup was made: required ones without a default get a neutral value instead of failing the restore.
+        const known = new Set(info.columns);
+        const fills = infos[spec.table].filter(c => !c.nullable && !c.hasDefault && !known.has(c.name) && !(withTenant && c.name === 'tenant_id') && !columns.includes(c.name)).map(c => ({ name: c.name, value: fillValue(c.type) }));
+        const filled = new Map(fills.map(f => [f.name, f.value]));
+        const names = (withTenant ? ['tenant_id', ...columns.filter(c => c !== 'tenant_id')] : columns).concat(fills.map(f => f.name));
         const dataCols = withTenant ? names.slice(1) : names;
         if (!names.length) throw fail(400, 'ARCHIVE_INVALID_DB');
         let batch = [];
@@ -190,7 +222,7 @@ async function importDatabase({ db, tenant, meta, open, protect = {}, onTable, c
           const params = [];
           const tuples = batch.map(row => `(${names.map(c => {
             if (withTenant && c === 'tenant_id') return ':tenant';
-            params.push(row[c] === undefined ? null : row[c]);
+            params.push(filled.has(c) ? filled.get(c) : row[c] === undefined ? null : row[c]);
             return `$${params.length}`;
           }).join(',')})`);
           const done = await q(`INSERT INTO ${tref(spec.table)}(${names.map(ident).join(',')}) VALUES ${tuples.join(',')} ON CONFLICT DO NOTHING RETURNING 1 AS n`, params);
@@ -252,4 +284,4 @@ async function collectSecrets({ db, tenant }) {
   return [...found];
 }
 
-module.exports = { collectSecrets, exportDatabase, importDatabase, detectProvider, checkProvider, checkTables, specsFor, readRows };
+module.exports = { collectSecrets, exportDatabase, importDatabase, detectProvider, checkProvider, checkTables, tolerate, specsFor, readRows };

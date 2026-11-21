@@ -17,6 +17,7 @@ const NAV: { href: string; label: string; testID: string; icon: IconName }[] = [
   { href: '/super-admin/media', label: 'Media & storage', testID: 'sa-nav-media', icon: 'imageMultipleOutline' },
   { href: '/super-admin/apis', label: 'APIs', testID: 'sa-nav-apis', icon: 'lockOutline' },
   { href: '/super-admin/limits', label: 'Service limits', testID: 'sa-nav-limits', icon: 'chartLine' },
+  { href: '/super-admin/backup', label: 'Backup & restore', testID: 'sa-nav-backup', icon: 'shieldCheckOutline' },
   { href: '/super-admin/audit', label: 'Activity', testID: 'sa-nav-audit', icon: 'formatListBulleted' },
   { href: '/super-admin/settings', label: 'Settings', testID: 'sa-nav-settings', icon: 'cogOutline' },
 ];

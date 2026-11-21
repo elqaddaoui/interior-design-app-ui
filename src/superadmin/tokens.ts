@@ -110,3 +110,9 @@ export function applySaTheme(id: string, remember = true): boolean {
   if (remember) { try { (globalThis as any).localStorage?.setItem(KEY, theme.id); } catch { /* private mode: keep it for this visit only */ } }
   return true;
 }
+
+/** Terminal look of the backup / restore progress screen: always dark, whatever palette the console uses. */
+export const SA_TERMINAL = {
+  bg: '#0B0F14', bar: '#161C24', line: '#2A323D', text: '#D6DEE8', dim: '#7C8896', ok: '#5FE3A1', warn: '#F2C265', danger: '#FF7B8A', accent: '#8AB4FF',
+  family: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+} as const;

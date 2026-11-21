@@ -62,19 +62,37 @@ async function writeInto(base, rel, stream) {
   return hasher.result();
 }
 
-/** Copies a staged app into the live app directory (file by file, atomically per file). Returns the number of files. */
-async function applyStage(stage, root, rels) {
+/**
+ * Copies a staged app into the live app directory (file by file, atomically per file). Every file it replaces is first copied to `undo`; when
+ * anything fails the originals are put back (and files that did not exist are removed), so a restore never leaves a half-old, half-new app.
+ * Returns the number of files.
+ */
+async function applyStage(stage, root, rels, undo) {
   let count = 0;
-  for (const rel of rels) {
-    if (!allowed(rel)) continue;
-    const from = path.join(stage, ...rel.split('/'));
-    const to = path.resolve(root, ...rel.split('/'));
-    if (!to.startsWith(path.resolve(root) + path.sep)) continue;
-    await fs.promises.mkdir(path.dirname(to), { recursive: true });
-    const temp = `${to}.apply-${process.pid}.tmp`;
-    await fs.promises.copyFile(from, temp);
-    await fs.promises.rename(temp, to);
-    count++;
+  const done = [];
+  try {
+    for (const rel of rels) {
+      if (!allowed(rel)) continue;
+      const from = path.join(stage, ...rel.split('/'));
+      const to = path.resolve(root, ...rel.split('/'));
+      if (!to.startsWith(path.resolve(root) + path.sep)) continue;
+      await fs.promises.mkdir(path.dirname(to), { recursive: true });
+      let existed = false;
+      if (undo) {
+        const keep = path.join(undo, ...rel.split('/'));
+        try { await fs.promises.mkdir(path.dirname(keep), { recursive: true }); await fs.promises.copyFile(to, keep); existed = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      done.push({ to, rel, existed });
+      const temp = `${to}.apply-${process.pid}.tmp`;
+      await fs.promises.copyFile(from, temp);
+      await fs.promises.rename(temp, to);
+      count++;
+    }
+  } catch (error) {
+    if (undo) for (const item of done.reverse()) {
+      try { if (item.existed) await fs.promises.copyFile(path.join(undo, ...item.rel.split('/')), item.to); else await fs.promises.rm(item.to, { force: true }); } catch { /* best effort */ }
+    }
+    throw error;
   }
   return count;
 }

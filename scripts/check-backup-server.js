@@ -622,7 +622,7 @@ test('super admin: platform backup (all stores + platform tables) and restore, p
     await h.call(s.backend, `/${shop.slug}/api/admin/content/roomTypes/room_shop`, { method: 'PUT', headers: shop.headers, body: { title: { fr: 'SHOP-ROW', ar: 'A', dar: 'A' }, order: 1, visible: true } });
     await s.db.query("INSERT INTO saas_apis(id,kind,provider,label,api_key,created_at,updated_at) VALUES('api_t1','image','x','Label','sk-platform-API-SECRET-999',1,1)");
     const caps = await h.call(s.backend, `${SP}/capabilities`, { headers: S });
-    assert.equal(caps.status, 200); assert.equal(caps.body.scope, 'platform'); assert.deepEqual(caps.body.types, ['app', 'db', 'both']);
+    assert.equal(caps.status, 200); assert.equal(caps.body.scope, 'platform'); assert.deepEqual(caps.body.types, ['app', 'db', 'both', 'media']);
     // platform backup: every store, platform tables, the app
     const made = await backup(s, { type: 'both', data: 'content', media: true }, SP, S);
     const m = JSON.parse((await made.entries.read('manifest.json')).toString());
