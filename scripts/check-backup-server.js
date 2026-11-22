@@ -81,7 +81,7 @@ for (const storage of STORAGES) {
               for (const n of names) {
                 const text = (await made.entries.read(n)).toString('latin1');
                 for (const secret of ['sk-model-SECRET-0123456789', 'r8_ImageKeySECRET0123456789', 'SuperSecretDbPassword123', 'sk_live_ShouldNeverLeak99', 'secret-top-level-value', 'PRIVATE KEY']) assert.ok(!text.includes(secret), `${n} leaks ${secret}`);
-                assert.ok(!/(^|\/)\.env/.test(n) && !/\.pem$/.test(n) && !n.includes('node_modules') && !n.startsWith('app/server/data/'), n);
+                assert.ok(!/(^|\/)\.env(?!\.(?:example|sample)$)/.test(n) && !/\.pem$/.test(n) && !n.includes('node_modules') && !n.startsWith('app/server/data/'), n);
               }
               // change everything the backup knows about
               await h.call(s.backend, '/api/admin/content/roomTypes/room_t1', { method: 'PUT', headers: s.admin, body: { title: { fr: 'CHANGED', ar: 'A', dar: 'A' }, order: 99, visible: true } });

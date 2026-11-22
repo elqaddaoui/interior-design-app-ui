@@ -12,6 +12,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
+const yazl = require('yazl');
 const { createArchive, openArchive, openEntry, readEntry, hashEntry, hashing } = require('./zip');
 const { exportDatabase, importDatabase, detectProvider, checkProvider, tolerate, collectSecrets, specsFor } = require('./dump');
 const { buildPreview, imageType } = require('./preview');
@@ -131,7 +132,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     const data = input.data === 'empty' ? 'empty' : input.data === 'content' || input.data === undefined ? 'content' : (() => { throw fail(400, 'INVALID_DATA_MODE'); })();
     const destination = ['local', 'gdrive', 'dropbox', ...(vaultOn(scope) ? ['vault'] : [])].includes(input.destination || 'local') ? input.destination || 'local' : (() => { throw fail(400, 'INVALID_DESTINATION'); })();
     const auth = destination === 'local' || destination === 'vault' ? {} : { accessToken: typeof input.auth?.accessToken === 'string' ? input.auth.accessToken.trim().slice(0, 4096) : '', folderId: String(input.auth?.folderId || '').slice(0, 200), folder: String(input.auth?.folder || '').slice(0, 200) };
-    return { type, kind: store ? null : KIND_OF(type, input.media === true), parts, tables, storeParts: store ? type : null, data: store && type === 'app' ? 'content' : data, media: type === 'media' ? true : input.media === true, destination, provider: input.provider || 'auto', auth, createdBy: input.createdBy === 'schedule' || input.createdBy === 'pre-restore' ? input.createdBy : 'manual', previewId: typeof input.previewId === 'string' ? input.previewId.slice(0, 40) : '' };
+    return { type, kind: store ? null : KIND_OF(type, input.media === true), parts, tables, storeParts: store ? type : null, data: store && type === 'app' ? 'content' : data, media: type === 'media' ? true : input.media === true, destination, provider: input.provider || 'auto', auth, createdBy: ['schedule', 'pre-restore', 'limit'].includes(input.createdBy) ? input.createdBy : 'manual', previewId: typeof input.previewId === 'string' ? input.previewId.slice(0, 40) : '' };
   }
   const publicOptions = o => ({ type: o.type, kind: o.kind, data: o.data, media: o.media, destination: o.destination, provider: o.provider, createdBy: o.createdBy });
 
@@ -170,6 +171,9 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
     const mediaBytes = media.reduce((sum, m) => sum + (m.row.size || 0), 0);
     const app = o.parts.app ? await appFiles.listApp(appRoot) : [];
     const appBytes = app.reduce((sum, f) => sum + f.size, 0);
+    // A deployment that was built elsewhere (only dist/ + server/) cannot give back a project that builds: say so instead of staying silent.
+    const noSource = o.parts.app && !app.some(f => f.rel.startsWith('src/'));
+    if (noSource) { job.warnings.push({ code: 'APP_SOURCE_MISSING' }); log(job, 'warn', 'APP_SOURCE_MISSING'); }
     try {
       const free = (await fs.promises.statfs(FILES)); const available = Number(free.bavail) * Number(free.bsize);
       if (available < (mediaBytes + appBytes) * 1.05 + 64 * 1024 * 1024) throw fail(507, 'NOT_ENOUGH_DISK');
@@ -370,7 +374,7 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       for (const entry of archive.entries.keys()) {
         if (entry === 'manifest.json') continue;
         if (!listed.has(entry)) throw fail(400, 'ARCHIVE_UNLISTED_ENTRY', { entry: entry.slice(0, 80) });
-        if (/(^|\/)\.env(\.|$)|\.(pem|key|p12|p8|pfx|jks)$/i.test(entry)) throw fail(400, 'ARCHIVE_SECRET_FILE', { entry: entry.slice(0, 80) });
+        if (/(^|\/)\.env(?!\.(?:example|sample)$)(\.|$)|\.(pem|key|p12|p8|pfx|jks)$/i.test(entry)) throw fail(400, 'ARCHIVE_SECRET_FILE', { entry: entry.slice(0, 80) });
         if (!/^(db\/(schema\.sql|tables\.json|data\/[a-z_][a-z0-9_]*\.ndjson)|app\/.+|media\/(index\.json|[a-z0-9][a-z0-9_-]{0,62}\/files\/[a-f0-9]{32}\.[a-z0-9]+))$/.test(entry)) throw fail(400, 'ARCHIVE_UNKNOWN_ENTRY', { entry: entry.slice(0, 80) });
         if (entry.startsWith('app/') && !appFiles.allowed(entry.slice(4))) throw fail(400, 'ARCHIVE_UNSAFE_PATH', { entry: entry.slice(0, 80) });
       }
@@ -601,6 +605,34 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
       async remove(scope, id) { need(scope); const item = await vault.find(id); await vault.remove(item); return { ok: true, name: item.name }; },
       async preview(scope, id) { need(scope); return vault.previewOf(await vault.find(id)); },
       async open(scope, id) { need(scope); const item = await vault.find(id); return { name: `${item.name}.zip`, stream: await vault.openPlain(item) }; },
+      /**
+       * The code of a backup laid out like a Git repository: the files of `app/` at the root of the zip (no `app/` folder, no `dist/`, which
+       * .gitignore leaves out anyway). Unzip it, `git init`, push: it installs and builds like the original project.
+       */
+      async openRepo(scope, id) {
+        need(scope);
+        const item = await vault.find(id);
+        if (!item.includes?.app) throw fail(400, 'NO_CODE_IN_BACKUP');
+        await ensureDirs();
+        const temp = path.join(WORK, `repo-${crypto.randomBytes(6).toString('hex')}.zip`);
+        await vault.fetchTo(item, temp);
+        let archive;
+        const cleanup = () => { try { archive?.close(); } catch { /* already closed */ } fs.promises.rm(temp, { force: true }).catch(() => {}); };
+        try {
+          archive = await openArchive(temp);
+          const names = [...archive.entries.keys()].filter(e => e.startsWith('app/') && !e.startsWith('app/dist/') && appFiles.allowed(e.slice(4)));
+          if (!names.length) throw fail(400, 'NO_CODE_IN_BACKUP');
+          // A backup from before the source was included holds only the built app: pushing that to GitHub gives a repository that cannot build.
+          if (!names.some(e => e.startsWith('app/src/'))) throw fail(400, 'BACKUP_HAS_NO_SOURCE');
+          const zip = new yazl.ZipFile();
+          for (const entry of names) {
+            zip.addReadStreamLazy(entry.slice(4), { mtime: archive.entries.get(entry).getLastModDate(), mode: 0o100644, compress: true }, cb => { openEntry(archive, entry).then(stream => cb(null, stream), cb); });
+          }
+          zip.end();
+          zip.outputStream.on('close', cleanup);
+          return { name: `${item.name}-repo.zip`, stream: zip.outputStream };
+        } catch (error) { cleanup(); throw error; }
+      },
       async settings(scope, input) { need(scope); return input === undefined ? schedule.getSettings() : schedule.setSettings(input); },
       async prune(scope, body) { need(scope); const keep = (await schedule.getSettings()).retentionDays; return vault.prune({ keepDays: Number(body?.keepDays) || keep, dryRun: body?.dryRun === true }); },
       /** The browser's screenshot of the app, kept for 10 minutes until the backup that uses it starts. */
@@ -616,6 +648,24 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
         previews.set(pid, { buffer, type: imageType(buffer), at: now(), scopeKey: scopeKey(scope) });
         return { previewId: pid };
       },
+    },
+    /**
+     * A FULL backup (database + code + files) into the vault, started by the free-tier monitor when a provider is close to its limit.
+     * `avoidR2`: the R2 bucket is the one that is nearly full, prefer another destination. Resolves when the job has finished:
+     * { status: 'done' | 'error' | 'cancelled', error?, name?, destination }. Throws BACKUP_BUSY / VAULT_NOT_CONFIGURED /
+     * BACKUP_UNSUPPORTED_HOST when it cannot even start (the caller tries again later).
+     */
+    async runAutomatic({ avoidR2 = false } = {}) {
+      if (!vault) throw fail(400, 'VAULT_NOT_CONFIGURED');
+      // R2 is the stressed provider and the vault lives in it: use Google Drive / Dropbox when the server has them (their own tokens), else the vault.
+      let destination = 'vault';
+      if (avoidR2 && vault.kind === 'r2') { const c = destinations.configured(); destination = c.gdrive ? 'gdrive' : c.dropbox ? 'dropbox' : 'vault'; }
+      const started = await startBackup({ ...platform(), actor: 'limits' }, { kind: 'all', destination, createdBy: 'limit', data: 'content' });
+      for (;;) {
+        const job = jobs.get(started.id);
+        if (job && !['queued', 'running'].includes(job.status)) return { status: job.status, error: job.errors?.[0]?.code, name: job.result?.destination?.name, destination };
+        await new Promise(resolve => setTimeout(resolve, env.NODE_ENV === 'test' ? 20 : 1000));
+      }
     },
     /** Called by the server for every API request and every few minutes. */
     noteActivity: () => schedule?.noteActivity(),

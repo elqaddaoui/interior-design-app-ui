@@ -10,7 +10,7 @@ import { Badge, Btn, Card, Empty, ErrorLine, Field, Heading, Hint, Loading, Noti
 
 const KINDS: VaultKind[] = ['all', 'db', 'code', 'media'];
 const kindLabel = (k: VaultKind) => (k === 'all' ? tr('Full app') : k === 'db' ? tr('Database') : k === 'code' ? tr('Code') : tr('Media'));
-const kindHint = (k: VaultKind) => (k === 'all' ? tr('Database, code and every uploaded file in one archive.') : k === 'db' ? tr('Only the database: content, stores, requests, clients.') : k === 'code' ? tr('Only the application code.') : tr('Only the uploaded pictures, videos and files.'));
+const kindHint = (k: VaultKind) => (k === 'all' ? tr('Database, code and every uploaded file in one archive.') : k === 'db' ? tr('Only the database: content, stores, requests, clients.') : k === 'code' ? tr('Only the application code, the whole project: with it you can create a new GitHub repository.') : tr('Only the uploaded pictures, videos and files.'));
 const when = (at: number) => new Date(at).toLocaleString();
 const API = '/api/super-admin/backup';
 
@@ -46,7 +46,7 @@ function ItemRow({ item, current, onRestore, onDelete, onPreview }: { item: Vaul
       <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 200 }}>
         <Row style={{ gap: 6 }}>
           <Badge label={kindLabel(item.kind)} tone="accent" />
-          {item.createdBy === 'schedule' ? <Badge label={tr('Daily')} tone="muted" /> : item.createdBy === 'pre-restore' ? <Badge label={tr('Before a restore')} tone="warn" /> : null}
+          {item.createdBy === 'schedule' ? <Badge label={tr('Daily')} tone="muted" /> : item.createdBy === 'pre-restore' ? <Badge label={tr('Before a restore')} tone="warn" /> : item.createdBy === 'limit' ? <Badge label={tr('Limit reached')} tone="warn" /> : null}
           {item.encrypted ? <Badge label={tr('Encrypted')} tone="ok" /> : null}
           {current ? null : <Badge label={tr('Older version')} tone="muted" />}
         </Row>
@@ -58,6 +58,7 @@ function ItemRow({ item, current, onRestore, onDelete, onPreview }: { item: Vaul
       <Row style={{ alignSelf: 'center' }}>
         <Btn testID="sa-backup-restore" small icon="restore" label={tr('Restore')} onPress={onRestore} />
         <Btn testID="sa-backup-download" small kind="ghost" icon="download" label={tr('Download')} onPress={() => openUrl(`${API}/vault/${item.id}/download`)} />
+        {item.includes.app ? <Btn testID="sa-backup-repo" small kind="ghost" icon="download" label={tr('Git repository')} onPress={() => openUrl(`${API}/vault/${item.id}/repo`)} /> : null}
         <Btn testID="sa-backup-delete" small kind="ghost" icon="trashCanOutline" label={tr('Delete')} onPress={onDelete} />
       </Row>
     </View>

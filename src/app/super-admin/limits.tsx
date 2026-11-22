@@ -66,6 +66,23 @@ function MetricCard({ m }: { m: LimitMetric }) {
   );
 }
 
+/** What the automatic full backup (started when a limit reaches the threshold) did last. */
+function AutoBackupLine({ status }: { status: LimitsStatus }) {
+  const auto = status.autoBackup;
+  if (!status.settings.autoBackup) return <Hint>{tr('The automatic full backup is off.')}</Hint>;
+  const hint = <Hint>{tr('A full backup is made by itself when a limit reaches {pct} %.', { pct: status.settings.autoBackupAt })}</Hint>;
+  if (!auto) return hint;
+  const what = (auto.ids || []).map(id => tr(TITLE[id] || id)).join(', ');
+  return (
+    <View>
+      {hint}
+      {auto.status === 'running' ? <Notice tone="warn" testID="sa-limits-auto">{tr('An automatic full backup is running ({what}).', { what })}</Notice>
+        : auto.status === 'done' ? <Notice tone="ok" testID="sa-limits-auto">{tr('Automatic full backup made {when} ({what}).', { when: ago(auto.finishedAt || auto.at), what })}</Notice>
+          : <Notice tone="danger" testID="sa-limits-auto">{tr('The automatic full backup failed {when}. It will be tried again.', { when: ago(auto.finishedAt || auto.at) })}</Notice>}
+    </View>
+  );
+}
+
 /** Backups live on their own page now; here only the reminder and the way there. */
 function BackupCard({ status }: { status: LimitsStatus }) {
   const router = useRouter();
@@ -76,6 +93,7 @@ function BackupCard({ status }: { status: LimitsStatus }) {
       <T weight="bold" size="lg">{tr('Backup & restore')}</T>
       <Hint>{tr('Full, database, code or media backups, daily backups, history by version and restore now have their own page.')}</Hint>
       <Notice tone={last == null || (age ?? 0) > 14 ? 'warn' : 'ok'} testID="sa-limits-lastbackup">{last == null ? tr('No backup has been saved yet.') : tr('Last backup you saved: {when}.', { when: ago(last) })}</Notice>
+      <AutoBackupLine status={status} />
       <Row>
         <Btn testID="sa-limits-backup" icon="shieldCheckOutline" label={tr('Open the backup page')} onPress={() => router.push('/super-admin/backup')} />
       </Row>
@@ -114,6 +132,14 @@ function Settings({ status, onSaved }: { status: LimitsStatus; onSaved: () => vo
       <Field label={tr('Warning from (% of the limit)')} value={String(draft.warnAt)} onChangeText={v => setDraft({ ...draft, warnAt: num(v) })} keyboardType="number-pad" />
       <Field label={tr('Back up now from (% of the limit)')} value={String(draft.urgentAt)} onChangeText={v => setDraft({ ...draft, urgentAt: num(v) })} keyboardType="number-pad" />
       <Field label={tr('Critical from (% of the limit)')} value={String(draft.criticalAt)} onChangeText={v => setDraft({ ...draft, criticalAt: num(v) })} keyboardType="number-pad" />
+      <View style={{ marginTop: SA.space.sm, marginBottom: SA.space.sm }}>
+        <T size="sm" weight="bold">{tr('Automatic full backup')}</T>
+        <Hint>{tr('When Neon or R2 gets this close to a free limit, the app backs up everything by itself (database, code and files).')}</Hint>
+        <Row>
+          {onOff(draft.autoBackup, autoBackup => setDraft({ ...draft, autoBackup }))}
+        </Row>
+      </View>
+      {draft.autoBackup ? <Field label={tr('Make the full backup from (% of the limit)')} value={String(draft.autoBackupAt)} onChangeText={v => setDraft({ ...draft, autoBackupAt: num(v) })} keyboardType="number-pad" {...({ testID: 'sa-limits-autoat' } as object)} /> : null}
       <Field label={tr('Warn when a limit would be reached within (days, 0 = off)')} value={String(draft.forecastDays)} onChangeText={v => setDraft({ ...draft, forecastDays: num(v) })} keyboardType="number-pad" />
       <Field label={tr('Remind me again after (hours)')} value={String(draft.reminderHours)} onChangeText={v => setDraft({ ...draft, reminderHours: num(v) })} keyboardType="number-pad" />
       <ErrorLine error={error} />

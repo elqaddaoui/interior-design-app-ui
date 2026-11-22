@@ -5,6 +5,7 @@
  *
  *   GET    /capabilities                      what this host can do (types, provider, media storages, destinations)
  *   GET    /jobs                              recent jobs of this scope
+ *   GET    /vault/:id/repo                    the code of a backup as a Git-repository zip (files at the root, no app/ folder)
  *   POST   /jobs                              start a backup            { type, data, media, provider, destination, auth }
  *   GET    /jobs/:id                          progress, steps, log, errors
  *   POST   /jobs/:id/cancel
@@ -33,6 +34,7 @@ async function route({ backup, scope, req, url, readBody, path, audit }) {
   if (path === '/previews' && method === 'POST') return ok(await backup.vault.addPreview(scope, (await readBody(req))?.data), 201);
   if ((m = new RegExp(`^/vault/${ID}/preview$`).exec(path)) && method === 'GET') return { image: await backup.vault.preview(scope, m[1]) };
   if ((m = new RegExp(`^/vault/${ID}/download$`).exec(path)) && method === 'GET') { const f = await backup.vault.open(scope, m[1]); await audit?.('backup.download', f.name); return { pipe: f }; }
+  if ((m = new RegExp(`^/vault/${ID}/repo$`).exec(path)) && method === 'GET') { const f = await backup.vault.openRepo(scope, m[1]); await audit?.('backup.download.repo', f.name); return { pipe: f }; }
   if ((m = new RegExp(`^/vault/${ID}/prepare$`).exec(path)) && method === 'POST') { const r = await backup.vault.prepare(scope, m[1]); await audit?.('restore.prepare', m[1]); return ok(r, 202); }
   if ((m = new RegExp(`^/vault/${ID}$`).exec(path)) && method === 'DELETE') { const r = await backup.vault.remove(scope, m[1]); await audit?.('backup.delete', r.name); return ok(r); }
   if (path === '/jobs' && method === 'GET') return ok({ jobs: await backup.list(scope) });

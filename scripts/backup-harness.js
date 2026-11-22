@@ -66,6 +66,13 @@ function makeAppRoot() {
   put('node_modules/dep/index.js', 'dep');
   put('.env', 'TOP=secret-top-level-value');
   put('api/index.js', '// api v1');
+  put('src/app/index.tsx', '// screen v1');
+  put('src/data/mock/seed.ts', '// model v1');
+  put('assets/icon.png', 'png');
+  put('scripts/postexport.js', '// post v1');
+  put('docs/README.txt', 'docs');
+  put('.gitignore', 'node_modules/\n');
+  put('server/.env.example', 'DATABASE_URL=\n');
   return root;
 }
 const tmp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));

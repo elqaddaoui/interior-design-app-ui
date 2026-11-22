@@ -20,6 +20,11 @@
  *   `reminderHours` while a limit stays at "back up now" or worse, and a notice when the monitor itself has been blind for 12 hours.
  *   A failed delivery is never recorded as sent, so the next check tries again.
  *
+ *   Automatic backup: when ANY measured limit reaches `autoBackupAt` (default 90 %), the monitor starts one FULL backup (database, code and
+ *   files) by itself, through the backup service (`setAutoBackup`, wired in server/index.js). It runs in the background, never twice at the
+ *   same time, at most once per day (a failed or refused attempt is retried later), and the owner is told by e-mail what happened. When the
+ *   stressed provider is R2 and Google Drive / Dropbox is configured on the server, the copy goes there instead of into the R2 vault.
+ *
  * The module never stores or returns a secret (only whether each variable is set) and never calls out while the console is idle:
  * `tick` is cheap, `check` is throttled and guarded by a database lease so several serverless instances do not send twice.
  * Limits change: every plan value below is a default that the owner can override in the console.
@@ -62,8 +67,13 @@ const EFFECTS = {
   billing: 'above the free amount the service keeps working and Cloudflare starts charging you',
 };
 
+const AUTO_COOLDOWN = DAY;            // after a good automatic backup, the next one waits a day
+const AUTO_RETRY = 2 * HOUR;          // a failed one is retried after this
+const AUTO_BUSY_RETRY = 15 * MIN;     // another backup was running: try again soon
+const AUTO_STALE = 3 * HOUR;          // a "running" mark older than this belongs to a process that died
 const DEFAULTS = {
   enabled: true,
+  autoBackup: true, autoBackupAt: 90, // full backup by itself when any limit reaches this % (50-100)
   email: '', // empty = the address of the API warnings (usage settings, ALERT_EMAIL, first super admin)
   warnAt: 70, urgentAt: 85, criticalAt: 95,
   forecastDays: 7, // 0 = no forecast
@@ -82,8 +92,9 @@ function cleanSettings(input, base = DEFAULTS) {
     if (email && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(email)) throw fail(400, 'INVALID_EMAIL');
     out.email = email;
   }
+  if (src.autoBackup !== undefined) out.autoBackup = src.autoBackup === true;
   const whole = (value, min, max) => { const n = Number(value); if (!Number.isInteger(n) || n < min || n > max) throw fail(400, 'INVALID_LIMIT'); return n; };
-  for (const [key, min, max] of [['warnAt', 10, 99], ['urgentAt', 11, 99], ['criticalAt', 12, 100], ['forecastDays', 0, 60], ['reminderHours', 1, 168]]) if (src[key] !== undefined) out[key] = whole(src[key], min, max);
+  for (const [key, min, max] of [['warnAt', 10, 99], ['urgentAt', 11, 99], ['criticalAt', 12, 100], ['forecastDays', 0, 60], ['reminderHours', 1, 168], ['autoBackupAt', 50, 100]]) if (src[key] !== undefined) out[key] = whole(src[key], min, max);
   if (!(out.warnAt < out.urgentAt && out.urgentAt < out.criticalAt)) throw fail(400, 'INVALID_LIMIT');
   if (src.services && typeof src.services === 'object') for (const key of ['neon', 'cloudflare']) if (src.services[key] !== undefined) out.services[key] = src.services[key] === true;
   if (src.limits && typeof src.limits === 'object') {
@@ -180,6 +191,20 @@ function decide(state, items, now, settings) {
   }
   return { send, next };
 }
+/**
+ * Should the monitor start a full backup now? `state` is what the last attempt left ({ status, at, lastOkAt, retryAt }), `items` the evaluated
+ * metrics. Returns { run, why, hot }: `hot` = ids of the limits at or above the threshold. Pure: the clock is a parameter.
+ */
+function decideAutoBackup(state, items, now, settings) {
+  if (!settings.autoBackup) return { run: false, why: 'off', hot: [] };
+  const hot = items.filter(m => m.status === 'ok' && m.pct != null && m.pct >= settings.autoBackupAt).map(m => m.id);
+  if (!hot.length) return { run: false, why: 'below', hot };
+  const known = state || {};
+  if (known.status === 'running' && now - (known.at || 0) < AUTO_STALE) return { run: false, why: 'running', hot };
+  if (known.retryAt && now < known.retryAt) return { run: false, why: 'waiting', hot };
+  if (known.lastOkAt && now - known.lastOkAt < AUTO_COOLDOWN) return { run: false, why: 'cooldown', hot };
+  return { run: true, why: 'limit', hot };
+}
 const fmtValue = (metric, value) => {
   if (value == null) return '?';
   if (metric.unit === 'bytes') return value >= GB ? `${(value / GB).toFixed(2)} GB` : `${(value / 1e6).toFixed(1)} MB`;
@@ -211,6 +236,16 @@ function compose(items, { base = '', lastBackupAt = null, now = Date.now(), blin
   return { subject, text: lines.join('\n').trim() };
 }
 
+/** The message about an automatic backup (English, like the warnings: it goes to an inbox or a chat webhook). */
+function composeAutoBackup({ ok, ids, name, destination, error, base = '' }) {
+  const what = ids.map(id => LABELS[id] || id).join(', ');
+  const lines = ok
+    ? [`A free limit is close to its end (${what}), so a full backup of the app (database, code and files) was started by itself and finished.`, `Saved to: ${destination === 'vault' ? 'your backup vault' : destination}${name ? ` (${name})` : ''}.`, 'Nothing else to do: you can restore it from Backup & restore.']
+    : [`A free limit is close to its end (${what}) and the automatic full backup FAILED (${error || 'unknown error'}).`, 'It is tried again later. If this keeps happening, open Backup & restore and make a backup by hand, then download it.'];
+  if (base) lines.push('', `Open: ${base.replace(/\/+$/, '')}/super-admin/backup`);
+  return { subject: ok ? `[Dwira] Automatic backup made (${what})` : `[Dwira] Automatic backup FAILED (${what})`, text: lines.join('\n') };
+}
+
 // ---------------------------------------------------------------- the service
 
 function createLimits({ db, env = process.env, clock = Date.now, fetch: doFetch = globalThis.fetch, notify, transport = () => false, recipient = async () => '', mediaTotals = async () => null } = {}) {
@@ -222,6 +257,7 @@ function createLimits({ db, env = process.env, clock = Date.now, fetch: doFetch 
   const IDLE_EVERY = Math.max(ACTIVE_EVERY, Number(env.LIMITS_IDLE_EVERY_MS) || 12 * HOUR);
   const memory = { snapshot: null, at: -Infinity };
   let lastRunAt = 0;
+  let autoHook = null, autoPending = null;
 
   // ---------- settings
   async function getSettings() { try { return cleanSettings(await kvJson('limits_settings', {})); } catch { return cleanSettings({}); } }
@@ -378,6 +414,43 @@ function createLimits({ db, env = process.env, clock = Date.now, fetch: doFetch 
   /** Called when a platform backup that holds the database reached Google Drive or Dropbox. */
   const noteBackup = (at = clock()) => kvSet('limits_remote_backup', String(Math.floor(at)));
 
+  // ---------- automatic full backup
+  /** The backup service, given by the server once it exists: ({ ids, avoidR2 }) => Promise<{ status, error?, name?, destination? }>. */
+  const setAutoBackup = hook => { autoHook = typeof hook === 'function' ? hook : null; };
+  const autoState = () => kvJson('limits_autobackup', null);
+  async function runAuto(ids, startedAt) {
+    let outcome;
+    try { outcome = await autoHook({ ids, avoidR2: ids.some(id => id.startsWith('r2.')) && !ids.some(id => id.startsWith('neon.')) }); }
+    catch (error) { outcome = { status: 'error', error: error?.status ? error.message : 'INTERNAL', notStarted: true }; }
+    const t = clock();
+    const prior = (await autoState().catch(() => null)) || {};
+    const ok = outcome.status === 'done';
+    const busy = outcome.error === 'BACKUP_BUSY' || outcome.error === 'BACKUP_SERVER_BUSY';
+    const next = ok
+      ? { status: 'done', at: startedAt, finishedAt: t, ids, destination: outcome.destination || 'vault', name: outcome.name || '', lastOkAt: t, mailedAt: prior.mailedAt || 0 }
+      : { status: 'error', at: startedAt, finishedAt: t, ids, error: String(outcome.error || 'FAILED'), retryAt: t + (busy ? AUTO_BUSY_RETRY : AUTO_RETRY), ...(prior.lastOkAt ? { lastOkAt: prior.lastOkAt } : {}), mailedAt: prior.mailedAt || 0 };
+    // Tell the owner: always about a good one; about a failure once per reminder period (and never about "another backup was running").
+    const settings = await getSettings().catch(() => DEFAULTS);
+    const tell = ok || (!busy && t - (prior.mailedAt || 0) >= settings.reminderHours * HOUR);
+    if (tell && notify) {
+      try {
+        const result = await notify({ ...composeAutoBackup({ ok, ids, name: next.name, destination: next.destination, error: next.error, base: env.PUBLIC_URL || env.APP_URL || '' }), to: settings.email || undefined });
+        if (result?.ok) next.mailedAt = t;
+      } catch { /* informational */ }
+    }
+    await kvSet('limits_autobackup', JSON.stringify(next)).catch(() => {});
+    return next;
+  }
+  /** Called inside a check with the fresh numbers. Starts the backup in the background (the check must stay short) and returns the decision. */
+  async function considerAutoBackup(items, now, settings) {
+    const state = await autoState().catch(() => null);
+    const decision = decideAutoBackup(state, items, now, settings);
+    if (!decision.run || !autoHook) return { ...decision, run: false, ...(decision.run ? { why: 'unavailable' } : {}) };
+    await kvSet('limits_autobackup', JSON.stringify({ ...(state || {}), status: 'running', at: now, ids: decision.hot, error: '' }));
+    autoPending = runAuto(decision.hot, now).catch(() => null).finally(() => { autoPending = null; });
+    return decision;
+  }
+
   // ---------- the check
   async function readSnapshot({ fresh = false } = {}) {
     if (!fresh && memory.snapshot && clock() - memory.at < 15000) return memory.snapshot;
@@ -437,6 +510,7 @@ function createLimits({ db, env = process.env, clock = Date.now, fetch: doFetch 
         }
       } else await kvSet('limits_state', JSON.stringify(next));
       await kvSet('limits_blind', JSON.stringify(blindNext));
+      await considerAutoBackup(evaluated, now, settings).catch(() => null);
 
       // One sample per ~6 hours feeds the growth forecast of the storage (30 days kept).
       const last = history[history.length - 1];
@@ -469,6 +543,7 @@ function createLimits({ db, env = process.env, clock = Date.now, fetch: doFetch 
       delivery: { transport: !!transport(), recipient: settings.email || await recipient().catch(() => '') },
       keys: { neonApi: !!(env.NEON_API_KEY && env.NEON_PROJECT_ID), cloudflareApi: !!(env.CLOUDFLARE_API_TOKEN && (env.CLOUDFLARE_ACCOUNT_ID || env.R2_ACCOUNT_ID)) },
       lastBackupAt: await lastBackupAt(),
+      autoBackup: await autoState().catch(() => null),
       backupHost: !env.VERCEL || env.BACKUP_FORCE === '1',
     };
   }
@@ -484,7 +559,7 @@ function createLimits({ db, env = process.env, clock = Date.now, fetch: doFetch 
     return { ok: true, to: result.to || to };
   }
 
-  return { check, tick, status, summary, getSettings, setSettings, testAlert, lastBackupAt, noteBackup, DEFAULTS, PLAN_LIMITS };
+  return { check, tick, status, summary, getSettings, setSettings, testAlert, lastBackupAt, noteBackup, setAutoBackup, autoBackupIdle: () => autoPending || Promise.resolve(), DEFAULTS, PLAN_LIMITS };
 }
 
-module.exports = { createLimits, cleanSettings, evaluate, decide, projectExhaustion, classifyR2Action, monthWindow, compose, PLAN_LIMITS, DEFAULTS, METRICS, LEVELS };
+module.exports = { createLimits, cleanSettings, evaluate, decide, decideAutoBackup, composeAutoBackup, projectExhaustion, classifyR2Action, monthWindow, compose, PLAN_LIMITS, DEFAULTS, METRICS, LEVELS };

@@ -189,7 +189,7 @@ function createVault({ storage, env = process.env, now = Date.now } = {}) {
     if (!KINDS.includes(meta.kind)) throw fail(400, 'INVALID_TYPE');
     const at = now();
     const folder = `${ROOT}/${versionFolder(meta.version)}/${meta.kind}`;
-    const base = `dwira-${meta.kind}-${versionFolder(meta.version)}-${stamp(at)}${meta.createdBy === 'schedule' ? '-auto' : meta.createdBy === 'pre-restore' ? '-pre-restore' : ''}-${crypto.randomBytes(6).toString('hex')}`;
+    const base = `dwira-${meta.kind}-${versionFolder(meta.version)}-${stamp(at)}${meta.createdBy === 'schedule' ? '-auto' : meta.createdBy === 'pre-restore' ? '-pre-restore' : meta.createdBy === 'limit' ? '-limit' : ''}-${crypto.randomBytes(6).toString('hex')}`;
     const encrypted = !!encryptionKey;
     const zipKey = `${folder}/${base}.zip${encrypted ? '.enc' : ''}`;
     const metaKey = `${folder}/${base}.json`;

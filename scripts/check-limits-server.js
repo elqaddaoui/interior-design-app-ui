@@ -9,7 +9,7 @@ const path = require('node:path');
 const { Readable, Writable } = require('node:stream');
 const { createBackend } = require('../server');
 const { hashPassword } = require('../server/admins');
-const { createLimits, cleanSettings, evaluate, decide, projectExhaustion, classifyR2Action, monthWindow, compose, DEFAULTS, PLAN_LIMITS } = require('../server/limits');
+const { createLimits, cleanSettings, evaluate, decide, decideAutoBackup, composeAutoBackup, projectExhaustion, classifyR2Action, monthWindow, compose, DEFAULTS, PLAN_LIMITS } = require('../server/limits');
 const { freshDb, closeShared } = require('./test-db');
 
 const DAY = 86400000, HOUR = 3600000, GB = 1e9;
@@ -269,6 +269,131 @@ test('turning the monitor off keeps it silent', async () => {
   assert.equal(snap.disabled, true);
   assert.equal(s.sent.length, 0);
   assert.equal(s.calls.length, 0);
+});
+
+// ---------------------------------------------------------------- automatic full backup at 90 %
+
+test('auto backup settings: on by default at 90 %, the threshold is 50-100, bad values are refused', () => {
+  assert.equal(settings().autoBackup, true);
+  assert.equal(settings().autoBackupAt, 90);
+  assert.equal(settings({ autoBackup: false }).autoBackup, false);
+  assert.equal(settings({ autoBackupAt: 80 }).autoBackupAt, 80);
+  assert.throws(() => settings({ autoBackupAt: 20 }), /INVALID_LIMIT/);
+  assert.throws(() => settings({ autoBackupAt: 101 }), /INVALID_LIMIT/);
+});
+
+test('auto backup decision: off, below, running, waiting, cooldown, limit', () => {
+  const items = pct => [metric('neon.storage', 0, { pct: 10 }), metric('r2.storage', 0, { pct })];
+  const cfg = settings();
+  assert.deepEqual(decideAutoBackup(null, items(89), NOW, cfg), { run: false, why: 'below', hot: [] });
+  assert.equal(decideAutoBackup(null, items(95), NOW, settings({ autoBackup: false })).why, 'off');
+  const first = decideAutoBackup(null, items(90), NOW, cfg);
+  assert.equal(first.run, true);
+  assert.deepEqual(first.hot, ['r2.storage']);
+  assert.equal(decideAutoBackup({ status: 'running', at: NOW - HOUR }, items(95), NOW, cfg).why, 'running');
+  assert.equal(decideAutoBackup({ status: 'running', at: NOW - 4 * HOUR }, items(95), NOW, cfg).run, true, 'a mark of a dead process is ignored');
+  assert.equal(decideAutoBackup({ status: 'error', retryAt: NOW + HOUR }, items(95), NOW, cfg).why, 'waiting');
+  assert.equal(decideAutoBackup({ status: 'done', lastOkAt: NOW - 2 * HOUR }, items(95), NOW, cfg).why, 'cooldown');
+  assert.equal(decideAutoBackup({ status: 'done', lastOkAt: NOW - 25 * HOUR }, items(95), NOW, cfg).run, true);
+  const unread = [metric('r2.storage', 0, { pct: 99, status: 'error' })];
+  assert.equal(decideAutoBackup(null, unread, NOW, cfg).run, false, 'an unreadable number never triggers');
+  assert.equal(decideAutoBackup(null, items(60), NOW, settings({ autoBackupAt: 60 })).run, true, 'the threshold is the owner\'s');
+});
+
+test('the automatic-backup message says what, where, and what to do on failure', () => {
+  const good = composeAutoBackup({ ok: true, ids: ['neon.storage'], name: 'x-limit.zip', destination: 'vault', base: 'https://app.test/' });
+  assert.match(good.subject, /Automatic backup made/);
+  assert.match(good.text, /backup vault/);
+  assert.match(good.text, /https:\/\/app\.test\/super-admin\/backup/);
+  const fail = composeAutoBackup({ ok: false, ids: ['r2.storage'], error: 'R2_OFFLINE' });
+  assert.match(fail.subject, /FAILED/);
+  assert.match(fail.text, /R2_OFFLINE/);
+});
+
+const hotCf = pct => () => ok(cfBody([], [{ dimensions: { bucketName: 'bk', datetime: 'now' }, max: { payloadSize: PLAN_LIMITS['r2.storage'] * pct / 100, metadataSize: 0, objectCount: 1 } }]));
+async function autoService({ pct = 95, hook, ...rest } = {}) {
+  const clockState = { now: NOW };
+  const s = await service({ cf: hotCf(pct), clock: () => clockState.now, ...rest });
+  const runs = [];
+  if (hook !== null) s.limits.setAutoBackup(async args => { runs.push(args); return hook ? hook(args) : { status: 'done', name: 'dwira-limit.zip', destination: 'vault' }; });
+  return { ...s, runs, clockState };
+}
+const tickAuto = async s => { const snap = await s.limits.check({ force: true }); await s.limits.autoBackupIdle(); return snap; };
+
+test('90 %: the monitor starts ONE full backup, tells the owner, and waits a day before the next', async () => {
+  const s = await autoService();
+  await tickAuto(s);
+  assert.equal(s.runs.length, 1);
+  assert.deepEqual(s.runs[0].ids, ['r2.storage']);
+  assert.equal(s.sent.filter(m => /Automatic backup made/.test(m.subject)).length, 1);
+  const status = await s.limits.status();
+  assert.equal(status.autoBackup.status, 'done');
+  assert.equal(status.autoBackup.name, 'dwira-limit.zip');
+  s.clockState.now += 2 * HOUR;
+  await tickAuto(s);
+  assert.equal(s.runs.length, 1, 'still the same day');
+  s.clockState.now += 25 * HOUR;
+  await tickAuto(s);
+  assert.equal(s.runs.length, 2, 'a day later it is still full: another one');
+});
+
+test('below the threshold nothing starts; a moved threshold or the off switch is respected', async () => {
+  const low = await autoService({ pct: 80 });
+  await tickAuto(low);
+  assert.equal(low.runs.length, 0);
+  await low.limits.setSettings({ autoBackupAt: 75 });
+  low.clockState.now += 10000;
+  await tickAuto(low);
+  assert.equal(low.runs.length, 1, 'threshold lowered to 75: 80 % is now enough');
+  const off = await autoService({ pct: 99 });
+  await off.limits.setSettings({ autoBackup: false });
+  off.clockState.now += 10000;
+  await tickAuto(off);
+  assert.equal(off.runs.length, 0);
+});
+
+test('an R2 limit asks for another destination; Neon (or both) does not', async () => {
+  const r2 = await autoService();
+  await tickAuto(r2);
+  assert.equal(r2.runs[0].avoidR2, true);
+  const both = await autoService({ neon: () => ok(neonBody({ branch_logical_size_limit_bytes: 1000 })) });
+  await tickAuto(both);
+  if (both.runs.length) assert.equal(both.runs[0].avoidR2, !(both.runs[0].ids.some(id => id.startsWith('neon.'))));
+});
+
+test('a failed automatic backup is retried after 2 hours and the owner is told once', async () => {
+  const s = await autoService({ hook: async () => ({ status: 'error', error: 'R2_OFFLINE' }) });
+  await tickAuto(s);
+  assert.equal(s.runs.length, 1);
+  assert.equal(s.sent.filter(m => /FAILED/.test(m.subject)).length, 1);
+  s.clockState.now += HOUR;
+  await tickAuto(s);
+  assert.equal(s.runs.length, 1, 'not before 2 hours');
+  s.clockState.now += 90 * 60000;
+  await tickAuto(s);
+  assert.equal(s.runs.length, 2, 'retried');
+  assert.equal(s.sent.filter(m => /FAILED/.test(m.subject)).length, 1, 'no second mail inside the reminder period');
+  assert.equal((await s.limits.status()).autoBackup.status, 'error');
+});
+
+test('another backup already running is not a failure: silent, retried in 15 minutes; a throwing hook is INTERNAL', async () => {
+  const busy = await autoService({ hook: async () => ({ status: 'error', error: 'BACKUP_BUSY' }) });
+  await tickAuto(busy);
+  assert.equal(busy.sent.filter(m => /Automatic backup/.test(m.subject)).length, 0);
+  const state = (await busy.limits.status()).autoBackup;
+  assert.equal(state.retryAt - state.finishedAt, 15 * 60000);
+  const boom = await autoService({ hook: async () => { throw new Error('secret detail'); } });
+  await tickAuto(boom);
+  const err = (await boom.limits.status()).autoBackup;
+  assert.equal(err.error, 'INTERNAL');
+  assert.doesNotMatch(JSON.stringify(err), /secret detail/);
+});
+
+test('without a backup service the monitor only warns', async () => {
+  const s = await autoService({ hook: null });
+  const snap = await tickAuto(s);
+  assert.ok(snap.metrics.find(m => m.id === 'r2.storage').pct >= 90);
+  assert.equal((await s.limits.status()).autoBackup, null);
 });
 
 // ---------------------------------------------------------------- through the real handler
