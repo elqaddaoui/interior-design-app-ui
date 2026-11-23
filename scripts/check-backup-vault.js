@@ -325,3 +325,56 @@ test('restore of code undoes itself when it fails half way', async () => {
   assert.equal(fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8'), 'OLD', 'the first file was put back');
   assert.ok(!fs.existsSync(path.join(root, 'server', 'other.js')));
 });
+
+test('code backup = the whole project: it can become a new GitHub repository (Git-repository download, no secrets, source present)', async () => {
+  const s = await boot();
+  try {
+    const made = await run(s, 'code');
+    assert.equal(made.job.status, 'done', JSON.stringify(made.job.errors));
+    assert.equal(made.job.warnings.some(w => w.code === 'APP_SOURCE_MISSING'), false, 'the source is there: no warning');
+    const item = (await h.call(s.backend, `${SA}/vault`, { headers: s.sa })).body.items.find(i => i.kind === 'code');
+    const repo = await h.call(s.backend, `${SA}/vault/${item.id}/repo`, { headers: s.sa });
+    assert.equal(repo.status, 200);
+    assert.match(repo.headers['content-disposition'], /-repo\.zip/);
+    const zipFile = require('node:path').join(s.backupDir, 'repo-check.zip');
+    require('node:fs').writeFileSync(zipFile, repo.bytes);
+    const { openArchive } = require('../server/backup/zip');
+    const archive = await openArchive(zipFile);
+    const names = [...archive.entries.keys()].sort();
+    archive.close();
+    for (const wanted of ['package.json', 'src/app/index.tsx', 'src/data/mock/seed.ts', 'assets/icon.png', 'scripts/postexport.js', 'server/index.js', 'server/lib/util.js', 'server/.env.example', '.gitignore', 'docs/README.txt']) assert.ok(names.includes(wanted), `${wanted} in ${names.join(' ')}`);
+    assert.ok(!names.some(n => n.startsWith('app/') || n.startsWith('dist/') || n === 'manifest.json'), 'files sit at the root, like a repository; no build output');
+    assert.ok(!names.some(n => /(^|\/)\.env(\.local)?$/.test(n) || /\.pem$/.test(n) || n.includes('node_modules') || n.startsWith('server/data/')), 'no secret, no dependency, no server data');
+    assert.equal((await h.call(s.backend, `${SA}/vault/${item.id}/repo`, { headers: h.native })).status, 401);
+    // a backup that holds no code at all cannot be turned into a repository
+    const db = await run(s, 'db');
+    const dbItem = (await h.call(s.backend, `${SA}/vault`, { headers: s.sa })).body.items.find(i => i.id !== item.id && i.kind === 'db');
+    assert.equal(db.job.status, 'done');
+    assert.equal((await h.call(s.backend, `${SA}/vault/${dbItem.id}/repo`, { headers: s.sa })).status, 400);
+  } finally { s.cleanup(); }
+});
+
+test('an old-style deployment (built app only, no src/) still backs up, with a warning, and refuses to pretend it is a repository', async () => {
+  const s = await boot();
+  try {
+    require('node:fs').rmSync(require('node:path').join(s.appRoot, 'src'), { recursive: true, force: true });
+    const made = await run(s, 'code');
+    assert.equal(made.job.status, 'done', JSON.stringify(made.job.errors));
+    assert.ok(made.job.warnings.some(w => w.code === 'APP_SOURCE_MISSING'));
+    const item = (await h.call(s.backend, `${SA}/vault`, { headers: s.sa })).body.items.find(i => i.kind === 'code');
+    const repo = await h.call(s.backend, `${SA}/vault/${item.id}/repo`, { headers: s.sa });
+    assert.equal(repo.status, 400);
+    assert.equal(repo.body.error, 'BACKUP_HAS_NO_SOURCE');
+  } finally { s.cleanup(); }
+});
+
+test('the whole real project is covered by the code backup: every tracked file, nothing secret, and restore refuses what backup never writes', () => {
+  const { allowed, listApp } = require('../server/backup/app-files');
+  const files = require('node:child_process').execSync('git ls-files', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') }).trim().split('\n');
+  const uncovered = files.filter(f => !allowed(f));
+  assert.deepEqual(uncovered, [], 'every file of the repository belongs to the backup');
+  for (const f of ['.env', 'server/.env', 'server/.env.local', 'src/key.pem', 'server/data/pglite/x', 'node_modules/a/b.js', '.git/config', '../etc/passwd', 'src/../x', '.npmrc', 'android/app/release.keystore']) assert.equal(allowed(f), false, f);
+  assert.equal(allowed('server/.env.example'), true, 'the template of the settings is part of the project');
+  assert.equal(allowed('src/data/mock/collection.ts'), true, 'src/data is source code; only server/data is the server\'s own data');
+  return listApp(require('node:path').join(__dirname, '..')).then(list => assert.ok(list.every(f => allowed(f.rel)) && list.length >= files.length - 5));
+});

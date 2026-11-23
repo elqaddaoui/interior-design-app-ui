@@ -157,6 +157,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
       for (const id of ids) await bundles.get(id).sync.bump('content', 'requests', 'clients', 'chats', 'campaigns', 'credits').catch(() => {});
     },
   });
+  // The free-tier monitor starts a full backup by itself when a provider reaches its threshold (90 % by default).
+  superAdmin.limits.setAutoBackup(({ avoidR2 }) => backup.runAutomatic({ avoidR2 }));
   const base = bundles.get('default'); // the original single-tenant app = the default tenant (also what `createBackend()` exposes to tests / scripts)
   const { notifier, clients, campaigns, chat, assistant } = base;
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));

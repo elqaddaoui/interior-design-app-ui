@@ -111,7 +111,7 @@ export type LimitMetric = {
 };
 export type LimitServiceState = { state: 'on' | 'off' | 'not_used'; error?: string; provider?: string; api?: boolean; r2?: boolean; dbBytes?: number | null };
 export type LimitSettings = {
-  enabled: boolean; email: string; warnAt: number; urgentAt: number; criticalAt: number; forecastDays: number; reminderHours: number;
+  enabled: boolean; autoBackup: boolean; autoBackupAt: number; email: string; warnAt: number; urgentAt: number; criticalAt: number; forecastDays: number; reminderHours: number;
   services: { neon: boolean; cloudflare: boolean }; limits: Record<string, number>;
 };
 export type LimitsStatus = {
@@ -120,6 +120,7 @@ export type LimitsStatus = {
   settings: LimitSettings; defaults: LimitSettings; planLimits: Record<string, number>;
   delivery: { transport: boolean; recipient: string }; keys: { neonApi: boolean; cloudflareApi: boolean };
   lastBackupAt: number | null; backupHost: boolean;
+  autoBackup?: { status: 'running' | 'done' | 'error'; at: number; finishedAt?: number; ids?: string[]; destination?: string; name?: string; error?: string; lastOkAt?: number; retryAt?: number } | null;
 };
 export type BackupLogLine = { n: number; at: number; level: 'info' | 'warn' | 'error'; code: string; step?: string; [key: string]: unknown };
 export type BackupStep = { key: string; status: 'pending' | 'running' | 'done' | 'error' | 'skipped'; detail?: Record<string, unknown> };
@@ -130,7 +131,7 @@ export type BackupJob = {
 };
 export type VaultKind = 'all' | 'db' | 'code' | 'media';
 export type VaultItem = {
-  id: string; kind: VaultKind; version: string; name: string; createdAt: number; createdBy: 'manual' | 'schedule' | 'pre-restore'; size: number; plainSize?: number;
+  id: string; kind: VaultKind; version: string; name: string; createdAt: number; createdBy: 'manual' | 'schedule' | 'pre-restore' | 'limit'; size: number; plainSize?: number;
   sha256: string; encrypted: boolean; includes: { app?: boolean; db?: boolean; media?: boolean }; rows: number | null; tables: number | null; mediaFiles: number; appFiles: number;
   schemaVersion: string; preview: { type: string; source: string } | null;
 };

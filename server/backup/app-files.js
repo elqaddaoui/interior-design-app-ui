@@ -8,12 +8,28 @@ const { pipeline } = require('node:stream/promises');
 const { hashing } = require('./zip');
 
 const fail = (status, message, extra) => Object.assign(new Error(message), { status }, extra);
-const DIRS = ['dist', 'server', 'api', 'public'];
-const FILES = ['package.json', 'package-lock.json', 'vercel.json', 'app.json', 'app.config.js'];
-/** Names that can hold a credential, wherever they are. */
-const DENY_NAME = /^(\.env(\..*)?|.*\.(pem|key|p12|p8|pfx|jks|keystore|mobileprovision)|id_(rsa|ed25519|ecdsa).*|credentials.*\.json|service[-_]?account.*\.json|\.npmrc|\.netrc|\.git-credentials|\.htpasswd)$/i;
-/** Directories that are never part of the app: dependencies, VCS, and the server's own data (database files, uploads, backups). */
-const DENY_DIR = new Set(['node_modules', '.git', '.expo', 'data']);
+// The "code" of a backup is the WHOLE project, enough to push it to a new GitHub repository and build it there (npm ci, npm run build:web):
+// the source (src/, assets/, scripts/, docs/), the server, the build configuration and the repository files. `dist/` (the web export) is
+// included too so the archive can also be deployed as it is.
+const DIRS = ['dist', 'server', 'api', 'public', 'src', 'assets', 'scripts', 'docs', '.github'];
+const FILES = [
+  'package.json', 'package-lock.json', 'vercel.json', 'app.json', 'app.config.js', 'eas.json',
+  'babel.config.js', 'metro.config.js', 'tailwind.config.js', 'tsconfig.json', 'nativewind-env.d.ts', 'eslint.config.js',
+  '.gitignore', '.gitattributes', '.nvmrc', '.editorconfig', '.prettierrc', '.prettierignore',
+  'README.md', 'AGENTS.md', 'LICENSE',
+];
+/**
+ * Names that can hold a credential, wherever they are, plus editor / tool litter that the project's own .gitignore leaves out.
+ * `.env.example` (and .sample) is the template of the settings: it holds no value and a new repository needs it.
+ */
+const DENY_NAME = /^(\.env(?!\.(?:example|sample)$)(\..*)?|.*\.(pem|key|p12|p8|pfx|jks|keystore|mobileprovision)|id_(rsa|ed25519|ecdsa).*|credentials.*\.json|service[-_]?account.*\.json|\.npmrc|\.netrc|\.git-credentials|\.htpasswd|\.DS_Store|.*\.log|.*\.tsbuildinfo)$/i;
+/** Directories that are never part of the app: dependencies, VCS, tool caches. */
+const DENY_DIR = new Set(['node_modules', '.git', '.expo', '.pw', '.playwright', '.pw-browsers', '.npm-cache', '.font-tools', '.baseline']);
+/**
+ * `data` is the server's own data (database files, uploads, backups) ONLY below server/. Everywhere else it is an ordinary folder:
+ * src/data holds the app's models, repositories and seed content, public/data may hold public files.
+ */
+const isDenied = (parts, index) => DENY_DIR.has(parts[index]) || (parts[index] === 'data' && parts[0] === 'server');
 
 /** Is `rel` (forward slashes, relative to the app root) allowed in an app backup / restore? */
 function allowed(rel) {
@@ -21,8 +37,8 @@ function allowed(rel) {
   if (parts.some(part => !part || part === '.' || part === '..')) return false;
   if (parts.length === 1) return FILES.includes(parts[0]) && !DENY_NAME.test(parts[0]);
   if (!DIRS.includes(parts[0])) return false;
-  if (parts[0] === 'server' && parts[1] === 'data') return false;
-  return !parts.slice(0, -1).some(part => DENY_DIR.has(part) && !(part === 'data' && parts[0] === 'public')) && !DENY_NAME.test(parts[parts.length - 1]);
+  for (let i = 0; i < parts.length - 1; i++) if (isDenied(parts, i)) return false;
+  return !DENY_NAME.test(parts[parts.length - 1]);
 }
 
 /** Every file of the app, as { rel, abs, size }. Symlinks and anything not allowed are skipped. */
@@ -35,7 +51,7 @@ async function listApp(root) {
     for (const entry of entries) {
       const next = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) { if (!DENY_DIR.has(entry.name) || (entry.name === 'data' && rel === 'public')) await walk(next); continue; }
+      if (entry.isDirectory()) { if (!isDenied(next.split('/'), next.split('/').length - 1)) await walk(next); continue; }
       if (!entry.isFile() || !allowed(next)) continue;
       found.push({ rel: next, abs: path.join(root, next), size: (await fs.promises.stat(path.join(root, next))).size });
     }
