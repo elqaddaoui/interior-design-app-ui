@@ -49,8 +49,8 @@ test('nothing that a tenant can write is able to reach the console style: no ser
   assert.doesNotMatch(server, /super[-_ ]?admin[-_ ]?(?:theme|style|branding|tokens)/i, 'no server code stores a console style');
   const content = fs.readFileSync(path.join(root, 'server/content.js'), 'utf8');
   assert.doesNotMatch(content, /saas_/, 'tenant content code never touches platform tables');
-  // Only superadmin.js, platform.js (API manager + credits), usage.js (API warnings), limits.js (free-tier watch), backup/schedule.js (daily backup settings + lease in saas_kv), tenants.js, bundle.js (tenant discovery) and db.js (schema) may mention platform tables.
-  const tenantModules = fs.readdirSync(path.join(root, 'server'), { recursive: true }).filter(f => /\.js$/.test(String(f)) && !/^(superadmin|platform|usage|limits|tenants|bundle|db|index|backup[\\/]schedule)\.js$/.test(String(f)));
+  // Only superadmin.js, platform.js (API manager + credits), usage.js (API warnings), limits.js (free-tier watch), notices.js (the owner's notification centre), backup/schedule.js (daily backup settings + lease in saas_kv), tenants.js, bundle.js (tenant discovery) and db.js (schema) may mention platform tables.
+  const tenantModules = fs.readdirSync(path.join(root, 'server'), { recursive: true }).filter(f => /\.js$/.test(String(f)) && !/^(superadmin|platform|usage|limits|notices|tenants|bundle|db|index|backup[\\/]schedule)\.js$/.test(String(f)));
   for (const file of tenantModules) assert.doesNotMatch(fs.readFileSync(path.join(root, 'server', String(file)), 'utf8'), /\bsaas_/, `server/${file} must not read platform tables`);
 });
 

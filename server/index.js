@@ -125,10 +125,10 @@ const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve 
  * background, so /api/health answers 503 `database: "starting"` and every other /api route 503 with a clear message.
  * Without it (Vercel, tests) the backend is always ready and behaves exactly as before.
  */
-function createBackend({ env = process.env, db = createDb(env), dnsResolver, senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, mailer, isReady = () => true } = {}) {
+function createBackend({ env = process.env, db = createDb(env), dnsResolver, senders, media: mediaOptions = {}, translator = translate, chatFetch, imageFetch, isReady = () => true } = {}) {
   // `db` is the RAW database: only the tenant registry, the background sweep and the platform tables use it. Every request works on the
   // modules of ONE tenant (server/bundle.js), each built on a tenant-bound handle (server/scope.js) that cannot read another tenant's rows.
-  const bundles = createBundles({ db, env, senders, media: mediaOptions, chatFetch, imageFetch, mailer });
+  const bundles = createBundles({ db, env, senders, media: mediaOptions, chatFetch, imageFetch });
   const rawDb = db; // `handle` shadows `db` with the tenant-bound handle; the registry check below needs the raw one
   const tenants = createTenants({ db, env, resolveTxt: dnsResolver });
   // Platform back office: the only code that touches the saas_* tables with the raw database (server/superadmin.js).
@@ -158,7 +158,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
     },
   });
   // The free-tier monitor starts a full backup by itself when a provider reaches its threshold (90 % by default).
-  superAdmin.limits.setAutoBackup(({ avoidR2 }) => backup.runAutomatic({ avoidR2 }));
+  superAdmin.limits.setAutoBackup(({ avoidR2, to }) => backup.runAutomatic({ avoidR2, to }));
   const base = bundles.get('default'); // the original single-tenant app = the default tenant (also what `createBackend()` exposes to tests / scripts)
   const { notifier, clients, campaigns, chat, assistant } = base;
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));

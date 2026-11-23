@@ -4,43 +4,38 @@ import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
 import type { MediaFiles as Page, MediaItem, MediaOwner, MediaOwners, MediaSummary, MediaType, MediaTypeFilter } from '@/superadmin/types';
-import { Badge, Btn, Card, Empty, ErrorLine, Field, Loading, Notice, Row, Sheet, T } from '@/superadmin/ui';
+import type { IconName } from '@/superadmin/icons';
+import { IconBox, Pill, TextLink, size, storageName, type Tone } from '@/superadmin/MediaBits';
+import { Badge, Btn, Empty, ErrorLine, Field, Loading, Notice, Row, Sheet, T } from '@/superadmin/ui';
 
-const size = (bytes: number | null | undefined) => {
-  const n = Number(bytes || 0);
-  return n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
-};
 const PAGE = 50;
 const TYPES: MediaTypeFilter[] = ['all', 'image', 'video', 'audio', 'other'];
 const typeLabel = (t: MediaTypeFilter) => (t === 'image' ? tr('Images') : t === 'video' ? tr('Videos') : t === 'audio' ? tr('Audio') : t === 'other' ? tr('Other files') : tr('All types'));
-const storageName = (s?: string) => (s === 'r2' ? tr('Cloudflare R2') : s === 'app' ? tr('App folder (self-hosted)') : tr('Database'));
 type Mode = '' | 'type' | 'owner';
 type Group = 'store' | 'demo' | 'theme' | 'other';
 const GROUPS: Group[] = ['store', 'demo', 'theme', 'other'];
 const groupLabel = (g: Group) => (g === 'store' ? tr('Stores') : g === 'demo' ? tr('Demos') : g === 'theme' ? tr('Themes') : tr('Other'));
 
-/** A tappable option block (the two ways to look at the hosted files). */
-function Option({ id, title, hint, on, onPress }: { id: string; title: string; hint: string; on: boolean; onPress: () => void }) {
+const TYPE_ICON: Record<MediaType, IconName> = { image: 'imageOutline', video: 'movieOutline', audio: 'musicNote', other: 'fileOutline' };
+const TYPE_TONE: Record<MediaType, Tone> = { image: 'accent', video: 'warn', audio: 'ok', other: 'muted' };
+
+/** One of the two ways to look at the hosted files: a quiet tile with an icon, accent border when chosen. */
+function Option({ id, icon, title, hint, on, onPress }: { id: string; icon: IconName; title: string; hint: string; on: boolean; onPress: () => void }) {
   return (
     <Pressable testID={id} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={onPress}
-      style={{ flexGrow: 1, flexBasis: 260, padding: SA.space.md, borderRadius: SA.radius.md, borderWidth: 2, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: on ? SA.color.accentSoft : SA.color.panel }}>
-      <T weight="bold" color={on ? SA.color.accent : SA.color.text}>{title}</T>
-      <T size="sm" color={SA.color.muted}>{hint}</T>
-    </Pressable>
-  );
-}
-function Chip({ label, on, onPress, testID, count }: { label: string; on: boolean; onPress: () => void; testID?: string; count?: number }) {
-  return (
-    <Pressable testID={testID} accessibilityRole="button" accessibilityState={{ selected: on }} onPress={onPress}
-      style={{ paddingVertical: 6, paddingHorizontal: 12, borderRadius: SA.radius.sm, borderWidth: 1, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: on ? SA.color.accentSoft : SA.color.panel }}>
-      <T size="sm" weight={on ? 'bold' : 'medium'} color={on ? SA.color.accent : SA.color.text}>{count == null ? label : `${label} · ${count}`}</T>
+      style={{ flexGrow: 1, flexBasis: 240, flexDirection: 'row', alignItems: 'center', gap: SA.space.md, padding: SA.space.md, borderRadius: SA.radius.lg, borderWidth: 2, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: SA.color.panel }}>
+      <IconBox name={icon} tone={on ? 'accent' : 'muted'} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <T weight="bold" color={on ? SA.color.accent : SA.color.text}>{title}</T>
+        <T size="xs" color={SA.color.muted} numberOfLines={2}>{hint}</T>
+      </View>
     </Pressable>
   );
 }
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ marginBottom: SA.space.sm }}>
-      <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{label}</T>
+      <T size="xs" color={SA.color.muted}>{label}</T>
       <T selectable>{value}</T>
     </View>
   );
@@ -61,7 +56,7 @@ function Preview({ item }: { item: MediaItem }) {
  *   - by store, demo, theme or other: the files one of them holds.
  * Files are listed as plain rows (name, folder, size); a preview is loaded only for the one file the owner opens and asks to see.
  */
-export function MediaFiles({ storage, onChanged }: { storage: string; onChanged: () => void }) {
+export function MediaFiles({ storage, onChanged, goTidy }: { storage: string; onChanged: () => void; goTidy?: () => void }) {
   const [mode, setMode] = useState<Mode>('');
   const [type, setType] = useState<MediaTypeFilter>('all');
   const [group, setGroup] = useState<Group>('store');
@@ -122,47 +117,45 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
 
   return (
     <View testID="sa-media-files">
-      <Row style={{ alignItems: 'stretch', marginBottom: SA.space.md }}>
-        <Option id="sa-files-by-type" title={tr('All media by type')} hint={tr('Every file hosted in {storage}, in any folder: images, videos, audio and other files.', { storage: storageName(storage) })} on={mode === 'type'} onPress={() => pickMode('type')} />
-        <Option id="sa-files-by-owner" title={tr('By store, demo, theme or other')} hint={tr('The files one store, demo, theme or other owner holds.')} on={mode === 'owner'} onPress={() => pickMode('owner')} />
+      <Row style={{ alignItems: 'stretch', marginBottom: SA.space.lg, gap: SA.space.md }}>
+        <Option id="sa-files-by-type" icon="viewGridOutline" title={tr('All media by type')} hint={tr('Every file hosted in {storage}, in any folder: images, videos, audio and other files.', { storage: storageName(storage) })} on={mode === 'type'} onPress={() => pickMode('type')} />
+        <Option id="sa-files-by-owner" icon="storefrontOutline" title={tr('By store, demo, theme or other')} hint={tr('The files one store, demo, theme or other owner holds.')} on={mode === 'owner'} onPress={() => pickMode('owner')} />
       </Row>
-      {!mode ? <Notice>{tr('Nothing is loaded until you choose how to look at the files. Pictures are shown only when you open a file and ask for its preview.')}</Notice> : null}
+      {!mode ? <T size="sm" color={SA.color.muted} style={{ marginBottom: SA.space.md }}>{tr('Nothing is loaded until you choose how to look at the files. Pictures are shown only when you open a file and ask for its preview.')}</T> : null}
       <ErrorLine error={error} />
       {note ? <Notice tone="ok">{note}</Notice> : null}
       {busy === 'summary' || busy === 'owners' ? <Loading /> : null}
 
       {mode === 'owner' && owners ? (
-        <Card>
-          <Row style={{ marginBottom: SA.space.sm }}>
-            {GROUPS.map(g => <Chip key={g} testID={`sa-files-group-${g}`} label={groupLabel(g)} count={owners.groups[g].reduce((n, o) => n + o.files, 0)} on={group === g} onPress={() => { setGroup(g); setOwner(null); reset(); }} />)}
+        <View style={{ marginBottom: SA.space.md, gap: SA.space.sm }}>
+          <Row>
+            {GROUPS.map(g => <Pill key={g} testID={`sa-files-group-${g}`} label={groupLabel(g)} count={owners.groups[g].reduce((n, o) => n + o.files, 0)} on={group === g} onPress={() => { setGroup(g); setOwner(null); reset(); }} />)}
           </Row>
           {owners.groups[group].length ? (
-            <Row>
+            <Row style={{ padding: SA.space.sm, borderRadius: SA.radius.md, backgroundColor: SA.color.panel2 }}>
               {owners.groups[group].map(o => (
-                <Chip key={o.id} testID="sa-files-owner" label={o.name || tr('Other')} count={o.files} on={owner?.id === o.id} onPress={() => pickOwner(o)} />
+                <Pill key={o.id} testID="sa-files-owner" label={o.name || tr('Other')} count={o.files} on={owner?.id === o.id} onPress={() => pickOwner(o)} />
               ))}
             </Row>
           ) : <T size="sm" color={SA.color.muted}>{tr('Nothing here holds files yet.')}</T>}
-        </Card>
+        </View>
       ) : null}
 
       {mode === 'type' && summary ? (
-        <Card>
+        <View style={{ marginBottom: SA.space.md }}>
           <Row style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
-            <View style={{ flexShrink: 1 }}>
-              <T size="sm" color={SA.color.muted}>{tr('{n} files found in {storage}.', { n: summary.scanned, storage: storageName(summary.storage) })}</T>
-              {!summary.complete ? <T size="xs" color={SA.color.warn}>{tr('The count stopped early: the storage holds a very large number of files.')}</T> : null}
-              {Object.values(summary.types).some(v => v.outside > 0) ? <T size="xs" color={SA.color.muted}>{tr('{n} of them are outside media/ (kept as they are: only the app\'s own pictures are moved by One media folder).', { n: Object.values(summary.types).reduce((n, v) => n + v.outside, 0) })}</T> : null}
-            </View>
-            <Btn small kind="ghost" label={tr('Count again')} onPress={recount} busy={busy === 'summary'} disabled={busy !== ''} />
+            <T size="sm" color={SA.color.muted} style={{ flexShrink: 1 }}>{tr('{n} files found in {storage}.', { n: summary.scanned, storage: storageName(summary.storage) })}</T>
+            <TextLink icon="refresh" label={tr('Count again')} onPress={recount} disabled={busy !== ''} />
           </Row>
-        </Card>
+          {!summary.complete ? <T size="xs" color={SA.color.warn}>{tr('The count stopped early: the storage holds a very large number of files.')}</T> : null}
+          {Object.values(summary.types).some(v => v.outside > 0) ? <T size="xs" color={SA.color.muted}>{tr('{n} of them are outside media/ (kept as they are: only the app\'s own pictures are moved by One media folder).', { n: Object.values(summary.types).reduce((n, v) => n + v.outside, 0) })}</T> : null}
+        </View>
       ) : null}
 
       {showList ? (
         <View>
-          <Row style={{ marginVertical: SA.space.sm }}>
-            {TYPES.map(t => <Chip key={t} testID={`sa-files-type-${t}`} label={typeLabel(t)} count={count(t)} on={type === t} onPress={() => pickType(t)} />)}
+          <Row style={{ marginBottom: SA.space.md }}>
+            {TYPES.map(t => <Pill key={t} testID={`sa-files-type-${t}`} icon={t === 'all' ? undefined : TYPE_ICON[t]} label={typeLabel(t)} count={count(t)} on={type === t} onPress={() => pickType(t)} />)}
           </Row>
           {mode === 'owner' && !owner ? <Empty>{tr('Choose a store, demo, theme or other owner above.')}</Empty> : (
             <View>
@@ -172,20 +165,20 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
               {items.length ? (
                 <View>
                   <View style={{ maxWidth: 320 }}><Field label={tr('Search loaded files')} value={q} onChangeText={(v: string) => setQ(v)} /></View>
-                  <Card style={{ padding: 0 }}>
+                  <View style={{ borderRadius: SA.radius.lg, borderWidth: 1, borderColor: SA.color.line, backgroundColor: SA.color.panel, overflow: 'hidden' }}>
                     {shown.map((item, i) => (
                       <Pressable key={`${item.storage}|${item.key}|${i}`} testID="sa-files-row" onPress={() => { setOpen(item); setShowPreview(false); setConfirm(false); setNote(''); }}
-                        style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.sm, padding: SA.space.sm, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line }}>
+                        style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: SA.space.md, padding: SA.space.md, borderTopWidth: i ? 1 : 0, borderColor: SA.color.line, backgroundColor: pressed ? SA.color.panel2 : 'transparent' })}>
+                        <IconBox name={TYPE_ICON[item.type]} tone={TYPE_TONE[item.type]} box={34} />
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <T numberOfLines={1}>{item.title || item.name}</T>
-                          <T size="xs" color={SA.color.muted} numberOfLines={1}>{item.folder}</T>
+                          <T size="xs" color={SA.color.muted} numberOfLines={1}>{`${typeLabel(item.type)} · ${item.folder}`}</T>
                         </View>
                         {!item.inMedia ? <Badge label={item.stray ? tr('Old folder') : tr('Outside media/')} tone="warn" /> : null}
-                        <Badge label={typeLabel(item.type)} tone="muted" />
-                        <T size="xs" color={SA.color.muted} style={{ width: 64, textAlign: 'right' }}>{size(item.size)}</T>
+                        <T size="xs" color={SA.color.muted} style={{ minWidth: 56, textAlign: 'right' }}>{size(item.size)}</T>
                       </Pressable>
                     ))}
-                  </Card>
+                  </View>
                   {more ? <View style={{ marginTop: SA.space.md }}><Btn kind="ghost" testID="sa-files-more" label={tr('Load more')} onPress={() => list(mode, type, owner, cursor)} busy={busy === 'list'} disabled={busy !== ''} /></View> : null}
                   <T size="xs" color={SA.color.muted} style={{ marginTop: SA.space.sm }}>{tr('{n} files loaded', { n: items.length })}</T>
                 </View>
@@ -209,7 +202,12 @@ export function MediaFiles({ storage, onChanged }: { storage: string; onChanged:
           <Detail label={tr('Stored in')} value={storageName(open.storage)} />
           {open.modified ? <Detail label={tr('Added')} value={new Date(open.modified).toLocaleString()} /> : null}
           <Detail label={tr('Used by')} value={open.inDatabase ? open.stores.join(', ') + (open.storeCount > open.stores.length ? ` +${open.storeCount - open.stores.length}` : '') : tr('No store in the database')} />
-          {open.stray ? <Notice tone="warn">{tr('This picture sits outside media/. Use One media folder above to move it.')}</Notice> : null}
+          {open.stray ? (
+            <View>
+              <Notice tone="warn">{tr('This picture sits outside media/. Use One media folder above to move it.')}</Notice>
+              {goTidy ? <View style={{ marginBottom: SA.space.md }}><TextLink testID="sa-files-goto-tidy" icon="folderOutline" label={tr('Tidy up the media folder')} onPress={() => { setOpen(null); goTidy(); }} /></View> : null}
+            </View>
+          ) : null}
           {!open.inMedia && !open.stray ? <Notice>{tr('This file is not one of the app\'s own pictures. It is shown so you can see everything hosted; the app never moves or deletes it.')}</Notice> : null}
           {open.inDatabase && open.id ? (
             confirm ? (

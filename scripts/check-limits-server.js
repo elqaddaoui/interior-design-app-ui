@@ -9,7 +9,8 @@ const path = require('node:path');
 const { Readable, Writable } = require('node:stream');
 const { createBackend } = require('../server');
 const { hashPassword } = require('../server/admins');
-const { createLimits, cleanSettings, evaluate, decide, decideAutoBackup, composeAutoBackup, projectExhaustion, classifyR2Action, monthWindow, compose, DEFAULTS, PLAN_LIMITS } = require('../server/limits');
+const { createLimits, cleanSettings, evaluate, decide, decideAutoBackup, noticeOf, noticeOfAutoBackup, projectExhaustion, classifyR2Action, monthWindow, DEFAULTS, PLAN_LIMITS } = require('../server/limits');
+const { createNotices } = require('../server/notices');
 const { freshDb, closeShared } = require('./test-db');
 
 const DAY = 86400000, HOUR = 3600000, GB = 1e9;
@@ -27,7 +28,10 @@ test('settings: thresholds stay in order, bad values are refused, overrides can 
   assert.equal(settings().warnAt, 70);
   assert.throws(() => settings({ warnAt: 90, urgentAt: 85 }), /INVALID_LIMIT/);
   assert.throws(() => settings({ warnAt: 5 }), /INVALID_LIMIT/);
-  assert.throws(() => settings({ email: 'nope' }), /INVALID_EMAIL/);
+  assert.throws(() => settings({ autoBackupTo: 'ftp' }), /INVALID_LIMIT/);
+  assert.equal(settings().autoBackupTo, 'auto');
+  assert.equal(settings({ autoBackupTo: 'dropbox' }).autoBackupTo, 'dropbox');
+  assert.equal(settings({ email: 'old@x.test' }).email, undefined, 'the e-mail setting is gone');
   assert.throws(() => settings({ limits: { 'neon.storage': -1 } }), /INVALID_LIMIT/);
   const withLimit = settings({ limits: { 'neon.storage': 5 * GB, 'unknown.metric': 3 } });
   assert.equal(withLimit.limits['neon.storage'], 5 * GB);
@@ -108,15 +112,20 @@ test('announcements: a rise is told once, reminders only from "urgent", calming 
   assert.equal(decide({}, warn, NOW + HOUR, s).send.length, 1);
 });
 
-test('the message says what happens, how long is left, and where to back up; it never contains a key', () => {
+test('the notification carries numbers and a code, never a sentence or a key', () => {
   const e = evaluate(metric('neon.egress', 4.6 * GB, { effect: 'suspend', blocksBackup: true, backupCost: 0.9 * GB, resetsAt: NOW + 10 * DAY }), { settings: settings(), now: NOW });
-  const message = compose([e], { base: 'https://app.test/', lastBackupAt: NOW - 9 * DAY, now: NOW });
-  assert.match(message.subject, /Back up now.*Neon network transfer at 92 %/);
-  assert.match(message.text, /SUSPENDED/);
-  assert.match(message.text, /full backup needs about 900\.0 MB/);
-  assert.match(message.text, /last backup you saved was on 2026-11-11 \(9 days ago\)/);
-  assert.match(message.text, /https:\/\/app\.test\/super-admin\/limits/);
-  assert.match(compose([e], { now: NOW }).text, /No backup has been saved yet/);
+  const n = noticeOf(e);
+  assert.equal(n.code, 'limits.alert');
+  assert.equal(n.severity, 'danger');
+  assert.equal(n.href, '/super-admin/limits');
+  assert.equal(n.params.id, 'neon.egress');
+  assert.equal(n.params.pct, 92);
+  assert.equal(n.params.reserveNeed, 0.9 * GB);
+  assert.equal(noticeOf(evaluate(metric('neon.storage', GB * 0.75), { settings: settings(), now: NOW })).severity, 'warn');
+  const good = noticeOfAutoBackup({ ok: true, ids: ['neon.storage'], name: 'x-limit.zip', destination: 'gdrive' });
+  assert.deepEqual([good.code, good.severity, good.params.destination], ['backup.auto.done', 'ok', 'gdrive']);
+  const bad = noticeOfAutoBackup({ ok: false, ids: ['r2.storage'], error: 'R2_OFFLINE' });
+  assert.deepEqual([bad.code, bad.severity, bad.params.error], ['backup.auto.failed', 'danger', 'R2_OFFLINE']);
 });
 
 // ---------------------------------------------------------------- the service with fake providers
@@ -126,20 +135,27 @@ const cfBody = (ops, storage) => ({ data: { viewer: { accounts: [{ ops, store: s
 const ok = body => ({ ok: true, status: 200, json: async () => body });
 const bad = status => ({ ok: false, status, json: async () => ({}) });
 
-async function service({ env = {}, neon = () => ok(neonBody()), cf = () => ok(cfBody([], [])), clock = () => NOW, mail = { ok: true }, totals } = {}) {
+async function service({ env = {}, neon = () => ok(neonBody()), cf = () => ok(cfBody([], [])), clock = () => NOW, totals, destinations = { gdrive: false, dropbox: false } } = {}) {
   const db = await freshDb();
-  const calls = [], sent = [];
+  const calls = [];
+  const notices = createNotices(db, { clock: () => clock() });
   const fetch = async (url, init = {}) => {
     calls.push({ url: String(url), auth: (init.headers || {}).Authorization, body: init.body });
     return String(url).includes('neon') ? neon(url, init) : cf(url, init);
   };
   const limits = createLimits({
     db, env: { NEON_API_KEY: 'neon-key-123456', NEON_PROJECT_ID: 'proj-1', DATABASE_URL: 'postgres://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/db', CLOUDFLARE_API_TOKEN: 'cf-token-123456', R2_ACCOUNT_ID: 'acc1', R2_ACCESS_KEY_ID: 'a', R2_SECRET_ACCESS_KEY: 'b', R2_BUCKET: 'bk', R2_PUBLIC_BASE_URL: 'https://m.test', ...env },
-    clock: () => clock(), fetch, transport: () => true, recipient: async () => 'boss@platform.test',
-    notify: async message => { sent.push(message); return typeof mail === 'function' ? mail(message) : mail; },
+    clock: () => clock(), fetch, notices, destinations: () => destinations,
     mediaTotals: async () => totals ?? { r2: { files: 120, bytes: 3 * GB } },
   });
-  return { db, limits, calls, sent };
+  // `sent` = the notices raised so far, oldest first (what used to be the e-mails). Refreshed after every check / backup.
+  const cache = [];
+  const refresh = async () => { cache.splice(0, cache.length, ...(await notices.list({ limit: 200 })).notices.reverse()); return cache; };
+  const check = limits.check, idle = limits.autoBackupIdle, status = limits.status;
+  limits.check = async (...args) => { const r = await check(...args); await refresh(); return r; };
+  limits.autoBackupIdle = async () => { await idle(); await refresh(); };
+  limits.status = async (...args) => { const r = await status(...args); await refresh(); return r; };
+  return { db, limits, calls, notices, refresh, sent: cache };
 }
 
 test('reads Neon and Cloudflare, applies the plan limits, and shows each number with its source', async () => {
@@ -207,28 +223,30 @@ test('provider errors are reported per service without failing the others, and a
   assert.equal((await gql.limits.check({ force: true })).services.cloudflare.error, 'AUTH');
 });
 
-test('a limit that moves up is mailed once; staying there does not repeat; urgent repeats after the reminder interval; a failed mail is retried', async () => {
+test('a limit that moves up is announced once; staying there does not repeat; urgent repeats after the reminder interval', async () => {
   let now = NOW, level = 75;
-  let mailOk = true;
-  const s = await service({ clock: () => now, neon: () => ok(neonBody({ data_transfer_bytes: 5 * GB * level / 100 })), mail: () => (mailOk ? { ok: true } : { ok: false, error: 'HTTP_500' }) });
+  const s = await service({ clock: () => now, neon: () => ok(neonBody({ data_transfer_bytes: 5 * GB * level / 100 })) });
   await s.limits.setSettings({ forecastDays: 0 }); // the fixed 10-day period would otherwise turn 75 % into an urgent pace warning
   const run = async (step = 0) => { now += step; return s.limits.check({ force: true }); };
   await run();
   assert.equal(s.sent.length, 1);
-  assert.match(s.sent[0].subject, /Heads-up: Neon network transfer at 75 %/);
+  assert.equal(s.sent[0].code, 'limits.alert');
+  assert.equal(s.sent[0].params.id, 'neon.egress');
+  assert.equal(s.sent[0].params.level, 'warn');
+  assert.equal(s.sent[0].severity, 'warn');
   await run(HOUR); assert.equal(s.sent.length, 1, 'same level, no repeat');
   level = 88; await run(HOUR);
   assert.equal(s.sent.length, 2);
-  assert.match(s.sent[1].subject, /Back up now: Neon network transfer at 88 %/);
+  assert.equal(s.sent[1].params.level, 'urgent');
+  assert.equal(s.sent[1].severity, 'danger');
   await run(5 * HOUR); assert.equal(s.sent.length, 2, 'reminder not due yet');
   await run(25 * HOUR); assert.equal(s.sent.length, 3, 'reminder after 24 h');
-  level = 97; mailOk = false;
-  await run(HOUR); assert.equal(s.sent.length, 4, 'critical is attempted');
-  assert.equal((await s.limits.status()).mail.ok, false);
-  mailOk = true;
-  await run(HOUR); assert.equal(s.sent.length, 5, 'the failed message is sent again at the next check');
-  assert.equal((await s.limits.status()).mail.ok, true);
-  await run(HOUR); assert.equal(s.sent.length, 5, 'and then it is quiet');
+  assert.equal(s.sent[2].params.why, 'reminder');
+  level = 97;
+  await run(HOUR); assert.equal(s.sent.length, 4);
+  assert.equal(s.sent[3].params.level, 'critical');
+  await run(HOUR); assert.equal(s.sent.length, 4, 'and then it is quiet');
+  assert.equal((await s.notices.list()).unread, 4);
 });
 
 test('the monitor announces its own blindness after 12 hours, once per reminder interval', async () => {
@@ -239,7 +257,8 @@ test('the monitor announces its own blindness after 12 hours, once per reminder 
   now += 13 * HOUR;
   await s.limits.check({ force: true });
   assert.equal(s.sent.length, 1);
-  assert.match(s.sent[0].text, /Neon limits could not be read for more than 12 hours/);
+  assert.equal(s.sent[0].code, 'limits.blind');
+  assert.equal(s.sent[0].params.service, 'neon');
   now += 2 * HOUR;
   await s.limits.check({ force: true });
   assert.equal(s.sent.length, 1);
@@ -300,16 +319,6 @@ test('auto backup decision: off, below, running, waiting, cooldown, limit', () =
   assert.equal(decideAutoBackup(null, items(60), NOW, settings({ autoBackupAt: 60 })).run, true, 'the threshold is the owner\'s');
 });
 
-test('the automatic-backup message says what, where, and what to do on failure', () => {
-  const good = composeAutoBackup({ ok: true, ids: ['neon.storage'], name: 'x-limit.zip', destination: 'vault', base: 'https://app.test/' });
-  assert.match(good.subject, /Automatic backup made/);
-  assert.match(good.text, /backup vault/);
-  assert.match(good.text, /https:\/\/app\.test\/super-admin\/backup/);
-  const fail = composeAutoBackup({ ok: false, ids: ['r2.storage'], error: 'R2_OFFLINE' });
-  assert.match(fail.subject, /FAILED/);
-  assert.match(fail.text, /R2_OFFLINE/);
-});
-
 const hotCf = pct => () => ok(cfBody([], [{ dimensions: { bucketName: 'bk', datetime: 'now' }, max: { payloadSize: PLAN_LIMITS['r2.storage'] * pct / 100, metadataSize: 0, objectCount: 1 } }]));
 async function autoService({ pct = 95, hook, ...rest } = {}) {
   const clockState = { now: NOW };
@@ -325,7 +334,7 @@ test('90 %: the monitor starts ONE full backup, tells the owner, and waits a day
   await tickAuto(s);
   assert.equal(s.runs.length, 1);
   assert.deepEqual(s.runs[0].ids, ['r2.storage']);
-  assert.equal(s.sent.filter(m => /Automatic backup made/.test(m.subject)).length, 1);
+  assert.equal(s.sent.filter(m => m.code === 'backup.auto.done').length, 1);
   const status = await s.limits.status();
   assert.equal(status.autoBackup.status, 'done');
   assert.equal(status.autoBackup.name, 'dwira-limit.zip');
@@ -365,21 +374,21 @@ test('a failed automatic backup is retried after 2 hours and the owner is told o
   const s = await autoService({ hook: async () => ({ status: 'error', error: 'R2_OFFLINE' }) });
   await tickAuto(s);
   assert.equal(s.runs.length, 1);
-  assert.equal(s.sent.filter(m => /FAILED/.test(m.subject)).length, 1);
+  assert.equal(s.sent.filter(m => m.code === 'backup.auto.failed').length, 1);
   s.clockState.now += HOUR;
   await tickAuto(s);
   assert.equal(s.runs.length, 1, 'not before 2 hours');
   s.clockState.now += 90 * 60000;
   await tickAuto(s);
   assert.equal(s.runs.length, 2, 'retried');
-  assert.equal(s.sent.filter(m => /FAILED/.test(m.subject)).length, 1, 'no second mail inside the reminder period');
+  assert.equal(s.sent.filter(m => m.code === 'backup.auto.failed').length, 1, 'no second notice inside the reminder period');
   assert.equal((await s.limits.status()).autoBackup.status, 'error');
 });
 
 test('another backup already running is not a failure: silent, retried in 15 minutes; a throwing hook is INTERNAL', async () => {
   const busy = await autoService({ hook: async () => ({ status: 'error', error: 'BACKUP_BUSY' }) });
   await tickAuto(busy);
-  assert.equal(busy.sent.filter(m => /Automatic backup/.test(m.subject)).length, 0);
+  assert.equal(busy.sent.filter(m => m.kind === 'backup').length, 0);
   const state = (await busy.limits.status()).autoBackup;
   assert.equal(state.retryAt - state.finishedAt, 15 * 60000);
   const boom = await autoService({ hook: async () => { throw new Error('secret detail'); } });
@@ -415,8 +424,7 @@ function call(backend, url, { method = 'GET', body, headers = {} } = {}) {
 
 test('super admin routes: need a session, return the snapshot, save settings, refuse bad input, and never leak a key', async () => {
   const db = await freshDb();
-  const mails = [];
-  const backend = createBackend({ env: { ...ENV, NEON_API_KEY: 'neon-key-123456', NEON_PROJECT_ID: 'p1', ALERT_WEBHOOK_URL: 'https://hooks.test/x' }, db, media: { storage: null, download: async () => { throw new Error('offline'); } }, mailer: async m => { mails.push(m); return { ok: true }; } });
+  const backend = createBackend({ env: { ...ENV, NEON_API_KEY: 'neon-key-123456', NEON_PROJECT_ID: 'p1', GDRIVE_ACCESS_TOKEN: 'gd-token-123456' }, db, media: { storage: null, download: async () => { throw new Error('offline'); } } });
   await backend.db.query('select 1');
   await db.query("INSERT INTO saas_tenants(id,slug,name,kind,status,created_at,updated_at) VALUES('default','default','Default','default','active',0,0) ON CONFLICT (id) DO NOTHING");
   backend.tenants.invalidate();
@@ -431,22 +439,34 @@ test('super admin routes: need a session, return the snapshot, save settings, re
   assert.equal(first.body.settings.warnAt, 70);
   assert.equal(first.body.planLimits['neon.storage'], GB);
   assert.equal(first.body.keys.neonApi, true);
-  assert.equal(first.body.delivery.transport, true);
+  assert.equal(first.body.delivery, undefined, 'no e-mail delivery any more');
+  assert.deepEqual(first.body.destinations, { gdrive: true, dropbox: false });
+  assert.equal(first.body.settings.autoBackupTo, 'auto');
   assert.equal(first.body.backupHost, true);
-  assert.doesNotMatch(JSON.stringify(first.body), /neon-key-123456|hooks\.test/);
+  assert.doesNotMatch(JSON.stringify(first.body), /neon-key-123456|gd-token-123456/);
   assert.equal((await api('/limits/summary')).body.summary.level, first.body.level);
   assert.ok('limits' in (await api('/stats')).body);
 
   assert.equal((await api('/limits/settings', { method: 'PATCH', body: { warnAt: 95 } })).status, 400);
-  assert.equal((await api('/limits/settings', { method: 'PATCH', body: { email: 'bad' } })).status, 400);
-  const saved = await api('/limits/settings', { method: 'PATCH', body: { warnAt: 60, urgentAt: 80, email: 'me@owner.test', limits: { 'r2.storage': 5 * GB } } });
+  assert.equal((await api('/limits/settings', { method: 'PATCH', body: { autoBackupTo: 'ftp' } })).status, 400);
+  const saved = await api('/limits/settings', { method: 'PATCH', body: { warnAt: 60, urgentAt: 80, autoBackupTo: 'gdrive', limits: { 'r2.storage': 5 * GB } } });
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
   assert.equal(saved.body.settings.warnAt, 60);
   assert.equal(saved.body.settings.limits['r2.storage'], 5 * GB);
   assert.ok((await api('/audit?limit=20')).body.some(r => r.action === 'limits.settings'));
 
-  const test1 = await api('/limits/test', { method: 'POST', body: {} });
-  assert.equal(test1.status, 200, JSON.stringify(test1.body));
-  assert.equal(test1.body.to, 'me@owner.test');
-  assert.match(mails.at(-1).subject, /Test: free-tier limit warning/);
+  assert.equal(saved.body.settings.autoBackupTo, 'gdrive');
+  assert.equal((await api('/limits/test', { method: 'POST', body: {} })).status, 404, 'the e-mail test route is gone');
+
+  // The notification centre: test notice, list, mark as read, clear.
+  assert.equal((await call(backend, '/api/super-admin/notices')).status, 401);
+  assert.equal((await api('/notices/test', { method: 'POST', body: {} })).status, 200);
+  const list = await api('/notices');
+  assert.equal(list.status, 200);
+  assert.equal(list.body.unread >= 1, true);
+  assert.equal(list.body.notices.at(-1).code, 'system.test');
+  assert.equal((await api('/notices/read', { method: 'POST', body: { ids: 'nope' } })).status, 400);
+  assert.equal((await api('/notices/read', { method: 'POST', body: { all: true } })).body.unread, 0);
+  assert.equal((await api('/notices/clear', { method: 'POST', body: {} })).status, 200);
+  assert.equal((await api('/notices')).body.notices.length, 0);
 });

@@ -22,11 +22,11 @@ const { createPlatform } = require('./platform');
 
 const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))]);
 
-function createBundles({ db, env = process.env, senders, media: mediaOptions = {}, chatFetch, imageFetch, mailer } = {}) {
+function createBundles({ db, env = process.env, senders, media: mediaOptions = {}, chatFetch, imageFetch } = {}) {
   // One S3 client for the whole process: tenants differ by object-key prefix, not by credentials.
   const storage = 'storage' in mediaOptions ? mediaOptions.storage : createR2Storage(env);
   // Allowances + API manager (platform tables). Tenant modules only get `platform.forTenant(id)`: a handle fixed to their own tenant.
-  const platform = createPlatform(db, { env, mailer });
+  const platform = createPlatform(db, { env });
   // Which storage receives new files + read-through for stores without own media (server/media-hub.js). One per process.
   const hub = createMediaHub({ db, platform: platform.media, env, mediaOptions });
   const cache = new Map();

@@ -160,12 +160,19 @@ CREATE TABLE IF NOT EXISTS saas_usage (
   PRIMARY KEY (bucket, tenant_id, kind, op, provider, mode)
 );
 CREATE INDEX IF NOT EXISTS saas_usage_tenant ON saas_usage(tenant_id, bucket);
--- Warnings raised by the abuse detector (and e-mailed to the super admin).
+-- Warnings raised by the abuse detector (shown to the super admin as notifications in the console).
 CREATE TABLE IF NOT EXISTS saas_alerts (
   id TEXT PRIMARY KEY, at BIGINT NOT NULL, tenant_id TEXT NOT NULL, rule TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'medium', title TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT '{}', action TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', emailed_at BIGINT, email_error TEXT NOT NULL DEFAULT '', resolved_at BIGINT
 );
 CREATE INDEX IF NOT EXISTS saas_alerts_at ON saas_alerts(at DESC);
+-- The super admin's notification centre (bell + toasts + browser notifications in the console): free-tier limit warnings, automatic backups, API warnings.
+-- The text is not stored: \`code\` + \`params\` are rendered by the console in the owner's language.
+CREATE TABLE IF NOT EXISTS saas_notices (
+  id TEXT PRIMARY KEY, at BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'system', severity TEXT NOT NULL DEFAULT 'info', code TEXT NOT NULL DEFAULT '',
+  params TEXT NOT NULL DEFAULT '{}', href TEXT NOT NULL DEFAULT '', read_at BIGINT
+);
+CREATE INDEX IF NOT EXISTS saas_notices_at ON saas_notices(at DESC);
 -- Media & Storage. ONE shared, content-addressed namespace: a file is named after the hash of its bytes, so every store that holds the same picture
 -- points at the SAME stored object (media/<hash>.<ext>); each store only has its own row (its own library, title, alt text). ns = 1 means the
 -- object lives at that shared key; ns = 0 is a legacy per-store key (t/<store>/media/..., or raw bytes in the row). A stored object is deleted
@@ -185,7 +192,7 @@ CREATE TABLE IF NOT EXISTS saas_media_history (id TEXT PRIMARY KEY, at BIGINT NO
 CREATE TABLE IF NOT EXISTS saas_media_history_rows (hid TEXT NOT NULL, tenant_id TEXT NOT NULL, id TEXT NOT NULL, mime TEXT NOT NULL, size BIGINT, storage TEXT NOT NULL, ns INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (hid, tenant_id, id));
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
-const PLATFORM_TABLES = ['saas_media_old', 'saas_media_history', 'saas_media_history_rows', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts'];
+const PLATFORM_TABLES = ['saas_media_old', 'saas_media_history', 'saas_media_history_rows', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts', 'saas_notices'];
 
 /**
  * What a backup holds (server/backup/dump.js reads this; it lives here because this file owns the schema). One entry per table, parents before

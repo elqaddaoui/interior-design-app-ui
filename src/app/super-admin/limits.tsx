@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { useRouter } from 'expo-router';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
-import type { LimitLevel, LimitMetric, LimitSettings, LimitsStatus } from '@/superadmin/types';
-import { Badge, Btn, Card, ErrorLine, Field, Heading, Hint, Loading, Notice, Row, Segmented, T, ago, useLoad } from '@/superadmin/ui';
+import type { BackupTarget, LimitLevel, LimitMetric, LimitSettings, LimitsStatus } from '@/superadmin/types';
+import { Icon, type IconName } from '@/superadmin/icons';
+import { BrowserNotifyCard } from '@/superadmin/NoticeCenter';
+import { Badge, Btn, Card, ErrorLine, Heading, Hint, Loading, Notice, Row, T, ago, useLoad } from '@/superadmin/ui';
 
 const GB = 1e9;
 const TITLE: Record<string, string> = {
@@ -101,53 +103,184 @@ function BackupCard({ status }: { status: LimitsStatus }) {
   );
 }
 
-const num = (v: string) => Number(v.replace(/\D/g, '')) || 0;
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+/** A pill switch. */
+function Toggle({ on, onChange, label, testID }: { on: boolean; onChange: (on: boolean) => void; label: string; testID?: string }) {
+  return (
+    <Pressable testID={testID} accessibilityRole="switch" accessibilityLabel={label} accessibilityState={{ checked: on }} onPress={() => onChange(!on)}
+      style={{ width: 44, height: 26, borderRadius: 13, padding: 3, backgroundColor: on ? SA.color.accent : SA.color.line, justifyContent: 'center' }}>
+      <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: SA.color.panel, alignSelf: on ? 'flex-end' : 'flex-start' }} />
+    </Pressable>
+  );
+}
+
+/** − 70 % +  (a number the owner nudges instead of typing). */
+function Stepper({ value, min, max, step = 5, unit, onChange, testID, label }: { value: number; min: number; max: number; step?: number; unit: string; onChange: (v: number) => void; testID?: string; label: string }) {
+  const button = (icon: 'minus' | 'plus', delta: number, name: string) => (
+    <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${name}`} disabled={clamp(value + delta, min, max) === value} onPress={() => onChange(clamp(value + delta, min, max))}
+      style={({ pressed }) => ({ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? SA.color.line : SA.color.panel2, opacity: clamp(value + delta, min, max) === value ? 0.35 : 1 })}>
+      <Icon name={icon} size={16} color={SA.color.text} />
+    </Pressable>
+  );
+  return (
+    <View testID={testID} style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.sm }}>
+      {button('minus', -step, tr('Less'))}
+      <T weight="bold" style={{ minWidth: 58, textAlign: 'center' }}>{value} {unit}</T>
+      {button('plus', step, tr('More'))}
+    </View>
+  );
+}
+
+/** One line of the settings: what it is on the left, the control on the right. */
+function Line({ color, title, hint, children }: { color?: string; title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SA.space.md, flexWrap: 'wrap', paddingVertical: SA.space.sm }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.sm, flexShrink: 1, minWidth: 180, flex: 1 }}>
+        {color ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} /> : null}
+        <View style={{ flexShrink: 1 }}>
+          <T size="sm" weight="bold">{title}</T>
+          {hint ? <T size="xs" color={SA.color.muted}>{hint}</T> : null}
+        </View>
+      </View>
+      {children}
+    </View>
+  );
+}
+
+/** The three levels drawn as one bar: calm, heads-up, back up now, critical, with a shield where the automatic backup starts. */
+function Ladder({ draft }: { draft: LimitSettings }) {
+  const parts = [
+    { to: draft.warnAt, color: SA.color.line }, { to: draft.urgentAt, color: SA.color.warn }, { to: draft.criticalAt, color: SA.color.danger }, { to: 100, color: SA.color.danger },
+  ];
+  let from = 0;
+  const segments = parts.map((p, i) => { const seg = { key: i, left: from, width: Math.max(0, p.to - from), color: p.color, soft: i === 3 }; from = p.to; return seg; });
+  return (
+    <View testID="sa-limits-ladder" style={{ marginTop: SA.space.sm, marginBottom: SA.space.md }}>
+      <View style={{ height: 22 }}>
+        {draft.autoBackup ? (
+          <View style={{ position: 'absolute', start: `${draft.autoBackupAt}%`, top: 0, marginStart: -9, alignItems: 'center' }}>
+            <Icon name="shieldCheckOutline" size={18} color={SA.color.accent} />
+          </View>
+        ) : null}
+      </View>
+      <View style={{ height: 12, borderRadius: 6, backgroundColor: SA.color.panel2, overflow: 'hidden', flexDirection: 'row' }}>
+        {segments.map(seg => <View key={seg.key} style={{ width: `${seg.width}%`, backgroundColor: seg.color, opacity: seg.soft ? 0.55 : seg.key === 0 ? 0.55 : 1 }} />)}
+      </View>
+      <View style={{ height: 18, marginTop: 4 }}>
+        {[draft.warnAt, draft.urgentAt, draft.criticalAt].map(v => (
+          <T key={v} size="xs" color={SA.color.muted} style={{ position: 'absolute', start: `${v}%`, marginStart: -10 }}>{v}</T>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const TARGETS: { id: BackupTarget; icon: IconName; label: string }[] = [
+  { id: 'auto', icon: 'tuneVariant', label: 'Automatic' }, { id: 'vault', icon: 'shieldCheckOutline', label: 'Backup vault' },
+  { id: 'gdrive', icon: 'googleDrive', label: 'Google Drive' }, { id: 'dropbox', icon: 'dropbox', label: 'Dropbox' },
+];
+const TARGET_HINT: Record<BackupTarget, string> = {
+  auto: 'Smart choice: when only R2 is nearly full, the copy goes to Google Drive or Dropbox (if set up on the server) so it does not use the space that is running out. Otherwise it goes to your backup vault.',
+  vault: 'Always into your backup vault.',
+  gdrive: 'Always to Google Drive.',
+  dropbox: 'Always to Dropbox.',
+};
 
 function Settings({ status, onSaved }: { status: LimitsStatus; onSaved: () => void }) {
   const [draft, setDraft] = useState<LimitSettings>(status.settings);
+  const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [note, setNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(status.settings);
+  const set = (patch: Partial<LimitSettings>) => { setNote(null); setDraft({ ...draft, ...patch }); };
   const save = async () => {
     setBusy(true); setError(null); setNote(null);
-    try { await sa('/limits/settings', { method: 'PATCH', body: draft }); setNote({ tone: 'ok', text: tr('Saved.') }); onSaved(); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
+    try { await sa('/limits/settings', { method: 'PATCH', body: draft }); setNote(tr('Saved.')); onSaved(); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
   };
-  const test = async () => {
-    setBusy(true); setError(null); setNote(null);
-    try { const r = await sa<{ to: string }>('/limits/test', { method: 'POST', body: {} }); setNote({ tone: 'ok', text: tr('Test e-mail sent to {to}.', { to: r.to }) }); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
-  };
-  const onOff = (value: boolean, change: (v: boolean) => void) => <Segmented value={value ? 'on' : 'off'} onChange={v => change(v === 'on')} options={[{ value: 'on', label: tr('On') }, { value: 'off', label: tr('Off') }]} />;
+  const ready = (id: BackupTarget) => id === 'gdrive' ? status.destinations.gdrive : id === 'dropbox' ? status.destinations.dropbox : true;
+  const missing = !ready(draft.autoBackupTo);
   return (
     <Card>
-      <T weight="bold" size="lg">{tr('Warning settings')}</T>
-      <Hint>{tr('You are e-mailed when a limit gets close, again when it gets closer, and as a reminder while it stays high. The goal: time to back up before anything is restricted.')}</Hint>
-      {!status.delivery.transport ? <Notice tone="warn">{tr('No way to send e-mails is configured on the server yet (RESEND_API_KEY or ALERT_WEBHOOK_URL). Warnings are still listed here.')}</Notice> : null}
-      <Row style={{ marginBottom: SA.space.md }}>
-        <T size="sm">{tr('Warnings')}</T>{onOff(draft.enabled, enabled => setDraft({ ...draft, enabled }))}
-        <T size="sm">{tr('Watch Neon')}</T>{onOff(draft.services.neon, neon => setDraft({ ...draft, services: { ...draft.services, neon } }))}
-        <T size="sm">{tr('Watch Cloudflare')}</T>{onOff(draft.services.cloudflare, cloudflare => setDraft({ ...draft, services: { ...draft.services, cloudflare } }))}
+      <Row style={{ justifyContent: 'space-between' }}>
+        <View style={{ flexShrink: 1 }}>
+          <T weight="bold" size="lg">{tr('Warning settings')}</T>
+          <T size="sm" color={SA.color.muted}>{tr('A notification appears here and in your browser when a limit gets close.')}</T>
+        </View>
+        <Toggle testID="sa-limits-enabled" on={draft.enabled} label={tr('Warnings')} onChange={enabled => set({ enabled })} />
       </Row>
-      <Field label={tr('Send warnings to')} value={draft.email} onChangeText={email => setDraft({ ...draft, email })} placeholder={status.delivery.recipient || 'you@example.com'} keyboardType="email-address" {...({ testID: 'sa-limits-email' } as object)} />
-      <Hint>{status.delivery.recipient ? tr('Empty = {to}, the same address as the API warnings.', { to: status.delivery.recipient }) : tr('Empty = the first super admin.')}</Hint>
-      <Field label={tr('Warning from (% of the limit)')} value={String(draft.warnAt)} onChangeText={v => setDraft({ ...draft, warnAt: num(v) })} keyboardType="number-pad" />
-      <Field label={tr('Back up now from (% of the limit)')} value={String(draft.urgentAt)} onChangeText={v => setDraft({ ...draft, urgentAt: num(v) })} keyboardType="number-pad" />
-      <Field label={tr('Critical from (% of the limit)')} value={String(draft.criticalAt)} onChangeText={v => setDraft({ ...draft, criticalAt: num(v) })} keyboardType="number-pad" />
-      <View style={{ marginTop: SA.space.sm, marginBottom: SA.space.sm }}>
-        <T size="sm" weight="bold">{tr('Automatic full backup')}</T>
-        <Hint>{tr('When Neon or R2 gets this close to a free limit, the app backs up everything by itself (database, code and files).')}</Hint>
-        <Row>
-          {onOff(draft.autoBackup, autoBackup => setDraft({ ...draft, autoBackup }))}
-        </Row>
-      </View>
-      {draft.autoBackup ? <Field label={tr('Make the full backup from (% of the limit)')} value={String(draft.autoBackupAt)} onChangeText={v => setDraft({ ...draft, autoBackupAt: num(v) })} keyboardType="number-pad" {...({ testID: 'sa-limits-autoat' } as object)} /> : null}
-      <Field label={tr('Warn when a limit would be reached within (days, 0 = off)')} value={String(draft.forecastDays)} onChangeText={v => setDraft({ ...draft, forecastDays: num(v) })} keyboardType="number-pad" />
-      <Field label={tr('Remind me again after (hours)')} value={String(draft.reminderHours)} onChangeText={v => setDraft({ ...draft, reminderHours: num(v) })} keyboardType="number-pad" />
+
+      {draft.enabled ? (
+        <View>
+          <Ladder draft={draft} />
+          <Line color={SA.color.warn} title={tr('Heads-up')} hint={tr('Plan a backup soon')}>
+            <Stepper label={tr('Heads-up')} value={draft.warnAt} min={10} max={draft.urgentAt - 1} unit="%" onChange={warnAt => set({ warnAt })} />
+          </Line>
+          <Line color={SA.color.danger} title={tr('Back up now')} hint={tr('The time to save everything')}>
+            <Stepper label={tr('Back up now')} value={draft.urgentAt} min={draft.warnAt + 1} max={draft.criticalAt - 1} unit="%" onChange={urgentAt => set({ urgentAt })} />
+          </Line>
+          <Line color={SA.color.danger} title={tr('Critical')} hint={tr('Almost at the limit')}>
+            <Stepper label={tr('Critical')} value={draft.criticalAt} min={draft.urgentAt + 1} max={100} unit="%" onChange={criticalAt => set({ criticalAt })} />
+          </Line>
+        </View>
+      ) : null}
+
+      <View style={{ height: 1, backgroundColor: SA.color.line, marginVertical: SA.space.md }} />
+
+      <Line title={tr('Automatic full backup')} hint={tr('Database, code and files, made by itself.')}>
+        <Toggle testID="sa-limits-auto-on" on={draft.autoBackup} label={tr('Automatic full backup')} onChange={autoBackup => set({ autoBackup })} />
+      </Line>
+      {draft.autoBackup ? (
+        <View>
+          <Line title={tr('Start at')} hint={tr('When any limit reaches this level')}>
+            <Stepper testID="sa-limits-autoat" label={tr('Start at')} value={draft.autoBackupAt} min={50} max={100} unit="%" onChange={autoBackupAt => set({ autoBackupAt })} />
+          </Line>
+          <T size="xs" weight="bold" color={SA.color.muted} style={{ textTransform: 'uppercase', letterSpacing: 0.8, marginTop: SA.space.sm, marginBottom: SA.space.sm }}>{tr('Save the copy to')}</T>
+          <View testID="sa-limits-target" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: SA.space.sm }}>
+            {TARGETS.map(t => {
+              const on = draft.autoBackupTo === t.id, off = !ready(t.id);
+              return (
+                <Pressable key={t.id} testID={`sa-limits-target-${t.id}`} accessibilityRole="button" accessibilityState={{ selected: on, disabled: off && !on }} disabled={off && !on} onPress={() => set({ autoBackupTo: t.id })}
+                  style={{ flexGrow: 1, flexBasis: 140, flexDirection: 'row', alignItems: 'center', gap: SA.space.sm, paddingVertical: SA.space.sm, paddingHorizontal: SA.space.md, borderRadius: SA.radius.md, borderWidth: 1.5, borderColor: on ? SA.color.accent : SA.color.line, backgroundColor: on ? SA.color.accentSoft : 'transparent', opacity: off && !on ? 0.5 : 1 }}>
+                  <Icon name={t.icon} size={20} color={on ? SA.color.accent : SA.color.muted} />
+                  <View style={{ flexShrink: 1 }}>
+                    <T size="sm" weight="bold" color={on ? SA.color.accent : SA.color.text} numberOfLines={1}>{tr(t.label)}</T>
+                    {off ? <T size="xs" color={SA.color.muted} numberOfLines={1}>{tr('Not set up')}</T> : null}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+          <T size="sm" color={SA.color.muted} style={{ marginTop: SA.space.sm }}>{tr(TARGET_HINT[draft.autoBackupTo])}</T>
+          {missing ? <View style={{ marginTop: SA.space.sm }}><Notice tone="warn">{tr('This place is not set up on the server yet, so the automatic backup would fail. Choose Automatic, or add its token in the server settings.')}</Notice></View> : null}
+        </View>
+      ) : null}
+
+      <View style={{ height: 1, backgroundColor: SA.color.line, marginVertical: SA.space.md }} />
+
+      <Pressable testID="sa-limits-more" accessibilityRole="button" onPress={() => setMore(!more)} style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.sm }}>
+        <Icon name={more ? 'chevronUp' : 'chevronDown'} size={18} color={SA.color.muted} />
+        <T size="sm" weight="bold" color={SA.color.muted}>{more ? tr('Fewer options') : tr('More options')}</T>
+      </Pressable>
+      {more ? (
+        <View style={{ marginTop: SA.space.sm }}>
+          <Line title={tr('Forecast')} hint={draft.forecastDays ? tr('Warn if a limit would be reached within {n} days', { n: draft.forecastDays }) : tr('Off')}>
+            <Stepper label={tr('Forecast')} value={draft.forecastDays} min={0} max={60} step={1} unit={tr('days')} onChange={forecastDays => set({ forecastDays })} />
+          </Line>
+          <Line title={tr('Reminder')} hint={tr('Remind me again while it stays high')}>
+            <Stepper label={tr('Reminder')} value={draft.reminderHours} min={1} max={168} step={1} unit="h" onChange={reminderHours => set({ reminderHours })} />
+          </Line>
+          <Line title={tr('Watch Neon')} hint={tr('The database')}><Toggle on={draft.services.neon} label={tr('Watch Neon')} onChange={neon => set({ services: { ...draft.services, neon } })} /></Line>
+          <Line title={tr('Watch Cloudflare')} hint={tr('The R2 files')}><Toggle on={draft.services.cloudflare} label={tr('Watch Cloudflare')} onChange={cloudflare => set({ services: { ...draft.services, cloudflare } })} /></Line>
+        </View>
+      ) : null}
+
       <ErrorLine error={error} />
-      {note ? <Notice tone={note.tone}>{note.text}</Notice> : null}
-      <Row>
-        <Btn testID="sa-limits-save" label={tr('Save')} onPress={save} busy={busy} />
-        <Btn testID="sa-limits-test" kind="ghost" label={tr('Send a test e-mail')} onPress={test} disabled={busy} />
-        <Btn kind="ghost" label={tr('Back to the defaults')} onPress={() => setDraft({ ...status.defaults, email: draft.email, limits: draft.limits })} disabled={busy} />
+      {note ? <View style={{ marginTop: SA.space.md }}><Notice tone="ok">{note}</Notice></View> : null}
+      <Row style={{ marginTop: SA.space.lg }}>
+        <Btn testID="sa-limits-save" label={tr('Save')} onPress={save} busy={busy} disabled={!dirty} />
+        <Btn kind="ghost" label={tr('Back to the defaults')} onPress={() => set({ ...status.defaults, limits: draft.limits })} disabled={busy} />
       </Row>
     </Card>
   );
@@ -171,8 +304,8 @@ export default function Limits() {
         <View>
           {data.level === 'ok' ? <Notice tone="ok" testID="sa-limits-banner">{tr('Everything is well within the free limits.')}</Notice>
             : <Notice tone={data.level === 'warn' ? 'warn' : 'danger'} testID="sa-limits-banner">{tr(data.level === 'warn' ? 'A limit is getting close. Plan a backup soon.' : 'A limit is very close. Back up all your data now.')}</Notice>}
-          {data.mail && !data.mail.ok ? <Notice tone="warn">{tr('The last warning could not be e-mailed. It will be tried again at the next check.')}</Notice> : null}
           <T size="xs" color={SA.color.muted} style={{ marginBottom: SA.space.md }}>{tr('Last checked {when}.', { when: ago(data.at) })}</T>
+          <BrowserNotifyCard />
           <BackupCard status={data} />
           {SERVICES.map(service => {
             const info = data.services[service.id];

@@ -19,6 +19,7 @@ const { slugProblem } = require('../src/lib/reservedSlugs');
 const { TENANT_TABLES } = require('./db');
 const { createMediaOps } = require('./media-ops');
 const { createLimits } = require('./limits');
+const { configured: configuredDestinations } = require('./backup/destinations');
 const { TENANT_ID } = require('./scope');
 const THEME_ID = /^th_[a-f0-9]{12}$/;
 
@@ -65,7 +66,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
   const ops = () => (opsInstance ||= createMediaOps({ db, hub: bundles.hub, platform: platform.media, env }));
   // Free-tier watch (Neon + Cloudflare R2): measures, warns early, reminds, and remembers the last backup the owner saved.
   const limits = createLimits({
-    db, env, notify: message => platform.usage.notify(message), transport: () => platform.usage.transport(), recipient: () => platform.usage.recipient(),
+    db, env, notices: platform.notices, destinations: () => ({ gdrive: configuredDestinations(env).gdrive, dropbox: configuredDestinations(env).dropbox }),
     mediaTotals: async () => { try { return await ops().totals(); } catch { return null; } },
   });
   const attempts = new Map(); // address -> { count, until }: 5 failed sign-ins lock that address for 15 minutes
@@ -858,10 +859,18 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     if (path === '/alerts/resolve-all' && method === 'POST') { const result = await platform.usage.resolveAll(); await audit(actor, 'alert.resolve', null, 'all', String(result.count)); return ok(result); }
     if ((m = /^\/alerts\/(al_[a-f0-9]{12})\/resolve$/.exec(path)) && method === 'POST') { const result = await platform.usage.resolve(m[1]); await audit(actor, 'alert.resolve', null, m[1], ''); return ok(result); }
     if (path === '/alert-settings') {
-      if (method === 'GET') return ok({ settings: await platform.usage.getSettings(), recipient: await platform.usage.recipient(), transport: platform.usage.transport(), defaults: platform.usage.DEFAULTS });
-      if (method === 'PATCH') { const settings = await platform.usage.setSettings(await readBody(req)); await audit(actor, 'alert.settings', null, 'abuse', ''); return ok({ settings, recipient: await platform.usage.recipient(), transport: platform.usage.transport(), defaults: platform.usage.DEFAULTS }); }
+      if (method === 'GET') return ok({ settings: await platform.usage.getSettings(), defaults: platform.usage.DEFAULTS });
+      if (method === 'PATCH') { const settings = await platform.usage.setSettings(await readBody(req)); await audit(actor, 'alert.settings', null, 'abuse', ''); return ok({ settings, defaults: platform.usage.DEFAULTS }); }
     }
-    if (path === '/alert-settings/test' && method === 'POST') return ok(await platform.usage.testEmail());
+    // The notification centre (bell, toasts, browser notifications). The console polls /notices; nothing leaves the server.
+    if (path === '/notices' && method === 'GET') return ok(await platform.notices.list({ limit: url.searchParams.get('limit') || 50 }));
+    if (path === '/notices/read' && method === 'POST') { const body = await readBody(req); return ok(await platform.notices.markRead(body.all === true ? 'all' : body.ids)); }
+    if (path === '/notices/clear' && method === 'POST') return ok(await platform.notices.clear());
+    if (path === '/notices/test' && method === 'POST') {
+      const id = await platform.notices.add({ kind: 'system', severity: 'info', code: 'system.test', href: '/super-admin/limits', params: {} });
+      if (!id) throw Object.assign(new Error('INTERNAL'), { status: 500 });
+      return ok({ ok: true, id });
+    }
     // Free-tier limits of Neon and Cloudflare R2: current usage, early warnings, the settings of those warnings.
     if (path === '/limits/summary' && method === 'GET') return ok({ summary: await limits.summary() });
     if (path === '/limits' && method === 'GET') return ok(await limits.status({ refresh: url.searchParams.get('refresh') === '1' }));
@@ -871,7 +880,6 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
       await limits.check({ force: true, settingsChanged: true }).catch(() => {});
       return ok(await limits.status());
     }
-    if (path === '/limits/test' && method === 'POST') return ok(await limits.testAlert());
     // A demo's "use API" switch (auto-closes after a quiet period) and the pause switch of any store.
     if ((m = /^\/demos\/([a-z0-9_-]+)\/ai$/.exec(path)) && method === 'POST') {
       const row = await getDemoRow(m[1]);

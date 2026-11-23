@@ -655,11 +655,18 @@ function createBackupService({ db, bundles, env = process.env, appRoot, tenantId
      * { status: 'done' | 'error' | 'cancelled', error?, name?, destination }. Throws BACKUP_BUSY / VAULT_NOT_CONFIGURED /
      * BACKUP_UNSUPPORTED_HOST when it cannot even start (the caller tries again later).
      */
-    async runAutomatic({ avoidR2 = false } = {}) {
+    async runAutomatic({ avoidR2 = false, to = 'auto' } = {}) {
       if (!vault) throw fail(400, 'VAULT_NOT_CONFIGURED');
-      // R2 is the stressed provider and the vault lives in it: use Google Drive / Dropbox when the server has them (their own tokens), else the vault.
+      const c = destinations.configured();
       let destination = 'vault';
-      if (avoidR2 && vault.kind === 'r2') { const c = destinations.configured(); destination = c.gdrive ? 'gdrive' : c.dropbox ? 'dropbox' : 'vault'; }
+      if (to === 'gdrive' || to === 'dropbox') {
+        // The owner chose a place. If it is not set up on the server the backup is NOT silently put elsewhere: it fails and the owner is told.
+        if (!c[to]) throw fail(400, 'DESTINATION_NOT_CONFIGURED');
+        destination = to;
+      } else if (to === 'auto' && avoidR2 && vault.kind === 'r2') {
+        // R2 is the stressed provider and the vault lives in it: use Google Drive / Dropbox when the server has them (their own tokens), else the vault.
+        destination = c.gdrive ? 'gdrive' : c.dropbox ? 'dropbox' : 'vault';
+      }
       const started = await startBackup({ ...platform(), actor: 'limits' }, { kind: 'all', destination, createdBy: 'limit', data: 'content' });
       for (;;) {
         const job = jobs.get(started.id);

@@ -9,6 +9,8 @@ import { Icon, IconBtn, type IconName } from './icons';
 import { saMessage } from './api';
 import { CONSOLE_ICONS, applyConsoleBrand } from './brand';
 import { Btn, Card, ErrorLine, Field, Loading, Notice, Row, T } from './ui';
+import { NoticeBell, NoticePanel, ToastHost, useNoticePolling } from './NoticeCenter';
+import { setNoticeNavigator } from './notices';
 
 const NAV: { href: string; label: string; testID: string; icon: IconName }[] = [
   { href: '/super-admin', label: 'Overview', testID: 'sa-nav-overview', icon: 'viewDashboardOutline' },
@@ -67,6 +69,8 @@ export function SuperShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { width } = useWindowDimensions();
   useEffect(() => { void check(); }, [check]);
+  useNoticePolling(state === 'in');
+  useEffect(() => { setNoticeNavigator(href => router.push(href as never)); }, [router]);
   useEffect(() => { if (Platform.OS === 'web' && typeof document !== 'undefined') { applyConsoleBrand(); document.body.style.backgroundColor = SA.color.bg; } }, [theme]);
   // The page direction (right to left for Arabic and Darija) lives on the document: modals are drawn outside the root view.
   useEffect(() => { applyDocumentLang(); }, [lang]);
@@ -97,14 +101,15 @@ export function SuperShell({ children }: { children: React.ReactNode }) {
           <View style={{ gap: 2, marginTop: SA.space.lg }}>{links}</View>
           <View style={{ marginTop: 'auto', paddingTop: SA.space.md, gap: SA.space.sm }}>
             <T size="xs" color={SA.color.muted} numberOfLines={1}>{email}</T>
-            <Row>{flipBtn}<Btn testID="sa-signout" label={tr('Sign out')} kind="ghost" small icon="logout" onPress={() => { void logout(); }} /></Row>
+            <Row><NoticeBell />{flipBtn}</Row>
+            <Btn testID="sa-signout" label={tr('Sign out')} kind="ghost" small icon="logout" onPress={() => { void logout(); }} />
           </View>
         </View>
       ) : (
         <View style={{ borderBottomWidth: 1, borderColor: SA.color.line, backgroundColor: SA.color.panel, paddingTop: SA.space.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: SA.space.md, gap: SA.space.md }}>
             <Brand size={24} />
-            <Row style={{ flexWrap: 'nowrap' }}>{flipBtn}<Btn testID="sa-signout" label={tr('Sign out')} kind="ghost" small icon="logout" onPress={() => { void logout(); }} /></Row>
+            <Row style={{ flexWrap: 'nowrap' }}><NoticeBell size={34} />{flipBtn}<Btn testID="sa-signout" label={tr('Sign out')} kind="ghost" small icon="logout" onPress={() => { void logout(); }} /></Row>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: SA.space.sm, paddingVertical: SA.space.sm, gap: 2 }}>{links}</ScrollView>
         </View>
@@ -119,6 +124,8 @@ export function SuperShell({ children }: { children: React.ReactNode }) {
           <React.Fragment key={`${theme}-${lang}`}>{children}</React.Fragment>
         </View>
       </ScrollView>
+      <NoticePanel anchor={wide ? 'side' : 'top'} />
+      <ToastHost />
     </View>
   );
 }

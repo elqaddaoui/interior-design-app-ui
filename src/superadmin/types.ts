@@ -41,14 +41,20 @@ export type UsageReport = {
 };
 export type AbuseAlert = {
   id: string; at: number; tenantId: string; rule: string; severity: 'medium' | 'high' | 'critical'; title: string; action: string; status: 'open' | 'resolved';
-  emailedAt: number | null; emailError: string; resolvedAt: number | null; store: string; slug: string; storeKind: string;
+  resolvedAt: number | null; store: string; slug: string; storeKind: string;
   detail: { store: string; slug: string; storeKind: string; mode: 'own' | 'platform'; kind: ApiKind; value: number; limit: number; windowMin: number };
 };
 export type AbuseSettings = {
-  enabled: boolean; email: string; autoPause: boolean; cooldownMin: number; burst: Record<ApiKind, number>; demoBurst: number; daily: Record<ApiKind, number>;
+  enabled: boolean; autoPause: boolean; cooldownMin: number; burst: Record<ApiKind, number>; demoBurst: number; daily: Record<ApiKind, number>;
   spikeFactor: number; minSpike: number; failureRate: number; probe: number;
 };
-export type AlertConfig = { settings: AbuseSettings; recipient: string; transport: boolean; defaults: AbuseSettings };
+export type AlertConfig = { settings: AbuseSettings; defaults: AbuseSettings };
+
+/** The notification centre: the server stores a code and numbers, the console writes the sentence in the owner's language. */
+export type NoticeKind = 'limits' | 'backup' | 'api' | 'system';
+export type NoticeSeverity = 'info' | 'ok' | 'warn' | 'danger';
+export type Notice = { id: string; at: number; kind: NoticeKind; severity: NoticeSeverity; code: string; params: Record<string, string | number | boolean>; href: string; read: boolean };
+export type NoticeList = { notices: Notice[]; unread: number };
 
 export type MediaStorageKind = 'r2' | 'app';
 export type MediaBucket = { files: number; bytes: number };
@@ -110,15 +116,15 @@ export type LimitMetric = {
   projection: { at: number; days: number } | null; reserve: { need: number; left: number } | null;
 };
 export type LimitServiceState = { state: 'on' | 'off' | 'not_used'; error?: string; provider?: string; api?: boolean; r2?: boolean; dbBytes?: number | null };
+export type BackupTarget = 'auto' | 'vault' | 'gdrive' | 'dropbox';
 export type LimitSettings = {
-  enabled: boolean; autoBackup: boolean; autoBackupAt: number; email: string; warnAt: number; urgentAt: number; criticalAt: number; forecastDays: number; reminderHours: number;
+  enabled: boolean; autoBackup: boolean; autoBackupAt: number; autoBackupTo: BackupTarget; warnAt: number; urgentAt: number; criticalAt: number; forecastDays: number; reminderHours: number;
   services: { neon: boolean; cloudflare: boolean }; limits: Record<string, number>;
 };
 export type LimitsStatus = {
   at: number; level: LimitLevel; metrics: LimitMetric[]; services: { neon?: LimitServiceState; cloudflare?: LimitServiceState };
-  mail?: { at: number; ok: boolean; error: string; count: number } | null;
   settings: LimitSettings; defaults: LimitSettings; planLimits: Record<string, number>;
-  delivery: { transport: boolean; recipient: string }; keys: { neonApi: boolean; cloudflareApi: boolean };
+  destinations: { gdrive: boolean; dropbox: boolean }; keys: { neonApi: boolean; cloudflareApi: boolean };
   lastBackupAt: number | null; backupHost: boolean;
   autoBackup?: { status: 'running' | 'done' | 'error'; at: number; finishedAt?: number; ids?: string[]; destination?: string; name?: string; error?: string; lastOkAt?: number; retryAt?: number } | null;
 };

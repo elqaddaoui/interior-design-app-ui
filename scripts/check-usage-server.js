@@ -82,7 +82,8 @@ async function render(backend, slug, auth) {
 }
 
 
-const mailbox = () => { const sent = []; return { sent, mailer: async mail => { sent.push(mail); return { ok: true }; } }; };
+/** The notices the platform raised so far, oldest first (what used to be the e-mails). */
+const noticesOf = async backend => (await backend.bundles.platform.notices.list({ limit: 200 })).notices.reverse();
 const pg = c => ({ limit: c.limit, used: c.used, allocated: c.allocated, available: c.available, over: c.over, state: c.state });
 const report = async (api, query = '') => (await api(`/usage${query}`)).body;
 const kindCalls = (r, kind) => r.byKind.find(k => k.kind === kind).calls;
@@ -257,9 +258,8 @@ test('consumption: every modality is metered, with the store\'s own keys AND wit
   assert.equal(anon.status, 401);
 });
 
-test('abuse detection: a burst raises ONE alert, e-mails the super admin, and pauses a platform-managed store; an own-key store is only warned', async () => {
-  const box = mailbox();
-  const { api, backend } = await setup(fakeImageApi(), { mailer: box.mailer });
+test('abuse detection: a burst raises ONE alert, notifies the super admin, and pauses a platform-managed store; an own-key store is only warned', async () => {
+  const { api, backend } = await setup(fakeImageApi());
   const managed = (await api('/tenants', { method: 'POST', body: { name: 'Greedy', slug: 'greedy', apiMode: 'platform' } })).body;
   const own = (await api('/tenants', { method: 'POST', body: { name: 'Loud Own', slug: 'loud-own' } })).body;
   const settings = (await api('/alert-settings', { method: 'PATCH', body: { burst: { image: 5 }, cooldownMin: 60 } })).body;
@@ -269,14 +269,20 @@ test('abuse detection: a burst raises ONE alert, e-mails the super admin, and pa
   // Below the level: nothing.
   await hit(managed.tenant.id, 4);
   assert.deepEqual(await usage.scan(managed.tenant.id), []);
-  assert.equal(box.sent.length, 0);
-  // At the level: a "high" alert and an e-mail, no pause yet.
+  assert.equal((await noticesOf(backend)).length, 0);
+  // At the level: a "high" alert and a notification, no pause yet.
   await hit(managed.tenant.id, 1);
   assert.equal((await usage.scan(managed.tenant.id)).length, 1);
-  assert.equal(box.sent.length, 1);
-  assert.equal(box.sent[0].to, SUPER.email, 'the super admin account is the default recipient');
-  assert.match(box.sent[0].subject, /Burst of API calls: Greedy/);
-  assert.match(box.sent[0].text, /platform/);
+  const first = await noticesOf(backend);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].code, 'api.alert');
+  assert.equal(first[0].kind, 'api');
+  assert.equal(first[0].severity, 'danger');
+  assert.equal(first[0].href, '/super-admin/apis?tab=alerts');
+  assert.equal(first[0].params.rule, 'burst');
+  assert.equal(first[0].params.store, 'Greedy');
+  assert.equal(first[0].params.mode, 'platform');
+  assert.equal(first[0].params.paused, false);
   assert.equal((await api('/tenants/' + managed.tenant.id)).body.aiPaused, false);
   // 3x the level: critical -> the store's AI is paused automatically (a second, separate rule is not raised twice: cooldown).
   await hit(managed.tenant.id, 12);
@@ -293,7 +299,7 @@ test('abuse detection: a burst raises ONE alert, e-mails the super admin, and pa
   const view = (await api('/tenants/' + managed.tenant.id)).body;
   assert.equal(view.aiPaused, true, 'critical + platform keys = automatic pause');
   assert.match(view.aiPauseReason, /abuse:burst:text/);
-  assert.ok(box.sent.some(m => /PAUSED automatically/.test(m.text)));
+  assert.ok((await noticesOf(backend)).some(n => n.params.rule === 'burst' && n.params.paused === true), 'the notification says the store was paused');
   assert.equal((await api('/alerts')).body.alerts.find(a => a.rule === 'burst:text').action, 'paused');
   // A paused store reaches no provider; the owner resumes it from the console (which also closes its alerts).
   const imageApi = fakeImageApi();
@@ -304,7 +310,7 @@ test('abuse detection: a burst raises ONE alert, e-mails the super admin, and pa
   assert.equal(refused.body.error, 'AI_PAUSED');
   assert.equal((await api(`/tenants/${managed.tenant.id}/ai-pause`, { method: 'POST', body: { paused: false } })).body.aiPaused, false);
   assert.equal((await api('/alerts')).body.alerts.filter(a => a.tenantId === managed.tenant.id).length, 0, 'resuming closes the store\'s open alerts');
-  // An own-key store: warned (alert + e-mail) but never paused: it pays for its own keys.
+  // An own-key store: warned (alert + notification) but never paused: it pays for its own keys.
   await hit(own.tenant.id, 20);
   await usage.scan(own.tenant.id);
   assert.equal((await api('/tenants/' + own.tenant.id)).body.aiPaused, false);
@@ -312,7 +318,8 @@ test('abuse detection: a burst raises ONE alert, e-mails the super admin, and pa
   assert.equal(loud.severity, 'critical');
   assert.equal(loud.action, '');
   assert.equal(loud.detail.mode, 'own', 'abuse is detected for stores that manage their own keys too');
-  assert.ok(loud.emailedAt > 0);
+  assert.equal(loud.emailedAt, undefined, 'no e-mail field any more');
+  assert.ok((await noticesOf(backend)).some(n => n.params.store === 'Loud Own'));
   // Resolve one / all; the overview counts open alerts.
   assert.equal((await api('/stats')).body.alerts >= 1, true);
   assert.equal((await api(`/alerts/${loud.id}/resolve`, { method: 'POST' })).status, 200);
@@ -321,11 +328,8 @@ test('abuse detection: a burst raises ONE alert, e-mails the super admin, and pa
   assert.equal((await api('/alerts?status=all')).body.alerts.length >= 3, true, 'history is kept');
 });
 
-test('abuse detection: a gated demo that keeps being probed raises an alert; failure storms and spikes too; settings are validated; e-mail failures are kept and retried', async () => {
-  let up = false;
-  const sent = [];
-  const mailer = async mail => { if (!up) return { ok: false, error: 'HTTP_500' }; sent.push(mail); return { ok: true }; };
-  const { api, backend, db } = await setup(fakeImageApi(), { mailer });
+test('abuse detection: a gated demo that keeps being probed raises an alert; failure storms and spikes too; settings are validated', async () => {
+  const { api, backend, db } = await setup(fakeImageApi());
   const demo = (await api('/demos', { method: 'POST', body: { name: 'Probed' } })).body.demo;
   await api('/alert-settings', { method: 'PATCH', body: { probe: 5, failureRate: 50 } });
   const h = backend.bundles.get(demo.tenantId).platform;
@@ -335,12 +339,6 @@ test('abuse detection: a gated demo that keeps being probed raises an alert; fai
   const probe = alerts.find(a => a.rule === 'probe:image');
   assert.ok(probe, 'probing a closed demo is reported');
   assert.equal(probe.storeKind, 'demo');
-  assert.equal(probe.emailedAt, null, 'the mail failed...');
-  assert.equal(probe.emailError, 'HTTP_500', '...and the reason is kept');
-  // Delivery is retried once the transport works (alerts are read by the console every few seconds).
-  up = true;
-  backend.bundles.platform.usage; // retry is throttled per process: force it by clearing the clock gate through a fresh read after 5 minutes
-  await db.query("UPDATE saas_alerts SET at=at WHERE id=$1", [probe.id]);
   // failure storm on a store
   const store = (await api('/tenants', { method: 'POST', body: { name: 'Broken Key', slug: 'broken-key' } })).body;
   const s = backend.bundles.get(store.tenant.id).platform;
@@ -357,50 +355,56 @@ test('abuse detection: a gated demo that keeps being probed raises an alert; fai
   await backend.bundles.platform.usage.scan(sp.tenant.id);
   assert.ok((await api('/alerts')).body.alerts.find(a => a.tenantId === sp.tenant.id && a.rule === 'spike:text'));
   // Settings: validated, persisted, resettable; switching detection off silences it.
-  for (const bad of [{ burst: { image: 0 } }, { email: 'not-an-email' }, { cooldownMin: 1 }, { failureRate: 500 }, { daily: { text: 'x' } }]) assert.equal((await api('/alert-settings', { method: 'PATCH', body: bad })).status, 400, JSON.stringify(bad));
-  const saved = (await api('/alert-settings', { method: 'PATCH', body: { email: 'owner@shop.test', autoPause: false } })).body;
-  assert.equal(saved.recipient, 'owner@shop.test');
+  for (const bad of [{ burst: { image: 0 } }, { cooldownMin: 1 }, { failureRate: 500 }, { daily: { text: 'x' } }]) assert.equal((await api('/alert-settings', { method: 'PATCH', body: bad })).status, 400, JSON.stringify(bad));
+  const saved = (await api('/alert-settings', { method: 'PATCH', body: { autoPause: false, email: 'old@shop.test' } })).body;
+  assert.equal(saved.settings.email, undefined, 'the e-mail setting is gone');
+  assert.equal(saved.recipient, undefined);
+  assert.equal(saved.transport, undefined);
   assert.equal((await api('/alert-settings')).body.settings.autoPause, false);
   assert.equal((await api('/alert-settings', { method: 'PATCH', body: { enabled: false } })).body.settings.enabled, false);
   const quiet = (await api('/tenants', { method: 'POST', body: { name: 'Quiet', slug: 'quiet-one' } })).body;
   const q = backend.bundles.get(quiet.tenant.id).platform;
   for (let i = 0; i < 400; i++) await q.record({ kind: 'image', op: 'generate', provider: 'pollinations', units: 1, ok: true });
   assert.deepEqual(await backend.bundles.platform.usage.scan(quiet.tenant.id), [], 'detection switched off');
-  // The test e-mail goes to the chosen address.
-  assert.equal((await api('/alert-settings/test', { method: 'POST' })).body.to, 'owner@shop.test');
-  assert.ok(sent.some(m => /Test warning/.test(m.subject)));
+  assert.equal((await api('/alert-settings/test', { method: 'POST' })).status, 404, 'the test e-mail route is gone');
 });
 
-test('with no mail transport the alert is still saved and shown in the console, and the console says why no e-mail left', async () => {
+test('every alert reaches the notification centre with no server setup at all; the centre can be read, marked as read and cleared', async () => {
   const { api, backend } = await setup();
-  const t = (await api('/tenants', { method: 'POST', body: { name: 'No Mail', slug: 'no-mail-shop' } })).body;
+  const t = (await api('/tenants', { method: 'POST', body: { name: 'No Setup', slug: 'no-setup-shop' } })).body;
   await api('/alert-settings', { method: 'PATCH', body: { burst: { image: 3 } } });
   const h = backend.bundles.get(t.tenant.id).platform;
   for (let i = 0; i < 4; i++) await h.record({ kind: 'image', op: 'generate', provider: 'pollinations', units: 1, ok: true });
   await backend.bundles.platform.usage.scan(t.tenant.id);
   const a = (await api('/alerts')).body.alerts.find(x => x.tenantId === t.tenant.id);
   assert.ok(a);
-  assert.equal(a.emailedAt, null);
-  assert.equal(a.emailError, 'NO_MAIL_TRANSPORT');
-  const cfg = (await api('/alert-settings')).body;
-  assert.equal(cfg.transport, false);
-  assert.equal((await api('/alert-settings/test', { method: 'POST' })).status, 409);
+  assert.equal((await api('/alert-settings')).body.transport, undefined);
+  const centre = (await api('/notices')).body;
+  assert.equal(centre.unread, 1);
+  assert.equal(centre.notices[0].params.store, 'No Setup');
+  assert.equal(centre.notices[0].read, false);
+  // Scanning again inside the cooldown does not raise a second notification.
+  await backend.bundles.platform.usage.scan(t.tenant.id);
+  assert.equal((await api('/notices')).body.notices.length, 1);
+  assert.equal((await api('/notices/read', { method: 'POST', body: { ids: [centre.notices[0].id] } })).body.unread, 0);
+  assert.equal((await api('/notices')).body.notices[0].read, true);
+  assert.equal((await api('/notices/clear', { method: 'POST', body: {} })).status, 200);
+  assert.equal((await api('/notices')).body.notices.length, 0);
 });
 
-test('the default mail transport posts to Resend or a webhook, and never throws', async () => {
-  const { defaultMailer } = require('../server/usage');
-  const seen = [];
-  const ok = async (url, init) => { seen.push({ url, init }); return { ok: true, status: 200 }; };
-  const resend = defaultMailer({ RESEND_API_KEY: 're_test_key', ALERT_FROM: 'Alerts <a@b.test>' }, ok);
-  assert.deepEqual(await resend({ to: 'me@x.test', subject: 'S', text: 'T' }), { ok: true });
-  assert.equal(seen[0].url, 'https://api.resend.com/emails');
-  assert.equal(seen[0].init.headers.Authorization, 'Bearer re_test_key');
-  assert.deepEqual(JSON.parse(seen[0].init.body).to, ['me@x.test']);
-  const hook = defaultMailer({ ALERT_WEBHOOK_URL: 'https://hooks.test/abc' }, ok);
-  assert.equal((await hook({ to: '', subject: 'S', text: 'T' })).ok, true);
-  assert.equal(seen[1].url, 'https://hooks.test/abc');
-  assert.deepEqual(await defaultMailer({ ALERT_WEBHOOK_URL: 'http://insecure.test' }, ok)({ subject: 'S', text: 'T' }), { ok: false, error: 'NO_MAIL_TRANSPORT' });
-  assert.deepEqual(await defaultMailer({}, ok)({ to: 'a@b.test', subject: 'S', text: 'T' }), { ok: false, error: 'NO_MAIL_TRANSPORT' });
-  assert.deepEqual(await defaultMailer({ RESEND_API_KEY: 'k' }, async () => { throw new Error('down'); })({ to: 'a@b.test', subject: 'S', text: 'T' }), { ok: false, error: 'NETWORK' });
-  assert.deepEqual(await defaultMailer({ RESEND_API_KEY: 'k' }, async () => ({ ok: false, status: 403 }))({ to: 'a@b.test', subject: 'S', text: 'T' }), { ok: false, error: 'HTTP_403' });
+test('notices: unsafe links and odd parameters are cleaned, the list is capped, nothing throws', async () => {
+  const { backend } = await setup();
+  const { notices } = backend.bundles.platform;
+  assert.equal(await notices.add({ code: '' }), '', 'no code, no notice');
+  await notices.add({ kind: 'weird', severity: 'weird', code: 'x.y', href: 'https://evil.test/', params: { ok: 'v', num: 3, flag: true, nested: { a: 1 }, 'bad key': 1, list: [1] } });
+  await notices.add({ code: 'x.z', href: '/super-admin/limits' });
+  await notices.add({ code: 'x.w', href: '/super-admin/../etc' });
+  const list = (await notices.list()).notices.reverse();
+  assert.equal(list[0].kind, 'system');
+  assert.equal(list[0].severity, 'info');
+  assert.equal(list[0].href, '', 'only console pages can be opened from a notification');
+  assert.deepEqual(list[0].params, { ok: 'v', num: 3, flag: true });
+  assert.equal(list[1].href, '/super-admin/limits');
+  assert.equal(list[2].href, '');
+  await assert.rejects(notices.markRead('nope'), /INVALID_REQUEST/);
 });

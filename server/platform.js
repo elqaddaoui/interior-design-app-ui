@@ -15,6 +15,7 @@
 const crypto = require('node:crypto');
 const { PROVIDERS, safeUrl } = require('./chat');
 const { createUsage } = require('./usage');
+const { createNotices } = require('./notices');
 const TENANT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -37,8 +38,9 @@ const CATALOG = {
 /** A demo's "use API" switch slides forward while the demo is used and lapses after this much quiet time (DEMO_AI_IDLE_MIN, default 15 minutes). */
 const idleMs = env => Math.max(60000, Math.min(86400000, (Number(env.DEMO_AI_IDLE_MIN) || 15) * 60000));
 
-function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}) {
-  const usage = createUsage(db, { env, clock, mailer });
+function createPlatform(db, { env = process.env, clock = Date.now } = {}) {
+  const notices = createNotices(db, { clock });
+  const usage = createUsage(db, { env, clock, notices });
   const IDLE = idleMs(env);
   // Serverless instances keep no cache (each only sees a fraction of the writes); the long-running server keeps 5 s.
   const ttl = env.VERCEL ? 0 : 5000;
@@ -450,7 +452,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, mailer } = {}
     return row;
   }
 
-  return { discover, importKey, media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
+  return { discover, importKey, media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, notices, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
 }
 
 module.exports = { createPlatform, KINDS };

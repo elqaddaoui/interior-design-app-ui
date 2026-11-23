@@ -4,6 +4,7 @@ import { sa, saMessage } from '@/superadmin/api';
 import { SA } from '@/superadmin/tokens';
 import { tr } from '@/superadmin/i18n';
 import type { AbuseAlert, AbuseSettings, AlertConfig, ApiKind } from '@/superadmin/types';
+import { BrowserNotifyCard } from '@/superadmin/NoticeCenter';
 import { Badge, Btn, Card, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Notice, Row, Segmented, T, ago, useLoad } from '@/superadmin/ui';
 
 const RULE_NAME: Record<string, string> = {
@@ -28,7 +29,7 @@ function AlertRow({ alert, onChanged }: { alert: AbuseAlert; onChanged: () => vo
     <View testID="sa-alert-row">
       <ListRow title={`${tr(RULE_NAME[alert.title] || 'API warning')} · ${alert.store}`}
         meta={<Row style={{ gap: 4 }}><Badge label={tr(alert.severity === 'medium' ? 'medium' : alert.severity === 'high' ? 'high' : 'critical')} tone={SEVERITY_TONE[alert.severity]} />{alert.action === 'paused' ? <Badge label={tr('API paused')} tone="warn" /> : null}{!open ? <Badge label={tr('resolved')} tone="ok" /> : null}</Row>}
-        sub={`${ago(alert.at)} · ${alert.storeKind === 'demo' ? tr('Demo') : tr('Store')} · ${d.kind ? tr(KIND_NAME[d.kind]) : ''} · ${what} · ${alert.emailedAt ? tr('e-mail sent') : alert.emailError ? tr('e-mail failed') : tr('no e-mail')}`}
+        sub={`${ago(alert.at)} · ${alert.storeKind === 'demo' ? tr('Demo') : tr('Store')} · ${d.kind ? tr(KIND_NAME[d.kind]) : ''} · ${what}`}
         right={open ? (
           <Row>
             {alert.action === 'paused' ? <Btn small kind="ghost" label={tr('Resume API')} onPress={() => act(() => sa(`/tenants/${alert.tenantId}/ai-pause`, { method: 'POST', body: { paused: false } }))} /> : null}
@@ -71,36 +72,28 @@ function Settings({ config, onSaved }: { config: AlertConfig; onSaved: () => voi
     setBusy(true); setError(null); setNote(null);
     try { await sa('/alert-settings', { method: 'PATCH', body: draft }); setNote({ tone: 'ok', text: tr('Saved.') }); onSaved(); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
   };
-  const test = async () => {
-    setBusy(true); setError(null); setNote(null);
-    try { const r = await sa<{ to: string }>('/alert-settings/test', { method: 'POST', body: {} }); setNote({ tone: 'ok', text: tr('Test e-mail sent to {to}.', { to: r.to }) }); } catch (e) { setError(saMessage(e)); } finally { setBusy(false); }
-  };
   return (
     <Card>
       <T weight="bold" size="lg">{tr('Warning settings')}</T>
-      <Hint>{tr('When a store or a demo uses the APIs in an unusual way, you get an e-mail. Demos and stores that use your keys are also paused automatically; stores with their own keys are only reported.')}</Hint>
-      {!config.transport ? <Notice tone="warn">{tr('No way to send e-mails is configured on the server yet (RESEND_API_KEY or ALERT_WEBHOOK_URL). Warnings are still listed here.')}</Notice> : null}
+      <Hint>{tr('When a store or a demo uses the APIs in an unusual way, you get a notification. Demos and stores that use your keys are also paused automatically; stores with their own keys are only reported.')}</Hint>
       <Row style={{ marginBottom: SA.space.md }}>
         <T size="sm">{tr('Warnings')}</T>
         <Segmented value={draft.enabled ? 'on' : 'off'} onChange={v => setDraft({ ...draft, enabled: v === 'on' })} options={[{ value: 'on', label: tr('On') }, { value: 'off', label: tr('Off') }]} />
         <T size="sm">{tr('Pause automatically')}</T>
         <Segmented value={draft.autoPause ? 'on' : 'off'} onChange={v => setDraft({ ...draft, autoPause: v === 'on' })} options={[{ value: 'on', label: tr('On') }, { value: 'off', label: tr('Off') }]} />
       </Row>
-      <Field label={tr('Send warnings to')} value={draft.email} onChangeText={email => setDraft({ ...draft, email })} placeholder={config.recipient || 'you@example.com'} keyboardType="email-address" autoCapitalize="none" {...({ testID: 'sa-alert-email' } as object)} />
-      <Hint>{config.recipient ? tr('Empty = {to}, the first super admin.', { to: config.recipient }) : tr('Empty = the first super admin.')}</Hint>
       <Field label={tr('Same warning again after (minutes)')} value={String(draft.cooldownMin)} onChangeText={v => setDraft({ ...draft, cooldownMin: Number(v.replace(/\D/g, '')) || 0 })} keyboardType="number-pad" />
       <Btn small kind="ghost" label={advanced ? tr('Hide the thresholds') : tr('Edit the thresholds')} onPress={() => setAdvanced(!advanced)} />
       {advanced ? (
         <View style={{ marginTop: SA.space.md }}>
           {NUM_FIELDS.map(f => <Field key={f.key} label={tr(f.label)} value={String(read(draft, f.key))} onChangeText={v => setDraft(write(draft, f.key, Number(v.replace(/\D/g, '')) || 0))} keyboardType="number-pad" />)}
-          <Btn small kind="ghost" label={tr('Back to the defaults')} onPress={() => setDraft({ ...config.defaults, email: draft.email })} />
+          <Btn small kind="ghost" label={tr('Back to the defaults')} onPress={() => setDraft({ ...config.defaults })} />
         </View>
       ) : null}
       <ErrorLine error={error} />
       {note ? <Notice tone={note.tone}>{note.text}</Notice> : null}
       <Row style={{ marginTop: SA.space.md }}>
         <Btn testID="sa-alert-save" label={tr('Save')} onPress={save} busy={busy} />
-        <Btn testID="sa-alert-test" kind="ghost" label={tr('Send a test e-mail')} onPress={test} disabled={busy} />
       </Row>
     </Card>
   );
@@ -115,10 +108,11 @@ export function ApiAlerts() {
   const resolveAll = async () => { setError(null); try { await sa('/alerts/resolve-all', { method: 'POST', body: {} }); list.reload(); } catch (e) { setError(saMessage(e)); } };
   return (
     <View testID="sa-alerts">
-      <Heading title={tr('API warnings')} hint={tr('Unusual use of the APIs: bursts, daily excess, sudden spikes, many failures. Each one is e-mailed to you.')}
+      <Heading title={tr('API warnings')} hint={tr('Unusual use of the APIs: bursts, daily excess, sudden spikes, many failures. Each one reaches you as a notification.')}
         right={list.data?.open ? <Btn small kind="ghost" label={tr('Mark all as reviewed')} onPress={resolveAll} /> : undefined} />
       <Segmented value={filter} onChange={setFilter} options={[{ value: 'open', label: tr('To review') }, { value: 'all', label: tr('History') }]} />
       <View style={{ height: SA.space.md }} />
+      <BrowserNotifyCard />
       <ErrorLine error={list.error || error} />
       {list.loading && !list.data ? <Loading /> : list.data?.alerts.length ? list.data.alerts.map(a => <AlertRow key={a.id} alert={a} onChanged={list.reload} />) : <Empty>{filter === 'open' ? tr('Nothing unusual to review.') : tr('No warnings yet.')}</Empty>}
       <View style={{ height: SA.space.lg }} />

@@ -92,7 +92,7 @@ Without it the server does not start. The runtime log then shows:
 `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (otherwise generated and stored in the database) · `FCM_SERVICE_ACCOUNT_JSON` ·
 `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` · `APP_ORIGINS` (only for a frontend hosted on another domain) · `CONTENT_S_MAXAGE`, `API_RATE_LIMIT`, `CHAT_RATE_LIMIT`, `PUSH_WAIT_MS`.
 
-`NEON_API_KEY`, `NEON_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (read-only keys for **Super admin > Service limits**, which warns before the Neon or R2 free tier is used up; without them the page shows what to add), `RESEND_API_KEY` + `ALERT_FROM` or `ALERT_WEBHOOK_URL`, `ALERT_EMAIL` (where the warnings go).
+`NEON_API_KEY`, `NEON_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (read-only keys for **Super admin > Service limits**, which warns before the Neon or R2 free tier is used up; without them the page shows what to add). Warnings arrive as notifications in the console (bell + browser), no e-mail setup needed.
 
 ### Media in the app directory (self-hosted)
 

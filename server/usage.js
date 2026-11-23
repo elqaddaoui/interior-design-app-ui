@@ -1,5 +1,5 @@
 /**
- * API consumption metering, abuse detection and the e-mail warning to the super admin.
+ * API consumption metering, abuse detection and the warning notification to the super admin.
  *
  *   - Metering: every outgoing AI call (image, text, translation, ... "other") is counted by `record`, in BOTH key modes ('own' = the
  *     store's own keys, 'platform' = keys from the API manager). Rows are rollups, one per tenant / modality / operation / provider / mode
@@ -7,11 +7,9 @@
  *     picture, a key or a client id.
  *   - Abuse detection (`scan`, throttled per store): a burst in the last minutes, a daily cap, a spike against the store's own 7-day
  *     average, a high failure rate (leaked or dead key, scripted retries) and repeated probing of a gated demo. Each finding is ONE alert
- *     (cooldown per store + rule, default 6 h) that is e-mailed to the super admin. A critical finding on a demo or on a store that uses the
+ *     (cooldown per store + rule, default 6 h) that is sent to the super admin's notification centre (server/notices.js). A critical finding on a demo or on a store that uses the
  *     platform's keys also pauses that store's AI automatically (the owner resumes it from the console); a store paying with its own keys is
  *     only warned about.
- *   - E-mail: Resend's HTTPS API (RESEND_API_KEY, ALERT_FROM) or a webhook (ALERT_WEBHOOK_URL: Slack, Discord, Teams ... any JSON endpoint).
- *     No SMTP dependency. A failed delivery is kept on the alert and retried.
  *
  * Only the platform side (server/platform.js, server/superadmin.js) uses this module: tenant modules reach it through `platform.forTenant`.
  */
@@ -26,7 +24,6 @@ const RANGES = { '24h': { span: DAY, step: HOUR }, '7d': { span: 7 * DAY, step: 
 
 const DEFAULTS = {
   enabled: true,
-  email: '',
   autoPause: true,
   cooldownMin: 360,
   burst: { image: 30, text: 120, other: 120 }, // calls in the last ~10 minutes (a store)
@@ -48,11 +45,6 @@ function cleanSettings(input, base = DEFAULTS) {
   const src = input && typeof input === 'object' ? input : {};
   if (src.enabled !== undefined) out.enabled = src.enabled === true;
   if (src.autoPause !== undefined) out.autoPause = src.autoPause === true;
-  if (src.email !== undefined) {
-    const email = String(src.email || '').trim().slice(0, 254);
-    if (email && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(email)) throw fail(400, 'INVALID_EMAIL');
-    out.email = email;
-  }
   for (const group of LIMITS) {
     if (src[group] && typeof src[group] === 'object') for (const kind of KINDS) if (src[group][kind] !== undefined) {
       const value = int(src[group][kind], 1, 1000000, null);
@@ -66,30 +58,9 @@ function cleanSettings(input, base = DEFAULTS) {
   return out;
 }
 
-/** The default transport. Returns { ok, error } and never throws. `fetchImpl` is injectable for tests. */
-function defaultMailer(env, fetchImpl = globalThis.fetch) {
-  return async ({ to, subject, text }) => {
-    const send = async (url, init) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
-      try { const response = await fetchImpl(url, { ...init, signal: controller.signal }); return response.ok ? { ok: true } : { ok: false, error: `HTTP_${response.status}` }; }
-      catch { return { ok: false, error: 'NETWORK' }; } finally { clearTimeout(timer); }
-    };
-    if (env.RESEND_API_KEY) {
-      if (!to) return { ok: false, error: 'NO_RECIPIENT' };
-      return send('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: env.ALERT_FROM || 'Dwira Alerts <onboarding@resend.dev>', to: [to], subject, text }) });
-    }
-    if (env.ALERT_WEBHOOK_URL && /^https:\/\//.test(env.ALERT_WEBHOOK_URL)) {
-      return send(env.ALERT_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: `${subject}\n\n${text}`, content: `${subject}\n\n${text}`, subject, to }) });
-    }
-    return { ok: false, error: 'NO_MAIL_TRANSPORT' };
-  };
-}
-
-function createUsage(db, { env = process.env, clock = Date.now, mailer } = {}) {
-  const send = mailer || defaultMailer(env);
+function createUsage(db, { env = process.env, clock = Date.now, notices } = {}) {
   const lastScan = new Map(); // tenant id -> time of its last scan (this process)
-  let lastPrune = 0, lastRetry = 0;
+  let lastPrune = 0;
 
   // ---------- settings ----------
   async function getSettings() {
@@ -103,14 +74,6 @@ function createUsage(db, { env = process.env, clock = Date.now, mailer } = {}) {
     await db.query("INSERT INTO saas_kv(key,value) VALUES('abuse_settings',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(next)]);
     return next;
   }
-  async function recipient(settings) {
-    if (settings.email) return settings.email;
-    if (env.ALERT_EMAIL) return String(env.ALERT_EMAIL).trim();
-    const owner = (await db.query("SELECT email FROM saas_super WHERE disabled=0 AND email LIKE '%@%' ORDER BY created_at LIMIT 1"))[0];
-    return owner?.email || '';
-  }
-  const transport = () => !!(mailer || env.RESEND_API_KEY || (env.ALERT_WEBHOOK_URL && /^https:\/\//.test(env.ALERT_WEBHOOK_URL)));
-
   // ---------- metering ----------
   /**
    * Count one call. `blocked` = refused by the AI gate (no provider was called). Never throws: metering must not break the feature it measures.
@@ -174,64 +137,32 @@ function createUsage(db, { env = process.env, clock = Date.now, mailer } = {}) {
       if (mayPause) { await db.query("UPDATE saas_tenants SET ai_paused=1, ai_pause_reason=$2, updated_at=$3 WHERE id=$1", [tenantId, `abuse:${finding.rule}`, now]); tenant.ai_paused = 1; }
       created.push(id);
     }
-    for (const id of created) await deliver(id, settings).catch(() => {});
+    for (const id of created) await announce(id).catch(() => {});
     if (now - lastPrune > 6 * HOUR) { lastPrune = now; await db.query('DELETE FROM saas_usage WHERE bucket<$1', [now - KEEP_DAYS * DAY]).catch(() => {}); }
     return created;
   }
 
-  // ---------- e-mail ----------
-  const TITLES = { burst: 'Burst of API calls', daily: 'Daily API cap reached', spike: 'Usage spike', failures: 'Many failing API calls', probe: 'Repeated attempts while AI is switched off' };
-  function compose(alert, base) {
-    const d = alert.detail;
-    const lines = [
-      `${TITLES[alert.title] || alert.title} (${alert.severity})`,
-      '',
-      `Store: ${d.store} (${d.slug}) - ${d.storeKind === 'demo' ? 'demo' : 'store'}`,
-      `API kind: ${d.kind}`,
-      `Keys: ${d.mode === 'platform' ? 'managed by the platform (your keys)' : "the store's own keys"}`,
-      d.windowMin ? `Observed: ${d.value}${alert.title === 'failures' ? ' % failed' : ' calls'} in about ${d.windowMin} minutes (alert level ${d.limit})` : '',
-      alert.action === 'paused' ? 'Action taken: this store\'s AI was PAUSED automatically. Resume it from the console once you checked.' : 'No automatic action was taken.',
-      '',
-      base ? `Review: ${base.replace(/\/+$/, '')}/super-admin/apis` : 'Review it in the console: APIs > Alerts.',
-    ].filter((line, i, all) => line !== '' || all[i - 1] !== '');
-    return { subject: `[Dwira] ${TITLES[alert.title] || 'API warning'}: ${d.store}`, text: lines.join('\n') };
-  }
+  // ---------- notification ----------
   const alertView = row => {
     let detail = {};
     try { detail = JSON.parse(row.detail || '{}'); } catch { /* none */ }
-    return { id: row.id, at: Number(row.at), tenantId: row.tenant_id, rule: row.rule, severity: row.severity, title: row.title, detail, action: row.action, status: row.status, emailedAt: row.emailed_at == null ? null : Number(row.emailed_at), emailError: row.email_error || '', resolvedAt: row.resolved_at == null ? null : Number(row.resolved_at) };
+    return { id: row.id, at: Number(row.at), tenantId: row.tenant_id, rule: row.rule, severity: row.severity, title: row.title, detail, action: row.action, status: row.status, resolvedAt: row.resolved_at == null ? null : Number(row.resolved_at) };
   };
-  async function deliver(id, settings) {
+  /** One notification per alert (the console renders it from the code and the numbers). The alert row remembers that it was announced. */
+  async function announce(id) {
     const row = (await db.query('SELECT * FROM saas_alerts WHERE id=$1', [id]))[0];
     if (!row || row.emailed_at != null) return false;
-    const cfg = settings || await getSettings();
-    const to = await recipient(cfg);
-    const { subject, text } = compose(alertView(row), env.PUBLIC_URL || env.APP_URL || '');
-    const result = to || env.ALERT_WEBHOOK_URL ? await send({ to, subject, text }) : { ok: false, error: 'NO_RECIPIENT' };
-    await db.query('UPDATE saas_alerts SET emailed_at=$2, email_error=$3 WHERE id=$1', [id, result.ok ? clock() : null, result.ok ? '' : String(result.error || 'FAILED').slice(0, 60)]);
-    return !!result.ok;
-  }
-  /** Alerts of the last day whose e-mail failed for a transient reason: tried again (at most every 5 minutes per process). */
-  async function retryPending() {
-    if (clock() - lastRetry < 300000) return;
-    lastRetry = clock();
-    const rows = await db.query("SELECT id FROM saas_alerts WHERE emailed_at IS NULL AND email_error NOT IN ('NO_MAIL_TRANSPORT','NO_RECIPIENT') AND email_error<>'' AND at>$1 LIMIT 10", [clock() - DAY]);
-    const settings = await getSettings();
-    for (const row of rows) await deliver(row.id, settings).catch(() => {});
-  }
-  async function testEmail() {
-    const settings = await getSettings();
-    const to = await recipient(settings);
-    if (!to && !env.ALERT_WEBHOOK_URL) throw fail(409, 'NO_RECIPIENT');
-    if (!transport()) throw fail(409, 'NO_MAIL_TRANSPORT');
-    const result = await send({ to, subject: '[Dwira] Test warning e-mail', text: 'This is a test: API abuse warnings will reach this address.' });
-    if (!result.ok) throw fail(502, 'EMAIL_FAILED');
-    return { ok: true, to };
+    const alert = alertView(row), d = alert.detail;
+    const noticeId = notices ? await notices.add({
+      kind: 'api', severity: alert.severity === 'medium' ? 'warn' : 'danger', code: 'api.alert', href: '/super-admin/apis?tab=alerts',
+      params: { rule: alert.title, store: d.store, storeKind: d.storeKind, apiKind: d.kind, mode: d.mode, value: d.value, limit: d.limit, windowMin: d.windowMin, paused: alert.action === 'paused' },
+    }) : '';
+    if (noticeId) await db.query('UPDATE saas_alerts SET emailed_at=$2 WHERE id=$1', [id, clock()]);
+    return !!noticeId;
   }
 
   // ---------- reading ----------
   async function alerts({ status = 'open', limit = 100 } = {}) {
-    await retryPending().catch(() => {});
     const n = Math.max(1, Math.min(300, Number(limit) || 100));
     const rows = status === 'all' ? await db.query('SELECT * FROM saas_alerts ORDER BY at DESC LIMIT $1', [n]) : await db.query("SELECT * FROM saas_alerts WHERE status='open' ORDER BY at DESC LIMIT $1", [n]);
     const names = new Map((await db.query('SELECT id, name, slug, kind FROM saas_tenants')).map(r => [r.id, r]));
@@ -292,20 +223,7 @@ function createUsage(db, { env = process.env, clock = Date.now, mailer } = {}) {
     return { calls: Number(row.calls), errors: Number(row.errors) };
   }
 
-  /**
-   * A message of the platform owner's own (free-tier limit warnings): same transport and same default recipient as the API warnings.
-   * `to` overrides the recipient. Never throws: { ok, error?, to }.
-   */
-  async function notify({ subject, text, to }) {
-    try {
-      const target = to || await recipient(await getSettings());
-      if (!target && !env.ALERT_WEBHOOK_URL) return { ok: false, error: 'NO_RECIPIENT' };
-      const result = await send({ to: target, subject, text });
-      return { ...result, to: target };
-    } catch { return { ok: false, error: 'FAILED' }; }
-  }
-
-  return { record, scan, getSettings, setSettings, alerts, resolve, resolveAll, openCount, report, today, testEmail, notify, transport, recipient: async () => recipient(await getSettings()), DEFAULTS };
+  return { record, scan, getSettings, setSettings, alerts, resolve, resolveAll, openCount, report, today, DEFAULTS };
 }
 
-module.exports = { createUsage, cleanSettings, defaultMailer, DEFAULTS, KINDS };
+module.exports = { createUsage, cleanSettings, DEFAULTS, KINDS };
