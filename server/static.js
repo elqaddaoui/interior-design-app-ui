@@ -9,8 +9,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { sendFile } = require('./compress');
 
-/** vercel.json: "/((?!api/|_expo/|assets/|icons/|push-sw\\.js|manifest\\.webmanifest|favicon\\.ico).*)" -> /index.html */
-const NO_FALLBACK = /^\/(?:api\/|_expo\/|assets\/|icons\/|push-sw\.js|manifest\.webmanifest|favicon\.ico)/;
+/** vercel.json: "/((?!api/|_expo/|assets/|icons/|push-sw\\.js|sa-sw\\.js|manifest\\.webmanifest|favicon\\.ico).*)" -> /index.html */
+const NO_FALLBACK = /^\/(?:api\/|_expo\/|assets\/|icons\/|push-sw\.js|sa-sw\.js|manifest\.webmanifest|favicon\.ico)/;
 const spaFallback = pathname => !NO_FALLBACK.test(pathname);
 
 const TYPES = {
@@ -25,7 +25,7 @@ const SECURITY = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'stri
 
 /** Cache-Control per path, as in vercel.json (Vercel's default for other static files is "public, max-age=0, must-revalidate"). */
 function cacheFor(pathname) {
-  if (pathname === '/push-sw.js' || pathname === '/index.html') return 'public, max-age=0, must-revalidate';
+  if (pathname === '/push-sw.js' || pathname === '/sa-sw.js' || pathname === '/index.html') return 'public, max-age=0, must-revalidate';
   if (/^\/(?:_expo\/static|assets)\//.test(pathname)) return 'public, max-age=31536000, immutable';
   if (/^\/icons\//.test(pathname) || pathname === '/favicon.ico') return 'public, max-age=2592000, stale-while-revalidate=86400';
   if (pathname === '/manifest.webmanifest') return 'public, max-age=86400, stale-while-revalidate=604800';
@@ -74,6 +74,7 @@ function createStatic(root) {
       }
       const headers = { ...SECURITY, 'Content-Type': TYPES[path.extname(found.file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': cacheFor(found.pathname) };
       if (found.pathname === '/push-sw.js') headers['Service-Worker-Allowed'] = '/';
+      if (found.pathname === '/sa-sw.js') headers['Service-Worker-Allowed'] = '/super-admin/';
       sendFile(req, res, found.file, headers);
     },
   };

@@ -162,11 +162,19 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
   const base = bundles.get('default'); // the original single-tenant app = the default tenant (also what `createBackend()` exposes to tests / scripts)
   const { notifier, clients, campaigns, chat, assistant } = base;
   const trustedProxies = new Set(String(env.TRUSTED_PROXY_IPS || '').split(',').map(value => value.trim()).filter(Boolean));
-  // Managed hosts (Hostinger) put a reverse proxy on the same machine in front of the app: every request then comes from a
-  // loopback address. TRUST_PROXY=true (set automatically by server/start.js on Hostinger) reads the client address the proxy
-  // forwards for loopback peers only; the app port itself is not reachable from the internet there.
-  const trustLoopback = env.TRUST_PROXY === 'true';
-  const loopback = remote => remote === '::1' || /^(::ffff:)?127\./.test(remote);
+  // Behind a reverse proxy (Hostinger, nginx, Cloudflare Tunnel, Docker...) every request reaches Node from the proxy's address. Without
+  // reading the address the proxy forwards, ALL visitors share one rate-limit bucket and the whole site answers "Too many requests".
+  // The forwarded address is therefore read when the immediate peer is on this machine or on a private network (a proxy: those addresses
+  // cannot be reached from the internet), or is listed in TRUSTED_PROXY_IPS. TRUST_PROXY=false turns it off, TRUST_PROXY=all trusts every
+  // peer (only when the app port is NOT reachable directly). CLIENT_IP_HEADER names a header the proxy sets itself (CF-Connecting-IP...).
+  const trustMode = String(env.TRUST_PROXY ?? '').toLowerCase();
+  const clientIpHeader = /^[a-z0-9-]{3,40}$/i.test(String(env.CLIENT_IP_HEADER || '')) ? String(env.CLIENT_IP_HEADER).toLowerCase() : '';
+  const privatePeer = remote => {
+    const v4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(remote);
+    if (v4) { const a = Number(v4[1]), b = Number(v4[2]); return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127); }
+    return remote === '::1' || /^f[cd][0-9a-f]{2}:/i.test(remote) || /^fe80:/i.test(remote);
+  };
+  const trusts = remote => trustMode === 'all' || trustedProxies.has(remote) || (trustMode !== 'false' && privatePeer(remote));
   const address = req => {
     const remote = req.socket?.remoteAddress || 'unknown';
     // On Vercel every request reaches the function through the platform proxy: without this all visitors would
@@ -175,12 +183,13 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
       const forwarded = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',')[0].trim();
       return isIP(forwarded) ? forwarded : remote;
     }
-    if (!trustedProxies.has(remote) && !(trustLoopback && loopback(remote))) return remote;
-    // X-Real-IP is set by the proxy; otherwise the LAST X-Forwarded-For entry, the one the immediate proxy appended
-    // (earlier entries can be written by the client).
+    if (!trusts(remote)) return remote;
+    // The header named by CLIENT_IP_HEADER, else X-Real-IP (set by the proxy), else the LAST X-Forwarded-For entry, the one the immediate
+    // proxy appended (earlier entries can be written by the client).
+    const named = clientIpHeader && typeof req.headers[clientIpHeader] === 'string' ? req.headers[clientIpHeader].trim() : '';
     const real = typeof req.headers['x-real-ip'] === 'string' ? req.headers['x-real-ip'].trim() : '';
     const chain = String(req.headers['x-forwarded-for'] || '').split(',').map(value => value.trim()).filter(Boolean);
-    const forwarded = real || chain[chain.length - 1] || '';
+    const forwarded = named || real || chain[chain.length - 1] || '';
     return isIP(forwarded) ? forwarded : remote;
   };
   const staticFiles = createStatic(env.STATIC_DIR || path.join(__dirname, '..', 'dist'));
@@ -272,15 +281,19 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           }
           return sendBuffer(req, res, 200, headers, file.body);
         }
-        const bucketName = (url.pathname === '/api/admin/login' || url.pathname === '/api/super-admin/login') ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : /^\/api\/(?:admin|super-admin)\/(?:backup|tenants\/[a-z0-9_-]+\/backup)\//.test(url.pathname) ? 'backup' : 'api';
+        // Allowances per address and 15 minutes. The AI chat spends a shared free quota: its own, much smaller one (CHAT_RATE_LIMIT, default 90).
+        // The health check and the signed-in console (it refreshes itself every few seconds and the owner may keep several tabs/phones open)
+        // have their own buckets: they can never lock the public app out, and the public app can never lock the owner out of the console.
+        const consolePoll = url.pathname.startsWith('/api/super-admin/') && url.pathname !== '/api/super-admin/login';
+        const bucketName = (url.pathname === '/api/admin/login' || url.pathname === '/api/super-admin/login') ? 'login' : url.pathname === '/api/sync' ? 'sync' : (url.pathname === '/api/chat/reply' || url.pathname === '/api/chat/demo-click') ? 'chat' : /^\/api\/(?:admin|super-admin)\/(?:backup|tenants\/[a-z0-9_-]+\/backup)\//.test(url.pathname) ? 'backup' : url.pathname === '/api/health' ? 'health' : consolePoll ? 'console' : 'api';
+        const allowance = { login: 20, sync: 20000, backup: 20000, health: 1500, console: 8000, chat: Math.max(5, Math.min(2000, Number(env.CHAT_RATE_LIMIT) || 90)), api: apiLimit }[bucketName];
         const key = `${bundle.tenantId}:${address(req)}:${bucketName}`; // one tenant's traffic can never exhaust another's allowance
         const now = Date.now();
         if (buckets.size > 10000) for (const [id, bucket] of buckets) if (bucket.until < now) buckets.delete(id);
         const bucket = buckets.get(key) || { count: 0, until: now + 15 * 60000 };
         if (bucket.until < now) { bucket.count = 0; bucket.until = now + 15 * 60000; }
         bucket.count++; buckets.set(key, bucket);
-        // The AI chat spends a shared free quota: its own, much smaller allowance per address (CHAT_RATE_LIMIT per 15 minutes, default 90).
-        if (bucket.count > (bucketName === 'login' ? 20 : bucketName === 'sync' ? 20000 : bucketName === 'backup' ? 20000 : bucketName === 'chat' ? Math.max(5, Math.min(2000, Number(env.CHAT_RATE_LIMIT) || 90)) : apiLimit)) throw fail(429, 'Too many requests');
+        if (bucket.count > allowance) { res.setHeader('Retry-After', String(Math.max(1, Math.ceil((bucket.until - now) / 1000)))); throw fail(429, 'Too many requests'); }
 
         if (url.pathname === '/api/health' && req.method === 'GET') {
           // Never exposes secrets: only whether the database answers right now (one `SELECT 1`, 5 s at most).

@@ -867,10 +867,17 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     if (path === '/notices/read' && method === 'POST') { const body = await readBody(req); return ok(await platform.notices.markRead(body.all === true ? 'all' : body.ids)); }
     if (path === '/notices/clear' && method === 'POST') return ok(await platform.notices.clear());
     if (path === '/notices/test' && method === 'POST') {
-      const id = await platform.notices.add({ kind: 'system', severity: 'info', code: 'system.test', href: '/super-admin/limits', params: {} });
+      // Saved without the automatic push, then pushed here so the answer can say how many devices were reached.
+      const notice = { kind: 'system', severity: 'info', code: 'system.test', href: '/super-admin/limits', params: {} };
+      const id = await platform.notices.add({ ...notice, silent: true });
       if (!id) throw Object.assign(new Error('INTERNAL'), { status: 500 });
-      return ok({ ok: true, id });
+      const pushed = await platform.push.notify({ ...notice, id }, { test: true });
+      return ok({ ok: true, id, push: pushed });
     }
+    // Web Push devices: the phone/browser registers its subscription here (the console's service worker, public/sa-sw.js, shows what arrives).
+    if (path === '/push/config' && method === 'GET') return ok(await platform.push.config());
+    if (path === '/push/subscribe' && method === 'POST') { try { return ok(await platform.push.subscribe(await readBody(req), req.headers['user-agent'])); } catch (error) { if (error.status) throw error; throw fail(400, 'INVALID_REQUEST'); } }
+    if (path === '/push/unsubscribe' && method === 'POST') return ok(await platform.push.unsubscribe(await readBody(req)));
     // Free-tier limits of Neon and Cloudflare R2: current usage, early warnings, the settings of those warnings.
     if (path === '/limits/summary' && method === 'GET') return ok({ summary: await limits.summary() });
     if (path === '/limits' && method === 'GET') return ok(await limits.status({ refresh: url.searchParams.get('refresh') === '1' }));

@@ -119,7 +119,13 @@ To keep files on the Hostinger disk instead of R2, set `MEDIA_DIR` to a folder *
 | `BACKGROUND_IDLE_MS` | `300000` | The same when nobody used the app for 5 minutes |
 | `DB_RETRY_MS` | `1000` | First delay between database connection retries at startup (doubles up to 15 s) |
 | `LIMITS_*` | n/a | None needed: thresholds, the forecast window, the reminder interval and the recipient are edited on the Service limits page. The check runs about every 30 minutes while the app is in use (every 12 hours when idle) |
-| `TRUST_PROXY` | `true` on Hostinger | Reads the visitor address forwarded by Hostinger's local proxy (per-visitor rate limits) |
+| `TRUST_PROXY` | automatic | The visitor address forwarded by a proxy on the same machine or private network is read automatically (per-visitor rate limits). `false` turns it off, `all` trusts every peer |
+| `CLIENT_IP_HEADER` | none | Header carrying the visitor address when your proxy sets one (Cloudflare: `CF-Connecting-IP`) |
+| `API_RATE_LIMIT` | `300` | Public API requests per visitor address per 15 minutes (300 to 5000). `/api/health` and the super admin console have separate allowances |
+
+## "Too many requests" on the site or on /api/health
+
+This message comes from the app's own rate limiter, not from Neon (Neon only counts storage, compute hours and transfer, never requests). It means one visitor address used its allowance for the last 15 minutes. If it appears for everybody, the app sees every visitor as the same address (the proxy's): set `CLIENT_IP_HEADER` to the header your proxy sets, or `TRUSTED_PROXY_IPS` to the proxy's address, and raise `API_RATE_LIMIT` if needed. It clears by itself within 15 minutes; the `Retry-After` header says when.
 
 ## Home shows "no tools" / "Impossible de charger le contenu"
 

@@ -15,7 +15,7 @@ http.createServer((req, res) => {
   if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
   if (/node_modules/.test(url)) { res.writeHead(404); return res.end('blocked (mimics Vercel)'); }
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-    if (/^\/(?:_expo|assets)\//.test(url) || url === '/favicon.ico' || url === '/push-sw.js') { res.writeHead(404); return res.end('Asset not found'); }
+    if (/^\/(?:_expo|assets)\//.test(url) || url === '/favicon.ico' || url === '/push-sw.js' || url === '/sa-sw.js') { res.writeHead(404); return res.end('Asset not found'); }
     file = path.join(root, 'index.html');
   }
   const headers = { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' };

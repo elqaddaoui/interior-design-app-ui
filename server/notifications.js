@@ -193,4 +193,4 @@ function createNotifier(db, env, adapters = {}, options = {}) {
     removeOwner: (type, id) => db.query('DELETE FROM subscriptions WHERE tenant_id=:tenant AND owner_type=$1 AND owner_id=$2', [type, id]),
   };
 }
-module.exports = { createNotifier, createFcm, payloadFor, validateSubscription, trim, phone, CAMPAIGN_URL };
+module.exports = { loadVapid, createNotifier, createFcm, payloadFor, validateSubscription, trim, phone, CAMPAIGN_URL };

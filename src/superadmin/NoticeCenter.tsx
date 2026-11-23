@@ -4,12 +4,12 @@ import { Platform, Pressable, ScrollView, View, useWindowDimensions } from 'reac
 import { SA } from './tokens';
 import { tr } from './i18n';
 import { Icon, IconBtn, type IconName } from './icons';
-import { saMessage } from './api';
+import { SaError, saMessage } from './api';
 import { Btn, Card, ErrorLine, Row, T, ago } from './ui';
 import { goTo, noticeText, useNotices } from './notices';
 import type { Notice, NoticeKind, NoticeSeverity } from './types';
 
-const POLL_MS = 5000;
+const POLL_MS = 10000;
 const KIND_ICON: Record<NoticeKind, IconName> = { limits: 'chartLine', backup: 'shieldCheckOutline', api: 'lockOutline', system: 'bellRingOutline' };
 const tone = (severity: NoticeSeverity) => ({
   info: { fg: SA.color.accent, bg: SA.color.accentSoft },
@@ -18,20 +18,37 @@ const tone = (severity: NoticeSeverity) => ({
   danger: { fg: SA.color.danger, bg: SA.color.dangerSoft },
 })[severity];
 
-/** Asks the server for new notifications while the console is open (and right away when the tab comes back). */
+/**
+ * Asks the server for new notifications while the console is open (and right away when the tab comes back). A hidden tab does not poll:
+ * the phone gets the notice through Web Push instead, and the service worker tells an open page to refresh at once.
+ */
 export function useNoticePolling(active: boolean) {
   const refresh = useNotices(s => s.refresh);
+  const syncBrowser = useNotices(s => s.syncBrowser);
   useEffect(() => {
     if (!active) return undefined;
+    const isWeb = Platform.OS === 'web' && typeof document !== 'undefined';
     void refresh();
-    const timer = setInterval(() => { void refresh(); }, POLL_MS);
+    void syncBrowser();
+    const timer = setInterval(() => { if (!isWeb || document.visibilityState !== 'hidden') void refresh(); }, POLL_MS);
     const wake = () => { void refresh(); };
-    if (Platform.OS === 'web' && typeof document !== 'undefined') { document.addEventListener('visibilitychange', wake); window.addEventListener('focus', wake); }
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: string } | null;
+      if (data?.type === 'notices') void refresh();
+      else if (data?.type === 'open' && typeof data.url === 'string' && data.url.startsWith('/super-admin')) { void refresh(); goTo(data.url); }
+    };
+    if (isWeb) {
+      document.addEventListener('visibilitychange', wake); window.addEventListener('focus', wake);
+      (navigator as any).serviceWorker?.addEventListener?.('message', onMessage);
+    }
     return () => {
       clearInterval(timer);
-      if (Platform.OS === 'web' && typeof document !== 'undefined') { document.removeEventListener('visibilitychange', wake); window.removeEventListener('focus', wake); }
+      if (isWeb) {
+        document.removeEventListener('visibilitychange', wake); window.removeEventListener('focus', wake);
+        (navigator as any).serviceWorker?.removeEventListener?.('message', onMessage);
+      }
     };
-  }, [active, refresh]);
+  }, [active, refresh, syncBrowser]);
 }
 
 function Medallion({ notice, size = 36 }: { notice: Notice; size?: number }) {
@@ -150,13 +167,18 @@ export function ToastHost() {
 
 /** One line + one button: turns the browser's own notifications on or off (and sends a test). Shown where the warnings are managed. */
 export function BrowserNotifyCard() {
-  const { perm, browser, busy, error, enableBrowser, disableBrowser, sendTest } = useNotices();
+  const { perm, browser, busy, error, testResult, enableBrowser, disableBrowser, sendTest } = useNotices();
   const on = browser && perm === 'granted';
   const c = on ? tone('ok') : perm === 'denied' ? tone('warn') : tone('info');
-  const text = perm === 'unsupported' ? tr('This browser cannot show notifications. Warnings still appear in the bell.')
+  const text = perm === 'unsupported' ? tr('This browser cannot show notifications. Warnings still appear in the bell. On an iPhone, add the console to the Home Screen first.')
     : perm === 'denied' ? tr('Notifications are blocked for this site. Allow them in the browser settings (the lock next to the address), then come back.')
-      : on ? tr('On. A warning pops up on your screen, even when this tab is in the background.')
+      : on ? tr('On for this phone or browser. A warning pops up on your screen even when the browser is closed.')
         : tr('Off. Turn it on to get a pop-up on your screen when a limit gets close, a backup finishes or an API is misused.');
+  const result = testResult
+    ? (testResult.devices === 0 ? tr('The test is in the bell, but no device is registered for pop-ups yet. Press Turn on.')
+      : testResult.sent === 0 ? tr('The test could not be delivered to your devices. Turn notifications off and on again.')
+        : tr('Test sent to {n} device(s). It should appear in a few seconds.', { n: testResult.sent }))
+    : '';
   return (
     <Card>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: SA.space.md, flexWrap: 'wrap' }}>
@@ -169,12 +191,13 @@ export function BrowserNotifyCard() {
         </View>
         <Row>
           {perm === 'unsupported' || perm === 'denied' ? null : on
-            ? <Btn testID="sa-notify-off" kind="ghost" small label={tr('Turn off')} onPress={disableBrowser} />
-            : <Btn testID="sa-notify-on" small icon="bellRingOutline" label={tr('Turn on')} onPress={() => { void enableBrowser(); }} />}
+            ? <Btn testID="sa-notify-off" kind="ghost" small label={tr('Turn off')} onPress={() => { void disableBrowser(); }} />
+            : <Btn testID="sa-notify-on" small icon="bellRingOutline" label={tr('Turn on')} busy={busy} onPress={() => { void enableBrowser(); }} />}
           <Btn testID="sa-notify-test" kind="ghost" small icon="sendOutline" label={tr('Send a test')} busy={busy} onPress={() => { void sendTest(); }} />
         </Row>
       </View>
-      {error ? <View style={{ marginTop: SA.space.md }}><ErrorLine error={saMessage(error)} /></View> : null}
+      {result ? <T testID="sa-notify-result" size="sm" color={SA.color.muted} style={{ marginTop: SA.space.md }}>{result}</T> : null}
+      {error ? <View style={{ marginTop: SA.space.md }}><ErrorLine error={error instanceof SaError && error.code === 'PUSH_UNAVAILABLE' ? tr('This browser could not register for notifications. Try again, or use Chrome.') : saMessage(error)} /></View> : null}
     </Card>
   );
 }

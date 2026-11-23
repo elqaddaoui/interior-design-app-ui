@@ -2,15 +2,14 @@
  * Notification centre of the console (the bell, the toasts and the browser notifications).
  *
  * The server keeps one small row per warning (a code + numbers, see server/notices.js); this module asks for them every few seconds,
- * writes the sentence in the owner's language (`noticeText`), shows a toast for each new one and, once the owner allowed it, a native
- * browser notification when the console is not the window in front. No e-mail, no server setup, no service worker: the browser
- * notification works while the console is open in a tab of this browser (hidden tabs included).
+ * writes the sentence in the owner's language (`noticeText`) and shows a toast for each new one. Once the owner turned notifications on for a
+ * phone or browser, the server also pushes every notice to it (Web Push through public/sa-sw.js), so it appears even when Chrome is closed.
+ * No e-mail and no server setup: the push keys are created automatically.
  */
 import { Platform } from 'react-native';
 import { create } from 'zustand';
 import { sa, SaError, saMessage } from './api';
-import { tr } from './i18n';
-import { CONSOLE_ICONS } from './brand';
+import { saLang, tr } from './i18n';
 import type { Notice, NoticeList } from './types';
 
 export const LIMIT_TITLE: Record<string, string> = {
@@ -64,41 +63,52 @@ export function noticeText(n: Notice): { title: string; body: string } {
   return { title: n.code, body: '' };
 }
 
-// ---------------------------------------------------------------- browser notifications
+// ---------------------------------------------------------------- notifications on this device (Web Push)
 
+/*
+ * Why Web Push: Android Chrome refuses `new Notification()` from a page, and a page that is in the background or closed cannot ask the server
+ * anything. So the phone registers with Google's push service through the console's service worker (public/sa-sw.js); the server pushes every
+ * notice (server/notice-push.js) and the worker shows it, whether Chrome is open, in the background or closed.
+ */
 type Perm = 'unsupported' | 'default' | 'granted' | 'denied';
 const KEY = 'sa-browser-notify';
 const web = Platform.OS === 'web';
-const native = () => (web ? (globalThis as any).Notification : undefined);
-const readPerm = (): Perm => { const N = native(); return N ? (N.permission as Perm) : 'unsupported'; };
-const readPref = () => { try { return (globalThis as any).localStorage?.getItem(KEY) === '1'; } catch { return false; } };
-const writePref = (on: boolean) => { try { (globalThis as any).localStorage?.setItem(KEY, on ? '1' : '0'); } catch { /* private mode: for this visit only */ } };
-/** Is the console the window the owner is looking at? Then the toast is enough. */
-const inFront = () => web && typeof document !== 'undefined' && document.visibilityState === 'visible' && document.hasFocus();
+const g = globalThis as any;
+const supported = () => web && !!g.window && g.window.isSecureContext && 'serviceWorker' in g.navigator && 'PushManager' in g.window && 'Notification' in g.window;
+const readPerm = (): Perm => (supported() ? (g.Notification.permission as Perm) : 'unsupported');
+const readPref = () => { try { return g.localStorage?.getItem(KEY) === '1'; } catch { return false; } };
+const writePref = (on: boolean) => { try { g.localStorage?.setItem(KEY, on ? '1' : '0'); } catch { /* private mode: for this visit only */ } };
+const SCOPE = '/super-admin/';
 
-function showNative(n: Notice, go: (href: string) => void) {
-  const N = native();
-  if (!N || N.permission !== 'granted') return;
-  const { title, body } = noticeText(n);
-  const options = { body, tag: n.id, icon: CONSOLE_ICONS.p192, badge: CONSOLE_ICONS.p192, lang: undefined as string | undefined };
-  const open = () => { try { (globalThis as any).window?.focus?.(); } catch { /* ignore */ } if (n.href) go(n.href); };
-  try {
-    const shown = new N(title, options);
-    shown.onclick = () => { open(); shown.close?.(); };
-  } catch {
-    // Android Chrome only allows notifications made by a service worker: use one if the page already has it, otherwise the toast has to do.
-    (globalThis as any).navigator?.serviceWorker?.getRegistration?.().then((reg: any) => reg?.showNotification?.(title, options)).catch(() => {});
-  }
+function keyBytes(value: string) {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const decoded = g.atob(base64 + '='.repeat((4 - base64.length % 4) % 4));
+  return Uint8Array.from(decoded as string, ch => ch.charCodeAt(0));
+}
+/** The console's own worker (scope /super-admin/): never mixed with the tenant apps' worker. */
+async function registration() {
+  const registered = await g.navigator.serviceWorker.register('/sa-sw.js', { scope: SCOPE, updateViaCache: 'none' });
+  const ready = await g.navigator.serviceWorker.ready;
+  return new URL(ready.scope).pathname === SCOPE ? ready : registered;
+}
+async function existingRegistration() {
+  const found = await g.navigator.serviceWorker.getRegistration(SCOPE);
+  return found && new URL(found.scope).pathname === SCOPE ? found : undefined;
+}
+async function currentSubscription() {
+  if (!supported()) return null;
+  const found = await existingRegistration();
+  return (await found?.pushManager.getSubscription()) || null;
 }
 
 // ---------------------------------------------------------------- the store
 
 type S = {
   notices: Notice[]; unread: number; loaded: boolean; toasts: Notice[]; open: boolean;
-  perm: Perm; browser: boolean; busy: boolean; error: unknown;
+  perm: Perm; browser: boolean; busy: boolean; error: unknown; testResult: { devices: number; sent: number } | null;
   refresh: () => Promise<void>; setOpen: (open: boolean) => void; dismissToast: (id: string) => void;
   markRead: (ids: string[] | 'all') => Promise<void>; clear: () => Promise<void>;
-  enableBrowser: () => Promise<void>; disableBrowser: () => void; sendTest: () => Promise<void>;
+  enableBrowser: () => Promise<void>; disableBrowser: () => Promise<void>; syncBrowser: () => Promise<void>; sendTest: () => Promise<void>;
 };
 
 const seen = new Set<string>();
@@ -109,7 +119,7 @@ export const setNoticeNavigator = (fn: (href: string) => void) => { go = fn; };
 export const goTo = (href: string) => go(href);
 
 export const useNotices = create<S>((set, get) => ({
-  notices: [], unread: 0, loaded: false, toasts: [], open: false, perm: readPerm(), browser: readPref(), busy: false, error: null,
+  notices: [], unread: 0, loaded: false, toasts: [], open: false, perm: readPerm(), browser: readPref(), busy: false, error: null, testResult: null,
   refresh: async () => {
     if (inflight) return;
     inflight = true;
@@ -121,7 +131,6 @@ export const useNotices = create<S>((set, get) => ({
       const news = primed ? fresh.filter(n => !n.read) : [];
       primed = true;
       set(s => ({ notices: r.notices, unread: r.unread, loaded: true, perm: readPerm(), toasts: news.length ? [...news, ...s.toasts].slice(0, 3) : s.toasts }));
-      if (get().browser) for (const n of news.slice().reverse()) if (n.code === 'system.test' || !inFront()) showNative(n, go);
     } catch { /* offline or signed out: the shell handles that, the bell keeps what it had */ } finally { inflight = false; }
   },
   setOpen: open => set({ open }),
@@ -140,17 +149,50 @@ export const useNotices = create<S>((set, get) => ({
     try { await sa('/notices/clear', { method: 'POST', body: {} }); } catch { /* the next refresh brings the truth */ }
   },
   enableBrowser: async () => {
-    const N = native();
-    if (!N) { set({ perm: 'unsupported' }); return; }
-    // Must run from a tap: browsers refuse to ask for the permission otherwise.
-    let result: string = N.permission;
-    if (result === 'default') { try { result = await N.requestPermission(); } catch { result = N.permission; } }
-    writePref(result === 'granted');
-    set({ perm: readPerm(), browser: result === 'granted' });
+    set({ busy: true, error: null, testResult: null });
+    try {
+      if (!supported()) { set({ perm: 'unsupported' }); return; }
+      // Must be the first await: the browser only shows the permission prompt inside the tap.
+      const permission: Perm = g.Notification.permission === 'default' ? await g.Notification.requestPermission() : g.Notification.permission;
+      if (permission !== 'granted') { writePref(false); set({ perm: readPerm(), browser: false }); return; }
+      const config = await sa<{ publicKey: string | null }>('/push/config');
+      if (!config.publicKey) throw new SaError(500, 'PUSH_UNAVAILABLE');
+      const worker = await registration();
+      let subscription = await worker.pushManager.getSubscription();
+      const expected = keyBytes(config.publicKey);
+      const existing = subscription?.options?.applicationServerKey;
+      if (subscription && existing && Array.from(new Uint8Array(existing)).join(',') !== Array.from(expected).join(',')) { await subscription.unsubscribe(); subscription = null; }
+      try { subscription ||= await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: expected }); } catch { throw new SaError(500, 'PUSH_UNAVAILABLE'); }
+      // Only "on" once the server has stored this device.
+      await sa('/push/subscribe', { method: 'POST', body: { subscription: subscription.toJSON(), language: saLang() } });
+      writePref(true);
+      set({ perm: readPerm(), browser: true });
+    } catch (error) { writePref(false); set({ error, browser: false, perm: readPerm() }); } finally { set({ busy: false }); }
   },
-  disableBrowser: () => { writePref(false); set({ browser: false }); },
+  disableBrowser: async () => {
+    writePref(false); set({ browser: false, testResult: null });
+    try {
+      const subscription = await currentSubscription();
+      if (!subscription) return;
+      try { await sa('/push/unsubscribe', { method: 'POST', body: { subscription: subscription.toJSON() } }); } finally { await subscription.unsubscribe(); }
+    } catch { /* the server forgets a device that no longer answers */ }
+  },
+  /** On every start of the console: show the true state of this device and keep the server's copy (and its language) up to date. */
+  syncBrowser: async () => {
+    if (!supported()) { set({ perm: 'unsupported', browser: false }); return; }
+    try {
+      const subscription = g.Notification.permission === 'granted' ? await currentSubscription() : null;
+      set({ perm: readPerm(), browser: !!subscription });
+      writePref(!!subscription);
+      if (subscription) await sa('/push/subscribe', { method: 'POST', body: { subscription: subscription.toJSON(), language: saLang() } });
+    } catch { /* offline: try again next time */ }
+  },
   sendTest: async () => {
-    set({ busy: true, error: null });
-    try { await sa('/notices/test', { method: 'POST', body: {} }); await get().refresh(); } catch (error) { set({ error }); } finally { set({ busy: false }); }
+    set({ busy: true, error: null, testResult: null });
+    try {
+      const r = await sa<{ push?: { devices: number; sent: number } }>('/notices/test', { method: 'POST', body: {} });
+      set({ testResult: r.push || { devices: 0, sent: 0 } });
+      await get().refresh();
+    } catch (error) { set({ error }); } finally { set({ busy: false }); }
   },
 }));

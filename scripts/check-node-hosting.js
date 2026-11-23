@@ -67,7 +67,7 @@ const toRegExp = source => new RegExp(`^${source.replace(/\.(?![*])/g, '\\.').re
 test('static hosting applies the same SPA fallback as vercel.json', () => {
   const fallback = vercel.rewrites.find(rule => rule.destination === '/index.html');
   const vercelFallback = pathname => new RegExp(`^${fallback.source}$`).test(pathname);
-  const paths = ['/', '/lead', '/admin/settings', '/pro', '/render/abc', '/api/user/login', '/api/', '/_expo/static/js/web/x.js', '/assets/vendor/font.ttf', '/icons/i.png', '/push-sw.js', '/manifest.webmanifest', '/favicon.ico', '/robots.txt', '/apix', '/assetsx', '/some.page.html'];
+  const paths = ['/', '/lead', '/admin/settings', '/pro', '/render/abc', '/api/user/login', '/api/', '/_expo/static/js/web/x.js', '/assets/vendor/font.ttf', '/icons/i.png', '/push-sw.js', '/sa-sw.js', '/manifest.webmanifest', '/favicon.ico', '/robots.txt', '/apix', '/assetsx', '/some.page.html'];
   for (const pathname of paths) assert.equal(spaFallback(pathname), vercelFallback(pathname), `${pathname}: server and vercel.json disagree`);
 });
 
@@ -78,7 +78,7 @@ test('static hosting sends the same Cache-Control as vercel.json', () => {
     for (const rule of cacheRules) if (toRegExp(rule.source).test(pathname)) value = rule.headers.find(h => h.key === 'Cache-Control').value; // last match wins
     return value;
   };
-  for (const pathname of ['/index.html', '/push-sw.js', '/_expo/static/js/web/entry-abc.js', '/assets/vendor/font.ttf', '/icons/icon-192.png', '/favicon.ico', '/manifest.webmanifest', '/metadata.json']) {
+  for (const pathname of ['/index.html', '/push-sw.js', '/sa-sw.js', '/_expo/static/js/web/entry-abc.js', '/assets/vendor/font.ttf', '/icons/icon-192.png', '/favicon.ico', '/manifest.webmanifest', '/metadata.json']) {
     assert.equal(cacheFor(pathname), expected(pathname), pathname);
   }
   const security = vercel.headers.find(rule => rule.source === '/(.*)').headers;

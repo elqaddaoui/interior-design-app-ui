@@ -57,10 +57,10 @@ export default function Notifications() {
         ))}
       </Card>
       <SettingAnchor id="notifyCap"><Card className="px-4 py-3 mb-4">
-        <View className="flex-row items-center gap-3">
+        <View className="flex-row items-center gap-3" style={{ flexWrap: 'wrap' }}>
           <View className="w-10 h-10 rounded-full bg-soft items-center justify-center"><Icon name="timer-sand" size={20} tone="primary" /></View>
-          <View className="flex-1"><Txt className="font-bold text-[15px]">{t('sm.notifyCap')}</Txt><Txt className="text-muted text-[12px] mt-0.5">{t('sm.capHint')}</Txt></View>
-          <View className="flex-row items-center" style={{ gap: 8, direction: 'ltr' } as never}>
+          <View style={{ flex: 1, flexBasis: 170, minWidth: 170 }}><Txt className="font-bold text-[15px]">{t('sm.notifyCap')}</Txt><Txt className="text-muted text-[12px] mt-0.5">{t('sm.capHint')}</Txt></View>
+          <View className="flex-row items-center" style={{ gap: 8, direction: 'ltr', marginStart: 'auto' } as never}>
             <Pressable testID="cap-minus" accessibilityRole="button" accessibilityLabel={t('sm.minus')} onPress={() => patch({ campaignCapHours: Math.max(0, cap - (cap > 24 ? 12 : cap > 6 ? 6 : 1)) })} className="w-10 h-10 rounded-full bg-surface2 items-center justify-center active:opacity-70"><Icon name="minus" size={20} /></Pressable>
             <Txt testID="cap-value" className="font-extrabold text-[15px] text-center" style={{ minWidth: 64, textAlign: 'center' }}>{cap === 0 ? t('sm.noLimit') : t('sm.hours', { count: cap })}</Txt>
             <Pressable testID="cap-plus" accessibilityRole="button" accessibilityLabel={t('sm.plus')} onPress={() => patch({ campaignCapHours: Math.min(168, cap + (cap >= 24 ? 12 : cap >= 6 ? 6 : 1)) })} className="w-10 h-10 rounded-full bg-primary items-center justify-center active:opacity-70"><Icon name="plus" size={20} tone="onprimary" /></Pressable>
@@ -68,7 +68,7 @@ export default function Notifications() {
         </View>
       </Card></SettingAnchor>
       <View className="mb-4">
-        <Segmented testID="notif-tabs" optionPrefix="notif-tab" value={tab} onChange={setTab} options={[
+        <Segmented fit testID="notif-tabs" optionPrefix="notif-tab" value={tab} onChange={setTab} options={[
           { key: 'campaigns', label: t('camp.campaigns') }, { key: 'automations', label: t('camp.automations') }, { key: 'devices', label: t('camp.devices') },
         ]} />
       </View>
@@ -76,8 +76,8 @@ export default function Notifications() {
         <View testID={`notif-panel-${tab}`}>
           {draft.notifyUsers === false ? <View className="flex-row items-center gap-2 bg-surface2 rounded-xl p-3 mb-3"><Icon name="bell-off-outline" size={18} tone="muted" /><Txt testID="camp-paused-banner" className="flex-1 text-[13px]">{t('camp.pausedBanner')}</Txt></View> : null}
           {offline ? <Txt className="text-danger text-[13px] mb-3">{t('camp.offline')}</Txt> : null}
-          <View className="flex-row items-center justify-between gap-3 mb-3">
-            <Txt className="text-muted text-[13px] flex-1">{tab === 'campaigns' ? t('camp.intro') : t('camp.emptyASub')}</Txt>
+          <View className="flex-row items-center justify-between gap-3 mb-3" style={{ flexWrap: 'wrap' }}>
+            <Txt className="text-muted text-[13px]" style={{ flex: 1, flexBasis: 220, minWidth: 220 }}>{tab === 'campaigns' ? t('camp.intro') : t('camp.emptyASub')}</Txt>
             <Button testID={tab === 'campaigns' ? 'camp-new' : 'camp-new-auto'} size="sm" icon="plus" title={t(tab === 'campaigns' ? 'camp.newCampaign' : 'camp.newAutomation')} onPress={() => setEditing({ mode: tab === 'campaigns' ? 'campaign' : 'automation', campaign: null })} />
           </View>
           {campaignsLoaded || !backendEnabled ? (

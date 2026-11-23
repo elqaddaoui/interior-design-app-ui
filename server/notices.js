@@ -31,7 +31,8 @@ function cleanParams(input) {
   return out;
 }
 
-function createNotices(db, { clock = Date.now } = {}) {
+/** `onAdd(notice)` (optional) is awaited after the row is saved: the platform uses it to push the notice to the owner's phones (server/notice-push.js). */
+function createNotices(db, { clock = Date.now, onAdd } = {}) {
   let lastPrune = 0;
   const view = row => {
     let params = {};
@@ -39,8 +40,8 @@ function createNotices(db, { clock = Date.now } = {}) {
     return { id: row.id, at: Number(row.at), kind: row.kind, severity: row.severity, code: row.code, params, href: row.href || '', read: row.read_at != null };
   };
 
-  /** Never throws: a notice must not break the job that raised it. Returns the id, or '' when it could not be saved. */
-  async function add({ kind = 'system', severity = 'info', code, params, href = '' } = {}) {
+  /** Never throws: a notice must not break the job that raised it. Returns the id, or '' when it could not be saved. `silent`: no push to the phones (the caller sends it). */
+  async function add({ kind = 'system', severity = 'info', code, params, href = '', silent = false } = {}) {
     try {
       if (!code || typeof code !== 'string') return '';
       const now = clock();
@@ -51,6 +52,7 @@ function createNotices(db, { clock = Date.now } = {}) {
         lastPrune = now;
         await db.query('DELETE FROM saas_notices WHERE at<$1 OR id NOT IN (SELECT id FROM saas_notices ORDER BY at DESC LIMIT $2)', [now - KEEP_MS, KEEP]).catch(() => {});
       }
+      if (onAdd && !silent) await Promise.resolve(onAdd({ id, kind, severity: SEVERITIES.includes(severity) ? severity : 'info', code, params: cleanParams(params), href: safeHref(href) })).catch(() => {});
       return id;
     } catch { return ''; }
   }

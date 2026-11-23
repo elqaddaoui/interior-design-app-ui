@@ -19,7 +19,7 @@
       "destination": "/api?__slug=$1&__path=$2"
     },
     {
-      "source": "/((?!api/|_expo/|assets/|icons/|push-sw\\.js|manifest\\.webmanifest|favicon\\.ico).*)",
+      "source": "/((?!api/|_expo/|assets/|icons/|push-sw\\.js|sa-sw\\.js|manifest\\.webmanifest|favicon\\.ico).*)",
       "destination": "/index.html"
     }
   ],
@@ -34,6 +34,19 @@
         {
           "key": "Service-Worker-Allowed",
           "value": "/"
+        }
+      ]
+    },
+    {
+      "source": "/sa-sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/super-admin/"
         }
       ]
     },

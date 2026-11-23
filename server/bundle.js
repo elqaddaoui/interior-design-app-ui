@@ -26,7 +26,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
   // One S3 client for the whole process: tenants differ by object-key prefix, not by credentials.
   const storage = 'storage' in mediaOptions ? mediaOptions.storage : createR2Storage(env);
   // Allowances + API manager (platform tables). Tenant modules only get `platform.forTenant(id)`: a handle fixed to their own tenant.
-  const platform = createPlatform(db, { env });
+  const platform = createPlatform(db, { env, sendPush: senders?.web });
   // Which storage receives new files + read-through for stores without own media (server/media-hub.js). One per process.
   const hub = createMediaHub({ db, platform: platform.media, env, mediaOptions });
   const cache = new Map();

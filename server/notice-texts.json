@@ -1,0 +1,172 @@
+{
+ "Neon database storage": [
+  "Stockage de la base Neon",
+  "تخزين قاعدة بيانات Neon",
+  "تخزين قاعدة المعطيات ديال Neon"
+ ],
+ "Neon compute hours": [
+  "Heures de calcul Neon",
+  "ساعات حوسبة Neon",
+  "ساعات الحوسبة ديال Neon"
+ ],
+ "Neon network transfer": [
+  "Transfert réseau Neon",
+  "نقل بيانات الشبكة في Neon",
+  "نقل المعطيات فالشبكة ديال Neon"
+ ],
+ "R2 file storage": [
+  "Stockage de fichiers R2",
+  "تخزين ملفات R2",
+  "تخزين الفيشيات فـ R2"
+ ],
+ "R2 write operations (Class A)": [
+  "Opérations d’écriture R2 (classe A)",
+  "عمليات الكتابة في R2 (الفئة A)",
+  "عمليات الكتابة فـ R2 (الفئة A)"
+ ],
+ "R2 read operations (Class B)": [
+  "Opérations de lecture R2 (classe B)",
+  "عمليات القراءة في R2 (الفئة B)",
+  "عمليات القراءة فـ R2 (الفئة B)"
+ ],
+ "The limit is reached. Back up all your data now.": [
+  "La limite est atteinte. Sauvegardez toutes vos données maintenant.",
+  "تم بلوغ الحد. انسخ كل بياناتك احتياطياً الآن.",
+  "الحد وصل. دير نسخة احتياطية ديال كلشي دابا."
+ ],
+ "Very close to the limit. Back up all your data now.": [
+  "Très proche de la limite. Sauvegardez toutes vos données maintenant.",
+  "قريب جداً من الحد. انسخ كل بياناتك احتياطياً الآن.",
+  "قريب بزاف من الحد. دير نسخة احتياطية ديال كلشي دابا."
+ ],
+ "Time to back up your data.": [
+  "C'est le moment de sauvegarder vos données.",
+  "حان وقت نسخ بياناتك احتياطياً.",
+  "جا الوقت باش دير نسخة احتياطية."
+ ],
+ "Getting close to the limit. Plan a backup soon.": [
+  "On approche de la limite. Prévoyez une sauvegarde bientôt.",
+  "نقترب من الحد. خطّط لنسخة احتياطية قريباً.",
+  "قربنا من الحد. وجّد نسخة احتياطية قريب."
+ ],
+ "At the current pace it runs out around {date} (in about {days} days).": [
+  "Au rythme actuel, la limite sera atteinte vers le {date} (dans environ {days} jours).",
+  "بالوتيرة الحالية سينفد حوالي {date} (خلال نحو {days} يوماً).",
+  "بهاد السرعة غادي يسالي تقريباً فـ {date} (من دابا لحوالي {days} يام)."
+ ],
+ "Only {left} of transfer is left and a full backup needs about {need}. Back up now.": [
+  "Il ne reste que {left} de transfert et une sauvegarde complète en demande environ {need}. Sauvegardez maintenant.",
+  "لم يتبق سوى {left} من النقل والنسخة الاحتياطية الكاملة تحتاج نحو {need}. انسخ احتياطياً الآن.",
+  "بقاو غير {left} من النقل والنسخة الاحتياطية الكاملة كتحتاج تقريباً {need}. دير النسخة الاحتياطية دابا."
+ ],
+ "{name} at {pct} %": [
+  "{name} à {pct} %",
+  "{name} عند {pct} ٪",
+  "{name} فـ {pct} ٪"
+ ],
+ "{name} at {pct} % (reminder)": [
+  "{name} à {pct} % (rappel)",
+  "{name} عند {pct} ٪ (تذكير)",
+  "{name} فـ {pct} ٪ (تذكير)"
+ ],
+ "{name} cannot be read": [
+  "{name} est illisible",
+  "تعذّرت قراءة {name}",
+  "ما قدرناش نقراو {name}"
+ ],
+ "The monitor could not read this service for more than 12 hours. Check the key or token in the server settings.": [
+  "Le suivi n'a pas pu lire ce service depuis plus de 12 heures. Vérifiez la clé ou le jeton dans les réglages du serveur.",
+  "تعذّرت على المراقبة قراءة هذه الخدمة لأكثر من 12 ساعة. تحقق من المفتاح أو الرمز في إعدادات الخادم.",
+  "المراقبة ما قدراتش تقرا هاد الخدمة لأكثر من 12 ساعة. شوف المفتاح ولا التوكن فإعدادات السيرفر."
+ ],
+ "Automatic backup made": [
+  "Sauvegarde automatique effectuée",
+  "تم إنشاء نسخة احتياطية تلقائية",
+  "تعملات نسخة احتياطية أوتوماتيكية"
+ ],
+ "Saved to {where}. Nothing else to do: you can restore it from Backup & restore.": [
+  "Enregistrée dans {where}. Rien d'autre à faire : vous pouvez la restaurer depuis Sauvegarde et restauration.",
+  "حُفظت في {where}. لا شيء آخر لفعله: يمكنك استعادتها من النسخ الاحتياطي والاستعادة.",
+  "تحفظات فـ {where}. ما بقا ما تدير: تقدر ترجعها من النسخ الاحتياطي والاسترجاع."
+ ],
+ "your backup vault": [
+  "votre coffre de sauvegarde",
+  "خزنة النسخ الاحتياطي",
+  "الخزنة ديال النسخ الاحتياطي"
+ ],
+ "Google Drive": [
+  "Google Drive",
+  "جوجل درايف",
+  "جوجل درايف"
+ ],
+ "Dropbox": [
+  "Dropbox",
+  "دروب بوكس",
+  "دروب بوكس"
+ ],
+ "Automatic backup failed": [
+  "La sauvegarde automatique a échoué",
+  "فشلت النسخة الاحتياطية التلقائية",
+  "النسخة الاحتياطية الأوتوماتيكية فشلات"
+ ],
+ "{why} It is tried again later. If this keeps happening, open Backup & restore and make a backup by hand.": [
+  "{why} Une nouvelle tentative aura lieu plus tard. Si cela continue, ouvrez Sauvegarde et restauration et faites une sauvegarde à la main.",
+  "{why} ستُعاد المحاولة لاحقاً. إن استمر ذلك، افتح النسخ الاحتياطي والاستعادة وأنشئ نسخة يدوياً.",
+  "{why} غادي نعاودو من بعد. إلا بقات هكاك، حل النسخ الاحتياطي والاسترجاع ودير نسخة بيدك."
+ ],
+ "Burst of API calls": [
+  "Rafale d'appels API",
+  "دفعة مفاجئة من طلبات API",
+  "ضغط ديال طلبات API"
+ ],
+ "Daily API cap reached": [
+  "Plafond quotidien d'API atteint",
+  "تم بلوغ الحد اليومي لـ API",
+  "وصلنا للحد اليومي ديال API"
+ ],
+ "Usage spike": [
+  "Pic d'utilisation",
+  "قفزة في الاستخدام",
+  "طلعة فالاستعمال"
+ ],
+ "Many failing API calls": [
+  "Nombreux appels API en échec",
+  "طلبات API فاشلة كثيرة",
+  "بزاف ديال طلبات API فاشلة"
+ ],
+ "Repeated attempts while AI is switched off": [
+  "Tentatives répétées alors que l'IA est désactivée",
+  "محاولات متكررة أثناء إيقاف الذكاء الاصطناعي",
+  "محاولات متكررة والذكاء الاصطناعي موقف"
+ ],
+ "API warning": [
+  "Alerte API",
+  "تنبيه API",
+  "تنبيه API"
+ ],
+ "{value} % of calls failed (alert level {limit} %)": [
+  "{value} % des appels ont échoué (seuil d’alerte {limit} %)",
+  "فشل {value} % من الطلبات (حد التنبيه {limit} %)",
+  "{value} % د الطلبات فشلو (حد التنبيه {limit} %)"
+ ],
+ "{value} calls in about {min} min (alert level {limit})": [
+  "{value} appels en {min} min environ (seuil d’alerte {limit})",
+  "{value} طلبًا خلال حوالي {min} دقيقة (حد التنبيه {limit})",
+  "{value} طلب فحوالي {min} دقيقة (حد التنبيه {limit})"
+ ],
+ "Its API was paused automatically. Resume it from the warning.": [
+  "Son API a été mise en pause automatiquement. Reprenez-la depuis l'alerte.",
+  "تم إيقاف واجهة API الخاصة به تلقائياً. استأنفها من التنبيه.",
+  "الـ API ديالو توقفات أوتوماتيكيا. كمّلها من التنبيه."
+ ],
+ "Notifications are working": [
+  "Les notifications fonctionnent",
+  "الإشعارات تعمل",
+  "الإشعارات خدامين"
+ ],
+ "This is a test. Warnings about your free limits, backups and API use appear here and in your browser.": [
+  "Ceci est un test. Les alertes sur vos limites gratuites, sauvegardes et usage des API apparaissent ici et dans votre navigateur.",
+  "هذا اختبار. تظهر التنبيهات حول حدودك المجانية والنسخ الاحتياطية واستخدام API هنا وفي متصفحك.",
+  "هادي تجربة. التنبيهات على الحدود المجانية، النسخ الاحتياطية واستعمال الـ API كيبانو هنا وفالمتصفح."
+ ]
+}

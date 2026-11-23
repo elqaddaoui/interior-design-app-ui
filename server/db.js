@@ -173,6 +173,10 @@ CREATE TABLE IF NOT EXISTS saas_notices (
   params TEXT NOT NULL DEFAULT '{}', href TEXT NOT NULL DEFAULT '', read_at BIGINT
 );
 CREATE INDEX IF NOT EXISTS saas_notices_at ON saas_notices(at DESC);
+-- Phones and browsers of the super admin that receive the notices as Web Push (works with the browser closed). One row per device; never exported in a backup.
+CREATE TABLE IF NOT EXISTS saas_push (
+  id TEXT PRIMARY KEY, data TEXT NOT NULL, lang TEXT NOT NULL DEFAULT 'en', ua TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, last_ok_at BIGINT
+);
 -- Media & Storage. ONE shared, content-addressed namespace: a file is named after the hash of its bytes, so every store that holds the same picture
 -- points at the SAME stored object (media/<hash>.<ext>); each store only has its own row (its own library, title, alt text). ns = 1 means the
 -- object lives at that shared key; ns = 0 is a legacy per-store key (t/<store>/media/..., or raw bytes in the row). A stored object is deleted
@@ -192,7 +196,7 @@ CREATE TABLE IF NOT EXISTS saas_media_history (id TEXT PRIMARY KEY, at BIGINT NO
 CREATE TABLE IF NOT EXISTS saas_media_history_rows (hid TEXT NOT NULL, tenant_id TEXT NOT NULL, id TEXT NOT NULL, mime TEXT NOT NULL, size BIGINT, storage TEXT NOT NULL, ns INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (hid, tenant_id, id));
 INSERT INTO saas_tenants(id, slug, name, kind, status, created_at, updated_at) VALUES ('default', 'default', 'Default', 'default', 'active', 0, 0) ON CONFLICT (id) DO NOTHING;
 `;
-const PLATFORM_TABLES = ['saas_media_old', 'saas_media_history', 'saas_media_history_rows', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts', 'saas_notices'];
+const PLATFORM_TABLES = ['saas_media_old', 'saas_media_history', 'saas_media_history_rows', 'saas_tenants', 'saas_domains', 'saas_super', 'saas_super_sessions', 'saas_demos', 'saas_assignments', 'saas_themes', 'saas_audit', 'saas_apis', 'saas_usage', 'saas_alerts', 'saas_notices', 'saas_push'];
 
 /**
  * What a backup holds (server/backup/dump.js reads this; it lives here because this file owns the schema). One entry per table, parents before
