@@ -42,7 +42,7 @@ function capability(engine, model) {
   return { title: model, i2i: !/dall-e-3|schnell|turbo|sdxl-base/i.test(model), refs: 1, free: false };
 }
 
-function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now, media, content, sync, platform } = {}) {
+function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.fetch, clock = Date.now, media, content, sync, platform, finder } = {}) {
   const cooling = new Map(); // "engine|model" -> until
   const inflight = new Map(); // request id -> promise (one generation per request at a time)
   const perClient = new Map(); // client id -> running count
@@ -110,7 +110,7 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     const out = [];
     const add = async (engine, model, extra = {}) => {
       if (!ENGINES[engine] || !model || out.some(c => c.engine === engine && c.model === model)) return;
-      const cap = capability(engine, model);
+      const cap = extra.cap || capability(engine, model);
       if (needImage && !cap.i2i) return;
       const { key } = await keyOf(engine, extra.key);
       if (!key) return;
@@ -119,6 +119,13 @@ function createImageGen(db, { env = process.env, fetch: fetchImpl = globalThis.f
     };
     // `rows`: the admin's model for the tool, or (rotation) the pool starting at the model whose turn it is; the others are fallbacks.
     for (const row of [].concat(rows || [])) if (row?.engine && ENGINES[row.engine] && row.enabled !== false) await add(row.engine, String(row.modelName || '').trim(), { key: row.apiKey, row, label: row.name });
+    // Autopilot (super admin > APIs > Online APIs): models the API finder PROVED to work in the last two days come before the built-in list.
+    // A finder problem never breaks a render: on any error the built-in list below is simply used.
+    if (finder) {
+      let proven = [];
+      try { proven = await finder.chain(needImage); } catch { /* the built-in chain follows */ }
+      for (const item of proven) await add('pollinations', item.model, { label: item.label, cap: { title: item.label, i2i: needImage ? true : (CATALOG[item.model]?.i2i ?? false), refs: item.refs, free: true } });
+    }
     for (const model of chainOf(needImage)) await add('pollinations', model);
     return out;
   }

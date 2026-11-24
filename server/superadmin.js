@@ -61,6 +61,7 @@ const USERNAME = /^[a-z0-9][a-z0-9._-]{2,39}$/;
 
 function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
   const platform = bundles.platform; // allowances + API manager (server/platform.js)
+  const finder = bundles.finder; // API finder (server/apifinder.js)
   // Media operations across stores (copy / move / make independent / cleanup). Built on first use: the reset script has no bundles.
   let opsInstance;
   const ops = () => (opsInstance ||= createMediaOps({ db, hub: bundles.hub, platform: platform.media, env }));
@@ -850,6 +851,20 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
       if (method === 'PATCH') { const body = await readBody(req); const view = await platform.update(m[1], body); await audit(actor, 'api.update', null, m[1], Object.keys(body || {}).map(k => (k === 'apiKey' ? 'key' : k)).join(',')); return ok(view); }
       if (method === 'DELETE') { const row = await platform.remove(m[1]); await audit(actor, 'api.delete', null, m[1], `${row.kind}/${row.provider}`); return ok({ ok: true }); }
     }
+    // API finder: discovers, proves and ranks the best free image APIs online (server/apifinder.js). Keys are only read to run the probes, never returned.
+    if (path === '/finder' && method === 'GET') return ok(await finder.view());
+    if (path === '/finder/scan' && method === 'POST') { const body = await readBody(req); const view = await finder.scan({ probe: body.probe !== false, reason: 'manual' }); await audit(actor, 'finder.scan', null, 'finder', `${view.totals.found} found, ${view.totals.verified} verified`); return ok(view); }
+    if (path === '/finder/settings' && method === 'PATCH') { const body = await readBody(req); await finder.setSettings(body); await audit(actor, 'finder.settings', null, 'finder', Object.keys(body || {}).join(',')); return ok(await finder.view()); }
+    if ((m = /^\/finder\/test$/.exec(path)) && method === 'POST') { const body = await readBody(req); const view = await finder.probe(String(body.id || '')); await audit(actor, 'finder.test', null, String(body.id || '').slice(0, 120), ''); return ok(view); }
+    if (path === '/finder/add' && method === 'POST') {
+      // One click: connect a found model's engine to the API manager (needs the key the manager does not hold yet), nothing else leaves the server.
+      const body = await readBody(req);
+      const found = (await finder.view()).candidates.find(x => x.id === body.id);
+      if (!found || !found.connectable) throw fail(404, 'NOT_FOUND');
+      const view = await platform.create({ kind: 'image', provider: found.provider, model: found.model, label: found.sourceLabel, apiKey: body.apiKey });
+      await audit(actor, 'api.create', null, view.id, `image/${view.provider} via finder`);
+      return ok(view, 201);
+    }
     // API consumption (every modality, both key modes), abuse alerts and their settings.
     if (path === '/usage' && method === 'GET') {
       const q = url.searchParams;
@@ -964,7 +979,7 @@ function createSuperAdmin({ db, env = process.env, bundles, tenants }) {
     throw fail(404, 'API route not found');
   }
 
-  return { handle, limits, authenticate, configured, account, resetToDefault, redeemHandoff, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit, platformInfo: tenantId => platform.infoOf(tenantId) };
+  return { handle, limits, finder, authenticate, configured, account, resetToDefault, redeemHandoff, createTenant, assignDemo, createDemo, deleteTenant, setSuspended, listTenants, stats, audit, platformInfo: tenantId => platform.infoOf(tenantId) };
 }
 
 module.exports = { createSuperAdmin, COPIED_SETTINGS };

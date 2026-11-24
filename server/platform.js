@@ -83,6 +83,19 @@ function createPlatform(db, { env = process.env, clock = Date.now, sendPush } = 
     return { api: row ? { id: row.id, provider: row.provider, key: row.api_key, base: row.base_url, model: row.model, label: row.label } : null };
   }
 
+  /**
+   * A key the PLATFORM itself holds for `provider` (used by the API finder to run its probes): the default enabled connection of that provider in the
+   * manager, else the host variable. Never returned by any route.
+   */
+  async function credential(kind, provider) {
+    const rows = (await apiRows()).filter(row => row.kind === kind && row.provider === provider && row.enabled && row.api_key);
+    const row = rows.find(r => r.is_default) || rows[0];
+    if (row) return { key: row.api_key, base: row.base_url, source: 'manager' };
+    const item = ENV_KEYS.find(x => x.kind === kind && x.provider === provider);
+    const value = item ? String(env[item.variable] || '').trim() : '';
+    return value ? { key: value, base: item.baseVariable ? String(env[item.baseVariable] || '').trim() : '', source: 'env' } : null;
+  }
+
   /** One atomic step: take `n` credits unless that would pass the store's limit. */
   async function consume(tenantId, n = 1, onChange) {
     if ((await db.query('UPDATE saas_tenants SET credits_used=credits_used+$2 WHERE id=$1 AND (credit_limit IS NULL OR credits_used+$2<=credit_limit) RETURNING credits_used', [tenantId, n])).length) { await onChange?.(); return true; }
@@ -455,7 +468,7 @@ function createPlatform(db, { env = process.env, clock = Date.now, sendPush } = 
     return row;
   }
 
-  return { discover, importKey, media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, notices, push, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
+  return { discover, importKey, credential, media, managed, consume, refund, forTenant, infoOf, setPolicy, policyFields, checkLinks, list, create, update, remove, forget, CATALOG, usage, notices, push, gate, setDemoAi, setPaused, aiView, allocatedTo, budget };
 }
 
 module.exports = { createPlatform, KINDS };

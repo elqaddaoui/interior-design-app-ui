@@ -19,6 +19,7 @@ const { createChat } = require('./chat');
 const { createAssistant } = require('./assistant');
 const { createImageGen } = require('./imagegen');
 const { createPlatform } = require('./platform');
+const { createFinder } = require('./apifinder');
 
 const withTimeout = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))]);
 
@@ -27,6 +28,8 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
   const storage = 'storage' in mediaOptions ? mediaOptions.storage : createR2Storage(env);
   // Allowances + API manager (platform tables). Tenant modules only get `platform.forTenant(id)`: a handle fixed to their own tenant.
   const platform = createPlatform(db, { env, sendPush: senders?.web });
+  // API finder (super admin > APIs > Online APIs): one per process. The image generators only READ its proven chain (Autopilot switch).
+  const finder = createFinder({ db, env, keyFor: platform.credential, ...(imageFetch ? { fetch: imageFetch } : {}) });
   // Which storage receives new files + read-through for stores without own media (server/media-hub.js). One per process.
   const hub = createMediaHub({ db, platform: platform.media, env, mediaOptions });
   const cache = new Map();
@@ -47,7 +50,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     const admins = createAdmins(tdb, { env, sync, media });
     // Campaigns (scheduled / recurring / automated pushes) and the free-provider AI chat. Both are lazy: no work until used.
     const campaigns = createCampaigns(tdb, notifier, { sync, settings: () => content.getDoc('settings') });
-    const imagegen = createImageGen(tdb, { env, media, content, sync, platform: own, ...(imageFetch ? { fetch: imageFetch } : {}) });
+    const imagegen = createImageGen(tdb, { env, media, content, sync, platform: own, finder, ...(imageFetch ? { fetch: imageFetch } : {}) });
     const chat = createChat(tdb, { env, platform: own, ...(chatFetch ? { fetch: chatFetch } : {}) });
     const assistant = createAssistant(tdb, { chat, content });
 
@@ -98,6 +101,7 @@ function createBundles({ db, env = process.env, senders, media: mediaOptions = {
     loaded: () => [...cache.keys()],
     storage,
     platform,
+    finder,
     hub,
     /**
      * Tenants that have work for the background timer: a notification job due, or a campaign that can still fire (the default tenant is

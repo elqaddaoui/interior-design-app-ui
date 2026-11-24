@@ -76,6 +76,22 @@ export type FoundKeys = {
   stores: { tenantId: string; store: string; slug: string; storeKind: string; kind: ApiKind; provider: string; label: string; hint: string; added: boolean }[];
 };
 
+/** Online APIs (server/apifinder.js): free image APIs found online, tested with real generations and ranked. Never carries a key. */
+export type FinderStatus = 'verified' | 'unverified' | 'needs_key' | 'failing';
+export type FinderReason = { code: string; points: number; ms?: number; value?: number | null; error?: string };
+export type FinderCandidate = {
+  id: string; source: string; sourceLabel: string; provider: string; model: string; title: string; publisher: string; tier: 'free' | 'free-tier';
+  i2i: boolean; i2iProven: boolean | null; connectable: boolean; needsKey: boolean; keyUrl: string; docs: string; community: boolean; note: string;
+  status: FinderStatus; score: number; reasons: FinderReason[]; stale: boolean; banned: boolean; testable: boolean;
+  latencyMs: number | null; editMs: number | null; probedAt: number | null; lastError: string; firstSeen: number;
+};
+export type FinderSource = { id: string; label: string; docs: string; keyUrl: string; ok: boolean | null; count: number; paid: number; ms: number; error: string; at: number | null };
+export type FinderSettings = { autoScan: boolean; intervalHours: number; autopilot: boolean; probeMax: number; banned: string[] };
+export type FinderView = {
+  at: number | null; scans: number; probedAt: number | null; scanning: boolean; nextScanAt: number | null; settings: FinderSettings; keys: { pollinations: boolean };
+  sources: FinderSource[]; candidates: FinderCandidate[]; best: string; bestUsable: boolean; suggested: string; totals: { found: number; verified: number; editing: number; needKey: number }; skipped?: string;
+};
+
 /** What is hosted, grouped as the Files manager shows it. */
 export type MediaType = 'image' | 'video' | 'audio' | 'other';
 export type MediaTypeFilter = MediaType | 'all';

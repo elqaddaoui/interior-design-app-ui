@@ -7,6 +7,7 @@ import { tr } from '@/superadmin/i18n';
 import type { ApiCatalog, ApiConn, ApiKind, FoundKeys } from '@/superadmin/types';
 import { ApiAlerts } from '@/superadmin/ApiAlerts';
 import { ApiUsage } from '@/superadmin/ApiUsage';
+import { OnlineApis } from '@/superadmin/OnlineApis';
 import { Badge, Btn, Empty, ErrorLine, Field, Heading, Hint, ListRow, Loading, Notice, Row, Segmented, Sheet, T, Tabs, useLoad } from '@/superadmin/ui';
 
 const KIND_LABEL: Record<ApiKind, string> = { image: 'Images', text: 'Text / chat', other: 'Other' };
@@ -146,12 +147,12 @@ function Manager() {
   );
 }
 
-type Tab = 'manager' | 'usage' | 'alerts';
+type Tab = 'manager' | 'usage' | 'alerts' | 'online_api';
 
 export default function Apis() {
   const router = useRouter();
   const params = useLocalSearchParams<{ tab?: string }>();
-  const tab: Tab = params.tab === 'usage' || params.tab === 'alerts' ? params.tab : 'manager';
+  const tab: Tab = params.tab === 'usage' || params.tab === 'alerts' || params.tab === 'online_api' ? params.tab : 'manager';
   const open = useLoad(() => sa<{ alerts: unknown[]; open: number }>('/alerts?status=open'));
   const warnings = open.data?.open || 0;
   return (
@@ -159,10 +160,11 @@ export default function Apis() {
       <Tabs<Tab> value={tab} onChange={v => router.setParams({ tab: v === 'manager' ? undefined : v })}
         tabs={[
           { value: 'manager', label: tr('API manager'), testID: 'sa-apitab-manager' },
+          { value: 'online_api', label: tr('Online APIs'), testID: 'sa-apitab-online' },
           { value: 'usage', label: tr('Consumption'), testID: 'sa-apitab-usage' },
           { value: 'alerts', label: warnings ? tr('Warnings ({n})', { n: warnings }) : tr('Warnings'), testID: 'sa-apitab-alerts' },
         ]} />
-      {tab === 'usage' ? <ApiUsage /> : tab === 'alerts' ? <ApiAlerts /> : <Manager />}
+      {tab === 'online_api' ? <OnlineApis /> : tab === 'usage' ? <ApiUsage /> : tab === 'alerts' ? <ApiAlerts /> : <Manager />}
     </View>
   );
 }

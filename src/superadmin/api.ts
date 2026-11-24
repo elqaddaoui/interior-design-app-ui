@@ -60,6 +60,7 @@ const MESSAGES: Record<string, string> = {
   ARCHIVE_NOT_A_BACKUP: 'This archive is not a backup of this app.', TOO_MANY_UPLOADS: 'Too many pending files. Try again in a minute.', NOT_ENOUGH_DISK: 'Not enough free disk space on the server for this backup.',
   APP_SOURCE_MISSING: 'The source code (src/) is not on this server, only the built app: this backup can restore the app here but cannot rebuild it in a new GitHub repository.',
   NO_CODE_IN_BACKUP: 'This backup holds no code.', BACKUP_HAS_NO_SOURCE: 'This backup was made before the source code was included, so it cannot be turned into a repository. Make a new Full app or Code backup.',
+  SCAN_RUNNING: 'A scan is already running. Wait for it to finish.', KEY_MISSING: 'Add a Pollinations key first: the test needs one.', NOT_TESTABLE: 'This API cannot be tested from here yet.',
   INTERNAL: 'Something went wrong.',
   AI_DISABLED_DEMO: 'The API is off for this demo. Turn it on from Demos.', AI_PAUSED: 'The API of this store is paused.',
 };

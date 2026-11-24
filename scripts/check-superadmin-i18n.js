@@ -47,6 +47,8 @@ const messages = api.slice(api.indexOf('const MESSAGES'), api.indexOf('export co
 for (const m of messages.matchAll(/: '((?:[^'\\]|\\.)*)'/g)) used.set(m[1].replace(/\\'/g, "'"), 'src/superadmin/api.ts');
 const apis = fs.readFileSync(path.join(root, 'src/app/super-admin/apis.tsx'), 'utf8');
 for (const text of stringsIn(apis.slice(apis.indexOf('const KIND_LABEL'), apis.indexOf('/** Add or edit')), 0)) if (/\s|\//.test(text) || /^[A-Z]/.test(text)) used.set(text, 'src/app/super-admin/apis.tsx');
+const online = fs.readFileSync(path.join(root, 'src/superadmin/OnlineApis.tsx'), 'utf8');
+for (const text of stringsIn(online.slice(online.indexOf('i18n-map:start'), online.indexOf('i18n-map:end')), 0)) if (/\s/.test(text) || /^[A-Z]/.test(text)) used.set(text, 'src/superadmin/OnlineApis.tsx');
 const settings = fs.readFileSync(path.join(root, 'src/app/super-admin/settings.tsx'), 'utf8');
 for (const m of settings.matchAll(/group\('([^']+)', '([^']+)'/g)) { used.set(m[1], 'settings.tsx'); used.set(m[2], 'settings.tsx'); }
 

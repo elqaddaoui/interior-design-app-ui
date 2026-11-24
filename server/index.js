@@ -876,6 +876,8 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
           }
           // The daily platform cron also measures the free-tier limits (serverless hosts have no timer of their own).
           if (cron) await withTimeout(superAdmin.limits.check({ force: true }), 20000).catch(() => {});
+          // ... and refreshes the online API finder (a no-op when it ran recently or is switched off).
+          if (cron) await withTimeout(bundles.finder.tick(), 26000).catch(() => {});
           return json(200, { ok: true, campaigns: ran && !ran.skipped ? !!ran.ok : null });
         }
 
@@ -1005,6 +1007,12 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
     void superAdmin.limits.tick({ active: Date.now() - lastApiAt < 300000 }).catch(() => {});
   }, 60000);
   limitsTimer.unref();
+  // Online API finder: decides every 10 minutes whether a scan is due (its own interval, default 6 h); never while the database is not ready.
+  const finderTimer = setInterval(() => {
+    if (!db.configured() || !isReady() || closed) return;
+    void bundles.finder.tick().catch(() => {});
+  }, Math.max(1000, Number(env.FINDER_TICK_MS) || 600000));
+  finderTimer.unref();
   // Daily backup + retention: decided every 5 minutes (cheap: reads two small rows), started only when the app is quiet (server/backup/schedule.js).
   const backupTimer = setInterval(() => {
     if (!db.configured() || !isReady() || closed) return;
@@ -1012,7 +1020,7 @@ function createBackend({ env = process.env, db = createDb(env), dnsResolver, sen
   }, Math.max(1000, Number(env.BACKUP_TICK_MS) || 300000));
   backupTimer.unref();
   timer.unref();
-  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(limitsTimer); clearInterval(backupTimer); clearInterval(sweeper); void db.close(); });
+  server.on('close', () => { closed = true; clearInterval(timer); clearInterval(limitsTimer); clearInterval(finderTimer); clearInterval(backupTimer); clearInterval(sweeper); void db.close(); });
   return { server, handle, backup, pump: base.pump, db, clients, notifier, campaigns, chat, assistant, staticFiles, bundles, tenants, superAdmin };
 }
 module.exports = { createBackend, passwordMatches };
